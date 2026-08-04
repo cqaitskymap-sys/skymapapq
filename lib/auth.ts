@@ -9,7 +9,7 @@ import {
   type Unsubscribe,
 } from 'firebase/auth';
 import {
-  addDoc, collection, doc, getDoc, setDoc, updateDoc,
+  doc, getDoc, setDoc, updateDoc,
 } from 'firebase/firestore';
 import {
   getFirebaseAuth,
@@ -20,6 +20,12 @@ import {
   type UserRole,
 } from './firebase';
 import { writeAuditTrail } from './audit-trail';
+import {
+  recordLoginSuccess,
+  recordLoginFailure,
+  recordLogout,
+  recordSecurityEvent,
+} from './admin/login-activity-service';
 
 export { isFirebaseConfigured, FirebaseNotConfiguredError } from './firebase';
 export type { Profile, UserRole } from './firebase';
@@ -37,7 +43,6 @@ export const APP_ROLES: { id: UserRole; label: string }[] = [
   { id: 'warehouse', label: 'Warehouse' },
   { id: 'regulatory', label: 'Regulatory' },
   { id: 'hr', label: 'HR' },
-  { id: 'training_coordinator', label: 'Training Coordinator' },
   { id: 'document_controller', label: 'Document Controller' },
   { id: 'department_head', label: 'Department Head' },
   { id: 'employee', label: 'Employee' },
@@ -168,28 +173,21 @@ export async function signIn(email: string, password: string): Promise<User> {
         userName: profile?.full_name || email,
         moduleName: 'Auth',
       });
-      const loginTime = nowIso();
-      const sessionRef = await addDoc(collection(requireDb(), 'login_activity'), {
-        userId: result.user.uid,
-        userName: profile?.full_name || email,
-        email: loginEmail,
-        loginStatus: 'Success',
-        ipAddress: 'client',
-        deviceInfo: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 1000) : 'browser',
-        loginTime,
-        logoutTime: null,
-        failureReason: '',
-        status: 'Active',
-        createdAt: loginTime,
-        updatedAt: loginTime,
-      }).catch(() => null);
-      if (sessionRef && typeof sessionStorage !== 'undefined') {
-        sessionStorage.setItem('skymap-session-id', sessionRef.id);
+      const session = await recordLoginSuccess({ email: loginEmail });
+      if (session?.id && typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem('skymap-session-id', session.id);
       }
     }
     return result.user;
   } catch (error) {
     console.error('signIn failed:', error);
+    const message = (error as Error)?.message || 'Login failed';
+    // Record failed attempts for credential errors (not inactive account after successful auth)
+    const isCredentialFailure = /password|credential|user-not-found|invalid|wrong/i.test(message)
+      || (error as { code?: string })?.code?.startsWith('auth/');
+    if (isCredentialFailure && !/inactive|awaiting administrator/i.test(message)) {
+      await recordLoginFailure(email, message).catch(() => undefined);
+    }
     throw error;
   }
 }
@@ -256,13 +254,8 @@ export async function signOut(): Promise<void> {
       const sessionId = typeof sessionStorage !== 'undefined'
         ? sessionStorage.getItem('skymap-session-id')
         : null;
-      if (sessionId) {
-        const logoutTime = nowIso();
-        await updateDoc(doc(requireDb(), 'login_activity', sessionId), {
-          logoutTime,
-          status: 'Closed',
-          updatedAt: logoutTime,
-        }).catch(() => undefined);
+      await recordLogout(sessionId, 'Logout');
+      if (typeof sessionStorage !== 'undefined') {
         sessionStorage.removeItem('skymap-session-id');
       }
       await writeAuditTrail({
@@ -341,6 +334,10 @@ export async function resetPassword(email: string): Promise<void> {
   try {
     const auth = requireAuth();
     await sendPasswordResetEmail(getFirebaseAuth(), email);
+    await recordSecurityEvent('Password Reset', {
+      email,
+      description: `Password reset email requested for ${email}`,
+    }).catch(() => undefined);
   } catch (error) {
     console.error('resetPassword failed:', error);
     throw error;

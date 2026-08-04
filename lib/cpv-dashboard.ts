@@ -319,3 +319,63 @@ export function availableYears(records: DatedRecord[]): string[] {
   });
   return Array.from(years).sort((a, b) => b.localeCompare(a));
 }
+
+/** Filter generic Firestore rows that share product/batch/date fields with CPV records. */
+export function filterGenericCpvRows(
+  rows: Record<string, unknown>[],
+  filters: CpvDashboardFilters,
+): Record<string, unknown>[] {
+  return rows.filter((row) => {
+    const productName = String(row.productName || row.product_name || row.product || '');
+    const batchNo = String(row.batchNo || row.batch_no || row.batch_number || row.batchNumber || '');
+    const status = String(row.status || '');
+    if (filters.product && filters.product !== 'all' && productName && productName !== filters.product) return false;
+    if (filters.batchNo && filters.batchNo !== 'all' && batchNo && batchNo !== filters.batchNo) return false;
+    if (filters.status && filters.status !== 'all' && status && status.toLowerCase() !== filters.status.toLowerCase()) return false;
+    if (filters.riskLevel && filters.riskLevel !== 'all') {
+      const risk = String(row.riskLevel || row.risk_level || '');
+      if (risk && risk !== filters.riskLevel) return false;
+    }
+    const dated = {
+      manufacturingDate: String(row.manufacturingDate || row.manufacturing_date || row.testDate || row.test_date || ''),
+      createdAt: String(row.createdAt || row.created_at || ''),
+    };
+    const date = getRecordDate(dated);
+    if (!date && (filters.year || filters.month || filters.quarter)
+      && filters.year !== 'all' && filters.month !== 'all' && filters.quarter !== 'all') {
+      // Allow undated rows when only soft filters set
+    }
+    if (date) {
+      if (filters.year && filters.year !== 'all' && String(date.getFullYear()) !== filters.year) return false;
+      if (filters.month && filters.month !== 'all' && String(date.getMonth() + 1).padStart(2, '0') !== filters.month) return false;
+      if (filters.quarter && filters.quarter !== 'all' && !matchesQuarter(date.getMonth() + 1, filters.quarter)) return false;
+    }
+    return true;
+  });
+}
+
+export function computeProcessHealthScore(input: {
+  cppCompliancePct: number;
+  cqaCompliancePct: number;
+  openHighRisks: number;
+  oosCount: number;
+  spcOutOfControl: number;
+  holdExceeded: number;
+  avgCpk: number;
+}): number {
+  let score = Math.round((input.cppCompliancePct * 0.35) + (input.cqaCompliancePct * 0.35));
+  if (input.avgCpk >= 1.33) score += 15;
+  else if (input.avgCpk >= 1.0) score += 8;
+  else if (input.avgCpk > 0) score -= 5;
+  score -= Math.min(20, input.openHighRisks * 3);
+  score -= Math.min(15, input.oosCount * 2);
+  score -= Math.min(10, input.spcOutOfControl * 2);
+  score -= Math.min(10, input.holdExceeded * 2);
+  return Math.max(0, Math.min(100, score));
+}
+
+/** Approximate sigma level from average Cpk (enterprise dashboard indicator). */
+export function sigmaFromCpk(cpk: number): number {
+  if (!Number.isFinite(cpk) || cpk <= 0) return 0;
+  return Math.round(cpk * 3 * 100) / 100;
+}

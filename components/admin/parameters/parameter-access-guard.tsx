@@ -10,7 +10,7 @@ import { ErrorCard } from '@/components/admin/dashboard/error-card';
 
 export function ParameterAccessGuard({ children }: { children: React.ReactNode }) {
   const { user, loading: authLoading } = useAuth();
-  const { role, loading: permsLoading } = useAdminPermissions();
+  const { role, loading: permsLoading, hasPermission } = useAdminPermissions();
   const router = useRouter();
 
   useEffect(() => {
@@ -20,7 +20,7 @@ export function ParameterAccessGuard({ children }: { children: React.ReactNode }
   if (authLoading || permsLoading) return <LoadingSkeleton rows={2} />;
   if (!user) return null;
 
-  if (!canViewParameters(role)) {
+  if (!canViewParameters(role) || !hasPermission('Admin', 'view')) {
     return (
       <ErrorCard accessDenied title="Access Denied" message="You do not have permission to access Parameter Master." />
     );

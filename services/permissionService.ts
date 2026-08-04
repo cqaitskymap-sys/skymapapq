@@ -48,7 +48,6 @@ export const APP_MODULE_TO_MATRIX: Record<AppModule, string> = {
   complaints: 'Complaint',
   recall: 'Recall',
   dms: 'DMS',
-  training: 'Training',
   audit: 'Audit',
   vendors: 'Vendor',
   validation: 'Validation',

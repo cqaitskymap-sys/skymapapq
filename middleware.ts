@@ -3,19 +3,26 @@ import type { NextRequest } from 'next/server';
 import { createRemoteJWKSet } from 'jose/jwks/remote';
 import { jwtVerify } from 'jose/jwt/verify';
 
-const PROTECTED_PREFIXES = ['/dashboard', '/cpv', '/qms', '/pqr', '/admin', '/training'];
+const PROTECTED_PREFIXES = ['/launcher', '/dashboard', '/manufacturing', '/cpv', '/qms', '/pqr', '/admin', '/notifications'];
 const AUTH_ROUTES = ['/auth/login', '/auth/signup', '/login'];
 const FIREBASE_JWKS = createRemoteJWKSet(
   new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'),
 );
 
+function isLocalEmulatorHost(request: NextRequest): boolean {
+  const host = request.nextUrl.hostname;
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
 async function hasValidSession(request: NextRequest): Promise<boolean> {
   const token = request.cookies.get('__session')?.value;
   if (!token) return false;
 
+  // Emulator bypass only on local hosts — never on shared preview/staging.
   if (
     process.env.NODE_ENV !== 'production'
     && process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATOR === 'true'
+    && isLocalEmulatorHost(request)
   ) {
     return true;
   }
@@ -37,11 +44,6 @@ async function hasValidSession(request: NextRequest): Promise<boolean> {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  if (pathname === '/qms/training' || pathname.startsWith('/qms/training/')) {
-    const newPath = pathname.replace(/^\/qms\/training/, '/training') || '/training';
-    return NextResponse.redirect(new URL(newPath, request.url));
-  }
-
   const isProtected = PROTECTED_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(prefix + '/')
   );
@@ -59,12 +61,27 @@ export async function middleware(request: NextRequest) {
   }
 
   if (isAuthRoute && sessionIsValid) {
-    return NextResponse.redirect(new URL('/dashboard', request.url));
+    return NextResponse.redirect(new URL('/launcher', request.url));
   }
 
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/cpv/:path*', '/qms/:path*', '/pqr/:path*', '/admin/:path*', '/training/:path*', '/auth/:path*', '/login'],
+  matcher: [
+    '/launcher',
+    '/launcher/:path*',
+    '/dashboard',
+    '/dashboard/:path*',
+    '/manufacturing',
+    '/manufacturing/:path*',
+    '/cpv/:path*',
+    '/qms/:path*',
+    '/pqr/:path*',
+    '/admin/:path*',
+    '/notifications',
+    '/notifications/:path*',
+    '/auth/:path*',
+    '/login',
+  ],
 };

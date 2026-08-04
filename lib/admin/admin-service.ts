@@ -12,14 +12,26 @@ export async function logAuditEvent(
   userId?: string
 ): Promise<void> {
   try {
-    await addDoc(collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.auditLogs), {
-      ...event,
-      dateTime: new Date().toISOString(),
-      userId: event.userId || userId || 'system',
-      status: event.status || 'Success',
+    const { createAuditLog } = await import('@/lib/audit-trail');
+    await createAuditLog({
+      moduleName: event.module || 'Admin',
+      collectionName: ADMIN_COLLECTIONS.auditLogs,
+      recordId: event.recordId || 'system',
+      actionType: event.action || 'Update',
+      actionDescription: String(event.action || 'Audit event'),
+      oldValue: event.oldValue,
+      newValue: event.newValue,
+      reason: event.reason,
+      user: {
+        id: event.userId || userId || 'system',
+        name: event.userName || 'System',
+      },
+      ipAddress: event.ipAddress || 'client',
+      deviceInfo: event.device || 'browser',
+      status: (event.status as 'Success' | 'Failed' | 'Pending' | 'System Generated') || 'Success',
     });
   } catch (error) {
-    console.error('Audit log failed:', error);
+    console.error('AUDIT_FAILURE: logAuditEvent failed:', error);
   }
 }
 

@@ -21,6 +21,12 @@ import {
 } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 
+function toDateInput(value?: string) {
+  if (!value) return '';
+  if (value.length === 7) return `${value}-01`;
+  return value.slice(0, 10);
+}
+
 export function BatchReviewFormDialog({
   open,
   onOpenChange,
@@ -64,6 +70,8 @@ export function BatchReviewFormDialog({
       holdReason: '',
       reworkRequired: false,
       reprocessRequired: false,
+      theoreticalYield: null,
+      actualYield: null,
       remarks: '',
     },
   });
@@ -72,30 +80,36 @@ export function BatchReviewFormDialog({
     if (open) {
       form.reset(record ? {
         pqrId: pqr.id,
-        product: record.product,
-        productCode: record.productCode,
-        genericName: record.genericName,
-        strength: record.strength,
-        dosageForm: record.dosageForm,
+        product: record.product || pqr.productName,
+        productCode: record.productCode || pqr.productCode,
+        genericName: record.genericName || pqr.genericName,
+        strength: record.strength || pqr.strength,
+        dosageForm: record.dosageForm || pqr.dosageForm,
         batchNumber: record.batchNumber,
         semiFinishedBatchNumber: record.semiFinishedBatchNumber,
         finishedProductBatchNumber: record.finishedProductBatchNumber,
         packingBatchNumber: record.packingBatchNumber,
-        manufacturingDate: record.manufacturingDate,
-        expiryDate: record.expiryDate,
-        batchSize: record.batchSize,
-        batchSizeUnit: record.batchSizeUnit,
+        manufacturingDate: toDateInput(record.manufacturingDate),
+        expiryDate: toDateInput(record.expiryDate),
+        batchSize: record.batchSize || 1,
+        batchSizeUnit: record.batchSizeUnit || 'Vials',
         manufacturedFor: record.manufacturedFor,
         customerName: record.customerName,
         market: record.market,
-        batchStatus: record.batchStatus as BatchReviewFormData['batchStatus'],
-        releaseStatus: record.releaseStatus as BatchReviewFormData['releaseStatus'],
-        releaseDate: record.releaseDate,
+        batchStatus: (BATCH_REVIEW_STATUSES.includes(record.batchStatus as typeof BATCH_REVIEW_STATUSES[number])
+          ? record.batchStatus
+          : 'Manufactured') as BatchReviewFormData['batchStatus'],
+        releaseStatus: (BATCH_RELEASE_STATUSES.includes(record.releaseStatus as typeof BATCH_RELEASE_STATUSES[number])
+          ? record.releaseStatus
+          : 'Pending') as BatchReviewFormData['releaseStatus'],
+        releaseDate: toDateInput(record.releaseDate),
         qaReleasedBy: record.qaReleasedBy,
         rejectionReason: record.rejectionReason,
         holdReason: record.holdReason,
         reworkRequired: record.reworkRequired,
         reprocessRequired: record.reprocessRequired,
+        theoreticalYield: record.theoreticalYield ?? null,
+        actualYield: record.actualYield ?? null,
         remarks: record.remarks,
       } : {
         pqrId: pqr.id,
@@ -114,7 +128,7 @@ export function BatchReviewFormDialog({
         batchSizeUnit: 'Vials',
         manufacturedFor: '',
         customerName: '',
-        market: '',
+        market: pqr.site || '',
         batchStatus: 'Manufactured',
         releaseStatus: 'Pending',
         releaseDate: '',
@@ -123,6 +137,8 @@ export function BatchReviewFormDialog({
         holdReason: '',
         reworkRequired: false,
         reprocessRequired: false,
+        theoreticalYield: null,
+        actualYield: null,
         remarks: '',
       });
     }
@@ -138,18 +154,26 @@ export function BatchReviewFormDialog({
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <div className="rounded-md border bg-slate-50 p-3 text-sm grid gap-1 sm:grid-cols-2">
+              <p><span className="text-muted-foreground">PQR:</span> {pqr.pqrNumber}</p>
+              <p><span className="text-muted-foreground">Product:</span> {pqr.productName} ({pqr.productCode})</p>
+              <p><span className="text-muted-foreground">Period:</span> {pqr.reviewPeriodFrom} — {pqr.reviewPeriodTo}</p>
+              {(pqr.strength || pqr.dosageForm) && (
+                <p><span className="text-muted-foreground">Strength / Form:</span> {[pqr.strength, pqr.dosageForm].filter(Boolean).join(' / ')}</p>
+              )}
+            </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField control={form.control} name="batchNumber" render={({ field }) => (
                 <FormItem><FormLabel>Batch Number *</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
               )} />
               <FormField control={form.control} name="batchSize" render={({ field }) => (
-                <FormItem><FormLabel>Batch Size *</FormLabel><FormControl><Input type="number" {...field} /></FormControl><FormMessage /></FormItem>
+                <FormItem><FormLabel>Batch Size *</FormLabel><FormControl><Input type="number" min={0} step="any" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
               <FormField control={form.control} name="manufacturingDate" render={({ field }) => (
-                <FormItem><FormLabel>MFG Date *</FormLabel><FormControl><Input type="month" {...field} value={(field.value || '').slice(0, 7)} /></FormControl><FormMessage /></FormItem>
+                <FormItem><FormLabel>MFG Date *</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
               <FormField control={form.control} name="expiryDate" render={({ field }) => (
-                <FormItem><FormLabel>EXP Date *</FormLabel><FormControl><Input type="month" {...field} value={(field.value || '').slice(0, 7)} /></FormControl><FormMessage /></FormItem>
+                <FormItem><FormLabel>EXP Date *</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
               <FormField control={form.control} name="semiFinishedBatchNumber" render={({ field }) => (
                 <FormItem><FormLabel>Semi Finish Batch No.</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
@@ -162,6 +186,36 @@ export function BatchReviewFormDialog({
               )} />
               <FormField control={form.control} name="customerName" render={({ field }) => (
                 <FormItem><FormLabel>Customer Name</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="theoreticalYield" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Theoretical Yield</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={field.value ?? ''}
+                      onChange={(e) => field.onChange(e.target.value === '' ? null : Number(e.target.value))}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="actualYield" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Actual Yield</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={field.value ?? ''}
+                      onChange={(e) => field.onChange(e.target.value === '' ? null : Number(e.target.value))}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
               )} />
               <FormField control={form.control} name="batchStatus" render={({ field }) => (
                 <FormItem><FormLabel>Batch Status</FormLabel>

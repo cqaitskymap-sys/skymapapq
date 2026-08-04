@@ -80,37 +80,26 @@ export const BREADCRUMB_LABELS: Record<string, string> = {
   'e-signatures': 'Electronic Signatures',
   'part11-signatures': 'Electronic Signatures',
   'document-management': 'Document Management',
-  training: 'Training Management',
-  'lms-integration': 'LMS Integration',
-  lms: 'LMS Integration',
   integrations: 'Integrations',
   calendar: 'Calendar & Scheduler',
   scheduler: 'Calendar & Scheduler',
-  events: 'Training Events',
-  workflows: 'Workflow Designer',
+  workflows: 'Workflow Configuration',
+  'approval-matrix': 'Approval Matrix',
+  'document-numbering': 'Document Numbering',
   'audit-trail': 'Audit Trail',
+  'login-activity': 'Login Activity',
+  'user-access-review': 'User Access Review',
+  'esign-settings': 'E-Signature Settings',
+  'email-sms-templates': 'Email & SMS Templates',
+  'module-configuration': 'Module Configuration',
+  'master-data-import-export': 'Master Data Import / Export',
+  backup: 'Backup & Restore',
+  jobs: 'Backup Jobs',
+  restore: 'Restore',
   audit: 'Audit Trail',
   'activity-log': 'Activity Log',
-  analytics: 'Training Dashboard & Analytics',
   'report-center': 'Report Center',
   reports: 'Reports & Analytics',
-  certificates: 'Certificate Management',
-  'certificate-management': 'Certificate Management',
-  'certificate-registry': 'Certificate Registry',
-  retraining: 'Retraining Management',
-  'retraining-management': 'Retraining Management',
-  'retraining-schedule': 'Retraining Schedule',
-  effectiveness: 'Training Effectiveness',
-  competency: 'Competency Assessment',
-  history: 'Employee Training History',
-  'employee-history': 'Employee Training History',
-  records: 'Training Records',
-  completion: 'Completion & Attendance',
-  attendance: 'Attendance',
-  scheduling: 'Assignment & Scheduling',
-  assignments: 'Assignment & Scheduling',
-  'training-matrix': 'Training Matrix',
-  matrix: 'Training Matrix',
   'audit-management': 'Audit Management',
   vendors: 'Vendor Management',
   validation: 'Validation Management',
@@ -164,7 +153,8 @@ export const BREADCRUMB_LABELS: Record<string, string> = {
   master: 'Master Data',
   materials: 'Material Master',
   abbreviations: 'Abbreviations',
-  notifications: 'Notifications',
+  notifications: 'Notification Settings',
+  queue: 'Queue',
   profile: 'Profile',
 };
 
@@ -208,6 +198,21 @@ export function formatBreadcrumbLabel(segment: string, pathname?: string): strin
   }
   if (pathname && segment === 'dashboard' && pathname.includes('/change-control/')) {
     return 'Dashboard';
+  }
+  if (pathname && segment === 'notifications' && !pathname.includes('/admin/')) {
+    return 'Notifications';
+  }
+  if (pathname && segment === 'history' && pathname.includes('/admin/notifications')) {
+    return 'Notification History';
+  }
+  if (pathname && segment === 'queue' && pathname.includes('/admin/notifications')) {
+    return 'Notification Queue';
+  }
+  if (pathname && segment === 'versions' && pathname.includes('/admin/email-sms-templates')) {
+    return 'Version History';
+  }
+  if (pathname && segment === 'versions' && pathname.includes('/admin/module-configuration')) {
+    return 'Version History';
   }
   return BREADCRUMB_LABELS[segment] ?? segment.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }

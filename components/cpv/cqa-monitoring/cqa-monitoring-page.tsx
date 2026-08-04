@@ -1,8 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Plus, Download, Eye, Pencil, CheckCircle, Layers } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Plus, Download, Eye, Pencil, CheckCircle, Layers, FilterX, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import { BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie } from 'recharts';
 import { useAuth } from '@/contexts/auth-context';
@@ -16,7 +16,7 @@ import {
   fetchCqaResults, fetchCqaBatchesForProduct,
   createCqaResult, updateCqaResult,
   approveCqaResult, reviewCqaResult, bulkCreateCqaResults,
-  logCqaExport, parameterTrendData,
+  logCqaExport, parameterTrendData, buildCqaExportRows,
 } from '@/lib/cpv-cqa-monitoring-service';
 import { fetchActiveCpvProductsForBatch as fetchProducts } from '@/lib/cpv-batch-registration-service';
 import type { CpvProductRecord } from '@/lib/cpv-product-master';
@@ -28,7 +28,7 @@ import {
   resolveOndansetronCqaDefaults,
   type OndansetronCqaOption,
 } from '@/lib/ondansetron-bmr-spec';
-import { downloadCsv } from '@/lib/export-utils';
+import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ResponsiveDataTable } from '@/components/cpv/product-master/responsive-data-table';
 import { ParameterTrendChart } from '@/components/cpv/cpp-monitoring/parameter-trend-chart';
@@ -45,10 +45,11 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ElectronicSignatureDialog } from '@/components/electronic-signatures';
 import type { ColumnDef } from '@/components/admin/admin-data-table';
 
 const CHART_COLORS = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed'];
@@ -77,6 +78,9 @@ function RiskBadge({ level }: { level: string }) {
 
 export function CqaMonitoringPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const productQuery = searchParams.get('product') || '';
+  const batchQuery = searchParams.get('batch') || '';
   const { user, profile } = useAuth();
   const role = profile?.role;
   const isMicroOnly = cpvPermissions.isCqaMicrobiologyOnly(role);
@@ -95,8 +99,12 @@ export function CqaMonitoringPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [editing, setEditing] = useState<CqaResultRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [approveTarget, setApproveTarget] = useState<CqaResultRecord | null>(null);
+  const [approveReason, setApproveReason] = useState('');
+  const [esignOpen, setEsignOpen] = useState(false);
+  const [overrideEsign, setOverrideEsign] = useState(false);
 
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(productQuery || batchQuery);
   const [productFilter, setProductFilter] = useState('all');
   const [batchFilter, setBatchFilter] = useState('all');
   const [stageFilter, setStageFilter] = useState('all');
@@ -108,14 +116,24 @@ export function CqaMonitoringPage() {
   const [formBatches, setFormBatches] = useState<Awaited<ReturnType<typeof fetchCqaBatchesForProduct>>>([]);
   const [formParams, setFormParams] = useState<CqaParamOption[]>([]);
   const [formProductName, setFormProductName] = useState('');
-  const [form, setForm] = useState<Partial<CqaResultFormData>>({});
+  const [form, setForm] = useState<Partial<CqaResultFormData>>({ changeReason: '' });
 
   const [bulkProductId, setBulkProductId] = useState('');
   const [bulkBatchId, setBulkBatchId] = useState('');
   const [bulkStage, setBulkStage] = useState<string>(CQA_TEST_STAGES[0]);
+  const [bulkReason, setBulkReason] = useState('Bulk CQA entry');
   const [bulkRows, setBulkRows] = useState<Array<{ param: CqaParamOption; observed: string; remarks: string }>>([]);
 
   const actor = { id: user?.uid || 'system', name: profile?.full_name || 'System', role: role || '' };
+
+  useEffect(() => {
+    if (productQuery) setSearch(productQuery);
+    else if (batchQuery) setSearch(batchQuery);
+  }, [productQuery, batchQuery]);
+
+  useEffect(() => {
+    if (batchQuery) setBatchFilter(batchQuery);
+  }, [batchQuery]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -136,15 +154,31 @@ export function CqaMonitoringPage() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return results.filter((r) => {
-      if (productFilter !== 'all' && r.productName !== productFilter) return false;
+      if (productFilter !== 'all' && r.productName !== productFilter && r.productCode !== productFilter) return false;
       if (batchFilter !== 'all' && r.batchNumber !== batchFilter) return false;
       if (stageFilter !== 'all' && r.testStage !== stageFilter) return false;
       if (statusFilter !== 'all' && r.status !== statusFilter) return false;
       if (riskFilter !== 'all' && r.riskLevel !== riskFilter) return false;
       if (!q) return true;
-      return r.productName.toLowerCase().includes(q) || r.batchNumber.toLowerCase().includes(q) || r.parameterName.toLowerCase().includes(q);
+      return (
+        r.productName.toLowerCase().includes(q)
+        || r.productCode.toLowerCase().includes(q)
+        || r.batchNumber.toLowerCase().includes(q)
+        || r.parameterName.toLowerCase().includes(q)
+        || r.parameterCode.toLowerCase().includes(q)
+        || (r.site || '').toLowerCase().includes(q)
+      );
     });
   }, [results, search, productFilter, batchFilter, stageFilter, statusFilter, riskFilter]);
+
+  const clearFilters = () => {
+    setSearch('');
+    setProductFilter('all');
+    setBatchFilter('all');
+    setStageFilter('all');
+    setStatusFilter('all');
+    setRiskFilter('all');
+  };
 
   const summary = useMemo(() => summarizeCqaResults(results), [results]);
   const charts = useMemo(() => buildCqaChartSeries(filtered), [filtered]);
@@ -181,6 +215,15 @@ export function CqaMonitoringPage() {
       testStage: CQA_TEST_STAGES[0],
       resultType: 'Numeric',
       criticality: 'Major',
+      changeReason: '',
+      equipmentId: '',
+      equipmentName: '',
+      site: '',
+      department: '',
+      shift: '',
+      productVersion: '',
+      specificationVersion: '',
+      testMethod: '',
     });
     setFormOpen(true);
   };
@@ -280,11 +323,20 @@ export function CqaMonitoringPage() {
       toast.error('Complete required fields');
       return;
     }
+    if (!form.changeReason || form.changeReason.trim().length < 5) {
+      toast.error('Change reason must be at least 5 characters');
+      return;
+    }
+    const qaOverride = Boolean(editing?.isLocked && editing.reviewStatus === 'Approved' && canQaOverride);
+    if (qaOverride) {
+      setOverrideEsign(true);
+      setEsignOpen(true);
+      return;
+    }
     setSubmitting(true);
     const data = form as CqaResultFormData;
     if (editing) {
-      const qaOverride = editing.isLocked && editing.reviewStatus === 'Approved' && canQaOverride;
-      const { error: err } = await updateCqaResult(editing.id, data, actor, editing, qaOverride);
+      const { error: err } = await updateCqaResult(editing.id, data, actor, editing, false);
       if (err) toast.error(err);
       else { toast.success('CQA result updated'); setFormOpen(false); await load(); }
     } else {
@@ -293,6 +345,58 @@ export function CqaMonitoringPage() {
       else { toast.success('CQA result created'); setFormOpen(false); await load(); }
     }
     setSubmitting(false);
+  };
+
+  const applyQaOverride = async () => {
+    if (!editing) return;
+    setSubmitting(true);
+    const { error: err } = await updateCqaResult(
+      editing.id,
+      form as CqaResultFormData,
+      actor,
+      editing,
+      true,
+      { esignConfirmed: true },
+    );
+    setSubmitting(false);
+    setEsignOpen(false);
+    setOverrideEsign(false);
+    if (err) toast.error(err);
+    else {
+      toast.success('CQA result updated (QA override)');
+      setFormOpen(false);
+      await load();
+    }
+  };
+
+  const confirmApprove = async () => {
+    if (!approveTarget) return;
+    if (approveReason.trim().length < 5) {
+      toast.error('Change reason must be at least 5 characters');
+      return;
+    }
+    setEsignOpen(true);
+  };
+
+  const applyApprove = async () => {
+    if (!approveTarget) return;
+    setSubmitting(true);
+    const { error: err } = await approveCqaResult(
+      approveTarget.id,
+      actor,
+      approveTarget,
+      approveReason,
+      { esignConfirmed: true },
+    );
+    setSubmitting(false);
+    setEsignOpen(false);
+    setApproveTarget(null);
+    setApproveReason('');
+    if (err) toast.error(err);
+    else {
+      toast.success('CQA result approved');
+      await load();
+    }
   };
 
   const openBulk = async (productId: string) => {
@@ -311,6 +415,10 @@ export function CqaMonitoringPage() {
     if (!p || !bulkBatchId) { toast.error('Select product and batch'); return; }
     const batch = formBatches.find((b) => b.id === bulkBatchId);
     if (!batch) { toast.error('Invalid batch'); return; }
+    if (bulkReason.trim().length < 5) {
+      toast.error('Bulk change reason must be at least 5 characters');
+      return;
+    }
     const rows: CqaResultFormData[] = bulkRows.filter((r) => r.observed).map((row) => {
       if (isBmrCqaOption(row.param)) {
         const n = row.param;
@@ -344,6 +452,15 @@ export function CqaMonitoringPage() {
           reviewedBy: '',
           reviewDate: '',
           remarks: row.remarks,
+          changeReason: bulkReason,
+          equipmentId: '',
+          equipmentName: '',
+          site: '',
+          department: '',
+          shift: '',
+          productVersion: '',
+          specificationVersion: '',
+          testMethod: '',
         };
       }
       const n = normalizeParameter(row.param);
@@ -379,10 +496,19 @@ export function CqaMonitoringPage() {
         reviewedBy: '',
         reviewDate: '',
         remarks: row.remarks,
+        changeReason: bulkReason,
+        equipmentId: '',
+        equipmentName: '',
+        site: '',
+        department: '',
+        shift: '',
+        productVersion: '',
+        specificationVersion: '',
+        testMethod: '',
       };
     });
     setSubmitting(true);
-    const { created, errors } = await bulkCreateCqaResults(rows, actor);
+    const { created, errors } = await bulkCreateCqaResults(rows, actor, bulkReason);
     setSubmitting(false);
     if (errors.length) toast.error(errors[0]);
     toast.success(`${created} CQA results saved`);
@@ -408,31 +534,32 @@ export function CqaMonitoringPage() {
       <CpvPageHeader
         title="CQA Monitoring"
         description="Monitor Critical Quality Attributes batch-wise for Continued Process Verification"
-        trail={[{ label: 'Continued Process Verification', href: '/cpv/dashboard' }, { label: 'CQA Monitoring' }]}
+        trail={[
+          { label: 'Dashboard', href: '/dashboard' },
+          { label: 'Continued Process Verification', href: '/cpv/dashboard' },
+          { label: 'CQA Monitoring' },
+        ]}
         actions={
           <>
             {canImportExport && (
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => toast.info('Excel import placeholder — upload template coming soon')}>
-                Import Excel
-              </Button>
-            )}
-            {canImportExport && (
-              <Button variant="outline" size="sm" className="gap-2" onClick={async () => {
-                const headers = ['Batch', 'Parameter', 'Result', 'Status', 'Risk'];
-                const rows = filtered.map((r) => [r.batchNumber, r.parameterName, r.observedResult, r.status, r.riskLevel]);
-                downloadCsv(`cqa-results-${Date.now()}.csv`, headers, rows);
+              <Button variant="outline" size="sm" className="gap-2 no-print" onClick={async () => {
+                const { headers, rows } = buildCqaExportRows(filtered);
+                downloadCsv(`cqa-results-${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
                 await logCqaExport(actor, filtered.length);
-                toast.success('Export placeholder CSV generated');
+                toast.success(`Exported ${filtered.length} CQA results`);
               }}>
                 <Download className="h-4 w-4" />Export
               </Button>
             )}
+            <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => printPage()}>
+              <Printer className="h-4 w-4" />Print
+            </Button>
             {canCreate && !isReadOnly && (
               <>
-                <Button variant="outline" size="sm" className="gap-2" onClick={() => products[0] && openBulk(products[0].id)}>
+                <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => products[0] && openBulk(products[0].id)}>
                   <Layers className="h-4 w-4" />Bulk Entry
                 </Button>
-                <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" />New CQA Result</Button>
+                <Button size="sm" className="gap-2 no-print" onClick={openCreate}><Plus className="h-4 w-4" />New CQA Result</Button>
               </>
             )}
           </>
@@ -521,7 +648,7 @@ export function CqaMonitoringPage() {
 
       <Card>
         <CardContent className="p-4 space-y-4">
-          <div className="grid gap-3 lg:grid-cols-6">
+          <div className="grid gap-3 lg:grid-cols-7">
             <Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="lg:col-span-2" />
             <Select value={productFilter} onValueChange={setProductFilter}><SelectTrigger><SelectValue placeholder="Product" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All Products</SelectItem>{productNames.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent></Select>
@@ -533,6 +660,7 @@ export function CqaMonitoringPage() {
               <SelectContent><SelectItem value="all">All Stages</SelectItem>{CQA_TEST_STAGES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
             <Select value={riskFilter} onValueChange={setRiskFilter}><SelectTrigger><SelectValue placeholder="Risk" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All Risk</SelectItem>{['Low', 'Medium', 'High', 'Critical'].map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
+            <Button variant="outline" size="sm" className="gap-1" onClick={clearFilters}><FilterX className="h-3.5 w-3.5" />Clear</Button>
           </div>
           {filtered.length === 0 ? <EmptyState title="No CQA results" /> : (
             <ResponsiveDataTable
@@ -554,10 +682,18 @@ export function CqaMonitoringPage() {
                     }}><Pencil className="h-4 w-4" /></Button>
                   )}
                   {canReview && row.reviewStatus === 'Draft' && (
-                    <Button size="icon" variant="ghost" onClick={async () => { await reviewCqaResult(row.id, actor, row); await load(); }}><CheckCircle className="h-4 w-4" /></Button>
+                    <Button size="icon" variant="ghost" onClick={async () => {
+                      const { error: err } = await reviewCqaResult(row.id, actor, row);
+                      if (err) toast.error(err);
+                      else { toast.success('Submitted for review'); await load(); }
+                    }}><CheckCircle className="h-4 w-4" /></Button>
                   )}
-                  {canReview && row.reviewStatus === 'Under Review' && (
-                    <Button size="sm" variant="outline" onClick={async () => { await approveCqaResult(row.id, actor, row); await load(); }}>Approve</Button>
+                  {canReview && (row.reviewStatus === 'Under Review' || row.reviewStatus === 'Draft') && (
+                    <Button size="sm" variant="outline" onClick={() => {
+                      setApproveTarget(row);
+                      setApproveReason('');
+                      setOverrideEsign(false);
+                    }}>Approve</Button>
                   )}
                 </div>
               )}
@@ -662,7 +798,22 @@ export function CqaMonitoringPage() {
               <div><Label>Test Date *</Label><Input className="mt-1" type="datetime-local" value={form.testDate?.slice(0, 16) || ''} onChange={(e) => setForm((f) => ({ ...f, testDate: e.target.value }))} /></div>
             </div>
             <div><Label>Analyst *</Label><Input className="mt-1" value={form.analyst || ''} onChange={(e) => setForm((f) => ({ ...f, analyst: e.target.value }))} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>Equipment</Label><Input className="mt-1" value={form.equipmentName || ''} onChange={(e) => setForm((f) => ({ ...f, equipmentName: e.target.value }))} /></div>
+              <div><Label>Site</Label><Input className="mt-1" value={form.site || ''} onChange={(e) => setForm((f) => ({ ...f, site: e.target.value }))} /></div>
+              <div><Label>Department</Label><Input className="mt-1" value={form.department || ''} onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))} /></div>
+              <div><Label>Shift</Label><Input className="mt-1" value={form.shift || ''} onChange={(e) => setForm((f) => ({ ...f, shift: e.target.value }))} /></div>
+            </div>
             <div><Label>Remarks</Label><Textarea className="mt-1" value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} /></div>
+            <div>
+              <Label>Change Reason * (ALCOA+ / Part 11)</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="Describe why this create/update is being performed"
+                value={form.changeReason || ''}
+                onChange={(e) => setForm((f) => ({ ...f, changeReason: e.target.value }))}
+              />
+            </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button>
               <Button onClick={() => void saveForm()} disabled={submitting}>{submitting ? 'Saving...' : 'Save'}</Button>
@@ -777,11 +928,54 @@ export function CqaMonitoringPage() {
             </TableBody>
           </Table>
           <DialogFooter>
+            <div className="mr-auto w-full max-w-sm">
+              <Label className="text-xs">Change Reason *</Label>
+              <Input className="mt-1" value={bulkReason} onChange={(e) => setBulkReason(e.target.value)} placeholder="Bulk entry reason" />
+            </div>
             <Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button>
             <Button onClick={() => void saveBulk()} disabled={submitting}>Save All</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={Boolean(approveTarget) && !esignOpen} onOpenChange={(o) => { if (!o) setApproveTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve CQA Result</DialogTitle>
+            <DialogDescription>
+              Electronic signature is required. Change reason is mandatory (ALCOA+ / Part 11).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Change Reason *</Label>
+            <Textarea value={approveReason} onChange={(e) => setApproveReason(e.target.value)} placeholder="Why is this result being approved?" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveTarget(null)}>Cancel</Button>
+            <Button disabled={submitting} onClick={() => void confirmApprove()}>Continue to E-Sign</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ElectronicSignatureDialog
+        open={esignOpen}
+        onOpenChange={(v) => {
+          setEsignOpen(v);
+          if (!v) {
+            setSubmitting(false);
+            setOverrideEsign(false);
+          }
+        }}
+        moduleName="CQA Monitoring"
+        recordId={overrideEsign ? (editing?.id || 'cqa') : (approveTarget?.id || 'cqa')}
+        documentNumber={overrideEsign ? editing?.cqaResultId : approveTarget?.cqaResultId}
+        actionType={overrideEsign ? 'QA Override' : 'Approve'}
+        onSuccess={() => {
+          if (overrideEsign) void applyQaOverride();
+          else void applyApprove();
+        }}
+        onCancel={() => setEsignOpen(false)}
+      />
     </div>
   );
 }

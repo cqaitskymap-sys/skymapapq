@@ -129,7 +129,7 @@ export function RoleDetailView({ id }: { id: string }) {
             <CardContent className="text-sm space-y-2">
               <p>{userCount} active directory user(s) currently use this role.</p>
               <p className="text-muted-foreground">
-                Permission changes take effect on the next authenticated session refresh for assigned users across User Management, QMS, Training, Documents, and all integrated modules.
+                Permission changes take effect on the next authenticated session refresh for assigned users across User Management, QMS, Documents, and all integrated modules.
               </p>
               <Button asChild variant="outline" size="sm">
                 <Link href={`/admin/users?role=${encodeURIComponent(role.roleId)}`}>Open User Management</Link>

@@ -41,9 +41,15 @@ function EditParameterContent({ id }: { id: string }) {
       setInitial({
         parameterCode: p.parameterCode,
         parameterName: p.parameterName,
+        shortName: p.shortName || '',
+        description: p.description || '',
         parameterType: p.parameterType,
         parameterCategory: (p.parameterCategory as ParameterFormData['parameterCategory']) || 'Manufacturing',
+        parameterGroup: (p.parameterGroup as ParameterFormData['parameterGroup']) || 'General',
+        moduleName: (p.moduleName as ParameterFormData['moduleName']) || 'General',
+        subModule: p.subModule || '',
         productLink: p.productLink || '',
+        productCategory: p.productCategory || '',
         processStage: (p.processStage as ParameterFormData['processStage']) || 'Mixing',
         department: p.department || '',
         testMethodStp: p.testMethodStp || '',
@@ -55,15 +61,27 @@ function EditParameterContent({ id }: { id: string }) {
         alertLimitHigh: p.alertLimitHigh || '',
         actionLimitLow: p.actionLimitLow || '',
         actionLimitHigh: p.actionLimitHigh || '',
+        criticalLimit: p.criticalLimit || '',
+        defaultValue: p.defaultValue || '',
+        precision: p.precision || '',
+        formula: p.formula || '',
+        dataType: (p.dataType as ParameterFormData['dataType']) || 'Numeric',
+        calculationType: (p.calculationType as ParameterFormData['calculationType']) || 'Manual',
         unit: p.unit || '',
         resultType: p.resultType,
         frequency: (p.frequency as ParameterFormData['frequency']) || 'Per Batch',
         criticality: (p.criticality as ParameterFormData['criticality']) || 'Major',
+        mandatory: p.mandatory ?? false,
+        displayOrder: p.displayOrder,
+        sequenceNumber: p.sequenceNumber || '',
+        applicableSite: p.applicableSite || '',
+        businessUnit: p.businessUnit || '',
         ootApplicable: p.ootApplicable ?? false,
         oosApplicable: p.oosApplicable ?? false,
         autoDeviationRequired: p.autoDeviationRequired ?? false,
         autoCapaRequired: p.autoCapaRequired ?? false,
         remarks: p.remarks || '',
+        changeReason: '',
       });
       setLoading(false);
     });
@@ -97,6 +115,7 @@ function EditParameterContent({ id }: { id: string }) {
       <ParameterForm
         initial={initial}
         products={products}
+        isEdit
         onSubmit={(data) => setPending(data)}
         onCancel={() => router.push(`/admin/parameters/${id}`)}
         submitting={submitting}

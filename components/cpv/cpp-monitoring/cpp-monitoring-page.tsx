@@ -1,8 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Plus, Download, Eye, Pencil, CheckCircle, Layers } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Plus, Download, Eye, Pencil, CheckCircle, Layers, FilterX, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import { BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie } from 'recharts';
 import { useAuth } from '@/contexts/auth-context';
@@ -17,7 +17,7 @@ import {
   fetchCppResults, fetchCppBatchesForProduct,
   fetchCppParametersForProduct, createCppResult, updateCppResult,
   approveCppResult, reviewCppResult, bulkCreateCppResults, autofillFromBatch,
-  logCppExport, parameterTrendData,
+  logCppExport, parameterTrendData, buildCppExportRows,
 } from '@/lib/cpv-cpp-monitoring-service';
 import { fetchActiveCpvProductsForBatch as fetchProducts } from '@/lib/cpv-batch-registration-service';
 import type { CpvProductRecord } from '@/lib/cpv-product-master';
@@ -29,7 +29,7 @@ import {
   resolveOndansetronCppDefaults,
   type OndansetronCppOption,
 } from '@/lib/ondansetron-bmr-spec';
-import { downloadCsv } from '@/lib/export-utils';
+import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ResponsiveDataTable } from '@/components/cpv/product-master/responsive-data-table';
 import { ParameterTrendChart } from './parameter-trend-chart';
@@ -46,10 +46,11 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ElectronicSignatureDialog } from '@/components/electronic-signatures';
 import type { ColumnDef } from '@/components/admin/admin-data-table';
 
 const CHART_COLORS = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed'];
@@ -83,6 +84,9 @@ function RiskBadge({ level }: { level: string }) {
 
 export function CppMonitoringPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const productQuery = searchParams.get('product') || '';
+  const batchQuery = searchParams.get('batch') || '';
   const { user, profile } = useAuth();
   const role = profile?.role;
   const canCreate = cpvPermissions.canEnterCpp(role) && !cpvPermissions.isCppViewOnly(role);
@@ -99,8 +103,12 @@ export function CppMonitoringPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [editing, setEditing] = useState<CppResultRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [approveTarget, setApproveTarget] = useState<CppResultRecord | null>(null);
+  const [approveReason, setApproveReason] = useState('');
+  const [esignOpen, setEsignOpen] = useState(false);
+  const [overrideEsign, setOverrideEsign] = useState(false);
 
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(productQuery || batchQuery);
   const [productFilter, setProductFilter] = useState('all');
   const [batchFilter, setBatchFilter] = useState('all');
   const [stageFilter, setStageFilter] = useState('all');
@@ -112,15 +120,26 @@ export function CppMonitoringPage() {
   const [formProductName, setFormProductName] = useState('');
   const [formBatches, setFormBatches] = useState<Awaited<ReturnType<typeof fetchCppBatchesForProduct>>>([]);
   const [formParams, setFormParams] = useState<CppParamOption[]>([]);
-  const [form, setForm] = useState<Partial<CppResultFormData>>({});
+  const [form, setForm] = useState<Partial<CppResultFormData>>({ changeReason: '' });
 
   const [bulkProductId, setBulkProductId] = useState('');
   const [bulkBatchId, setBulkBatchId] = useState('');
   const [bulkStage, setBulkStage] = useState<string>(CPP_PROCESS_STAGES[0]);
   const [bulkArea, setBulkArea] = useState('');
+  const [bulkReason, setBulkReason] = useState('Bulk CPP entry');
   const [bulkRows, setBulkRows] = useState<Array<{ param: CppParamOption; observed: string; remarks: string }>>([]);
 
   const actor = { id: user?.uid || 'system', name: profile?.full_name || 'System', role: role || '' };
+
+  useEffect(() => {
+    if (productQuery) setSearch(productQuery);
+    else if (batchQuery) setSearch(batchQuery);
+  }, [productQuery, batchQuery]);
+
+  useEffect(() => {
+    if (batchQuery) setBatchFilter(batchQuery);
+  }, [batchQuery]);
+
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -141,15 +160,32 @@ export function CppMonitoringPage() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return results.filter((r) => {
-      if (productFilter !== 'all' && r.productName !== productFilter) return false;
+      if (productFilter !== 'all' && r.productName !== productFilter && r.productCode !== productFilter) return false;
       if (batchFilter !== 'all' && r.batchNumber !== batchFilter) return false;
       if (stageFilter !== 'all' && !cppProcessStagesMatch(r.processStage, stageFilter)) return false;
       if (statusFilter !== 'all' && r.status !== statusFilter) return false;
       if (riskFilter !== 'all' && r.riskLevel !== riskFilter) return false;
       if (!q) return true;
-      return r.productName.toLowerCase().includes(q) || r.batchNumber.toLowerCase().includes(q) || r.parameterName.toLowerCase().includes(q);
+      return (
+        r.productName.toLowerCase().includes(q)
+        || r.productCode.toLowerCase().includes(q)
+        || r.batchNumber.toLowerCase().includes(q)
+        || r.parameterName.toLowerCase().includes(q)
+        || r.parameterCode.toLowerCase().includes(q)
+        || (r.equipmentName || '').toLowerCase().includes(q)
+        || (r.site || '').toLowerCase().includes(q)
+      );
     });
   }, [results, search, productFilter, batchFilter, stageFilter, statusFilter, riskFilter]);
+
+  const clearFilters = () => {
+    setSearch('');
+    setProductFilter('all');
+    setBatchFilter('all');
+    setStageFilter('all');
+    setStatusFilter('all');
+    setRiskFilter('all');
+  };
 
   const summary = useMemo(() => summarizeCppResults(results), [results]);
   const charts = useMemo(() => buildChartSeries(filtered), [filtered]);
@@ -201,6 +237,13 @@ export function CppMonitoringPage() {
       resultType: 'Numeric',
       criticality: 'Major',
       frequency: 'Per Batch',
+      changeReason: '',
+      equipmentId: '',
+      equipmentName: '',
+      site: '',
+      department: '',
+      shift: '',
+      productVersion: '',
     });
     setFormOpen(true);
   };
@@ -356,15 +399,24 @@ export function CppMonitoringPage() {
   };
 
   const saveForm = async () => {
-    if (!form.cpvProductId || !form.batchNumber || !form.parameterCode || !form.observedValue) {
+    if (!form.cpvProductId || !form.batchNumber || !form.parameterCode || form.observedValue === undefined || form.observedValue === '') {
       toast.error('Complete required fields');
+      return;
+    }
+    if (!form.changeReason || form.changeReason.trim().length < 5) {
+      toast.error('Change reason must be at least 5 characters');
+      return;
+    }
+    const qaOverride = Boolean(editing?.isLocked && editing.reviewStatus === 'Approved' && canQaOverride);
+    if (qaOverride) {
+      setOverrideEsign(true);
+      setEsignOpen(true);
       return;
     }
     setSubmitting(true);
     const data = form as CppResultFormData;
     if (editing) {
-      const qaOverride = editing.isLocked && editing.reviewStatus === 'Approved' && canQaOverride;
-      const { error: err } = await updateCppResult(editing.id, data, actor, editing, qaOverride);
+      const { error: err } = await updateCppResult(editing.id, data, actor, editing, false);
       if (err) toast.error(err);
       else { toast.success('CPP result updated'); setFormOpen(false); await load(); }
     } else {
@@ -373,6 +425,58 @@ export function CppMonitoringPage() {
       else { toast.success('CPP result created'); setFormOpen(false); await load(); }
     }
     setSubmitting(false);
+  };
+
+  const applyQaOverride = async () => {
+    if (!editing) return;
+    setSubmitting(true);
+    const { error: err } = await updateCppResult(
+      editing.id,
+      form as CppResultFormData,
+      actor,
+      editing,
+      true,
+      { esignConfirmed: true },
+    );
+    setSubmitting(false);
+    setEsignOpen(false);
+    setOverrideEsign(false);
+    if (err) toast.error(err);
+    else {
+      toast.success('CPP result updated (QA override)');
+      setFormOpen(false);
+      await load();
+    }
+  };
+
+  const confirmApprove = async () => {
+    if (!approveTarget) return;
+    if (approveReason.trim().length < 5) {
+      toast.error('Change reason must be at least 5 characters');
+      return;
+    }
+    setEsignOpen(true);
+  };
+
+  const applyApprove = async () => {
+    if (!approveTarget) return;
+    setSubmitting(true);
+    const { error: err } = await approveCppResult(
+      approveTarget.id,
+      actor,
+      approveTarget,
+      approveReason,
+      { esignConfirmed: true },
+    );
+    setSubmitting(false);
+    setEsignOpen(false);
+    setApproveTarget(null);
+    setApproveReason('');
+    if (err) toast.error(err);
+    else {
+      toast.success('CPP result approved');
+      await load();
+    }
   };
 
   const openBulk = async (productId: string) => {
@@ -420,6 +524,15 @@ export function CppMonitoringPage() {
           reviewedBy: '',
           reviewDate: '',
           remarks: row.remarks,
+          changeReason: bulkReason,
+          equipmentId: '',
+          equipmentName: '',
+          machineId: '',
+          sensorId: '',
+          site: '',
+          department: '',
+          shift: '',
+          productVersion: '',
         };
       }
       if (isHierarchyCppOption(row.param)) {
@@ -449,6 +562,15 @@ export function CppMonitoringPage() {
           reviewedBy: '',
           reviewDate: '',
           remarks: row.remarks,
+          changeReason: bulkReason,
+          equipmentId: '',
+          equipmentName: '',
+          machineId: '',
+          sensorId: '',
+          site: '',
+          department: '',
+          shift: '',
+          productVersion: '',
         };
       }
       const n = normalizeParameter(row.param);
@@ -479,10 +601,23 @@ export function CppMonitoringPage() {
         reviewedBy: '',
         reviewDate: '',
         remarks: row.remarks,
+        changeReason: bulkReason,
+        equipmentId: '',
+        equipmentName: '',
+        machineId: '',
+        sensorId: '',
+        site: '',
+        department: '',
+        shift: '',
+        productVersion: '',
       };
     });
+    if (bulkReason.trim().length < 5) {
+      toast.error('Bulk change reason must be at least 5 characters');
+      return;
+    }
     setSubmitting(true);
-    const { created, errors } = await bulkCreateCppResults(rows, actor);
+    const { created, errors } = await bulkCreateCppResults(rows, actor, bulkReason);
     setSubmitting(false);
     if (errors.length) toast.error(errors[0]);
     toast.success(`${created} CPP results saved`);
@@ -509,31 +644,32 @@ export function CppMonitoringPage() {
       <CpvPageHeader
         title="CPP Monitoring"
         description="Monitor Critical Process Parameters batch-wise for Continued Process Verification"
-        trail={[{ label: 'Continued Process Verification', href: '/cpv/dashboard' }, { label: 'CPP Monitoring' }]}
+        trail={[
+          { label: 'Dashboard', href: '/dashboard' },
+          { label: 'Continued Process Verification', href: '/cpv/dashboard' },
+          { label: 'CPP Monitoring' },
+        ]}
         actions={
           <>
             {canImportExport && (
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => toast.info('Excel import placeholder — upload template coming soon')}>
-                Import Excel
-              </Button>
-            )}
-            {canImportExport && (
-              <Button variant="outline" size="sm" className="gap-2" onClick={async () => {
-                const headers = ['Batch', 'Parameter', 'Observed', 'Status', 'Risk'];
-                const rows = filtered.map((r) => [r.batchNumber, r.parameterName, r.observedValue, r.status, r.riskLevel]);
-                downloadCsv(`cpp-results-${Date.now()}.csv`, headers, rows);
+              <Button variant="outline" size="sm" className="gap-2 no-print" onClick={async () => {
+                const { headers, rows } = buildCppExportRows(filtered);
+                downloadCsv(`cpp-results-${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
                 await logCppExport(actor, filtered.length);
-                toast.success('Export placeholder CSV generated');
+                toast.success(`Exported ${filtered.length} CPP results`);
               }}>
                 <Download className="h-4 w-4" />Export
               </Button>
             )}
+            <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => printPage()}>
+              <Printer className="h-4 w-4" />Print
+            </Button>
             {canCreate && !isReadOnly && (
               <>
-                <Button variant="outline" size="sm" className="gap-2" onClick={() => products[0] && openBulk(products[0].id)}>
+                <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => products[0] && openBulk(products[0].id)}>
                   <Layers className="h-4 w-4" />Bulk Entry
                 </Button>
-                <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" />New CPP Result</Button>
+                <Button size="sm" className="gap-2 no-print" onClick={openCreate}><Plus className="h-4 w-4" />New CPP Result</Button>
               </>
             )}
           </>
@@ -609,6 +745,7 @@ export function CppMonitoringPage() {
               <SelectContent><SelectItem value="all">All Status</SelectItem>{CPP_RESULT_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
             <Select value={stageFilter} onValueChange={setStageFilter}><SelectTrigger><SelectValue placeholder="Stage" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All Stages</SelectItem>{CPP_PROCESS_STAGES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
+            <Button variant="outline" size="sm" className="gap-1" onClick={clearFilters}><FilterX className="h-3.5 w-3.5" />Clear</Button>
           </div>
           {filtered.length === 0 ? <EmptyState title="No CPP results" /> : (
             <ResponsiveDataTable
@@ -630,10 +767,18 @@ export function CppMonitoringPage() {
                     }}><Pencil className="h-4 w-4" /></Button>
                   )}
                   {canReview && row.reviewStatus === 'Draft' && (
-                    <Button size="icon" variant="ghost" onClick={async () => { await reviewCppResult(row.id, actor, row); await load(); }}><CheckCircle className="h-4 w-4" /></Button>
+                    <Button size="icon" variant="ghost" onClick={async () => {
+                      const { error: err } = await reviewCppResult(row.id, actor, row);
+                      if (err) toast.error(err);
+                      else { toast.success('Submitted for review'); await load(); }
+                    }}><CheckCircle className="h-4 w-4" /></Button>
                   )}
-                  {canReview && row.reviewStatus === 'Under Review' && (
-                    <Button size="sm" variant="outline" onClick={async () => { await approveCppResult(row.id, actor, row); await load(); }}>Approve</Button>
+                  {canReview && (row.reviewStatus === 'Under Review' || row.reviewStatus === 'Draft') && (
+                    <Button size="sm" variant="outline" onClick={() => {
+                      setApproveTarget(row);
+                      setApproveReason('');
+                      setOverrideEsign(false);
+                    }}>Approve</Button>
                   )}
                 </div>
               )}
@@ -716,7 +861,22 @@ export function CppMonitoringPage() {
               </div>
             </div>
             <div><Label>Observation Date Time *</Label><Input className="mt-1" type="datetime-local" value={form.observationDateTime?.slice(0, 16) || ''} onChange={(e) => setForm((f) => ({ ...f, observationDateTime: e.target.value }))} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>Equipment</Label><Input className="mt-1" value={form.equipmentName || ''} onChange={(e) => setForm((f) => ({ ...f, equipmentName: e.target.value }))} /></div>
+              <div><Label>Site</Label><Input className="mt-1" value={form.site || ''} onChange={(e) => setForm((f) => ({ ...f, site: e.target.value }))} /></div>
+              <div><Label>Department</Label><Input className="mt-1" value={form.department || ''} onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))} /></div>
+              <div><Label>Shift</Label><Input className="mt-1" value={form.shift || ''} onChange={(e) => setForm((f) => ({ ...f, shift: e.target.value }))} /></div>
+            </div>
             <div><Label>Remarks</Label><Textarea className="mt-1" value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} /></div>
+            <div>
+              <Label>Change Reason * (ALCOA+ / Part 11)</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="Describe why this create/update is being performed"
+                value={form.changeReason || ''}
+                onChange={(e) => setForm((f) => ({ ...f, changeReason: e.target.value }))}
+              />
+            </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button>
               <Button onClick={() => void saveForm()} disabled={submitting}>{submitting ? 'Saving...' : 'Save'}</Button>
@@ -816,11 +976,54 @@ export function CppMonitoringPage() {
             </TableBody>
           </Table>
           <DialogFooter>
+            <div className="mr-auto w-full max-w-sm">
+              <Label className="text-xs">Change Reason *</Label>
+              <Input className="mt-1" value={bulkReason} onChange={(e) => setBulkReason(e.target.value)} placeholder="Bulk entry reason" />
+            </div>
             <Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button>
             <Button onClick={() => void saveBulk()} disabled={submitting}>Save All</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={Boolean(approveTarget) && !esignOpen} onOpenChange={(o) => { if (!o) setApproveTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve CPP Result</DialogTitle>
+            <DialogDescription>
+              Electronic signature is required. Change reason is mandatory (ALCOA+ / Part 11).
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Change Reason *</Label>
+            <Textarea value={approveReason} onChange={(e) => setApproveReason(e.target.value)} placeholder="Why is this result being approved?" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveTarget(null)}>Cancel</Button>
+            <Button disabled={submitting} onClick={() => void confirmApprove()}>Continue to E-Sign</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ElectronicSignatureDialog
+        open={esignOpen}
+        onOpenChange={(v) => {
+          setEsignOpen(v);
+          if (!v) {
+            setSubmitting(false);
+            setOverrideEsign(false);
+          }
+        }}
+        moduleName="CPP Monitoring"
+        recordId={overrideEsign ? (editing?.id || 'cpp') : (approveTarget?.id || 'cpp')}
+        documentNumber={overrideEsign ? editing?.cppResultId : approveTarget?.cppResultId}
+        actionType={overrideEsign ? 'QA Override' : 'Approve'}
+        onSuccess={() => {
+          if (overrideEsign) void applyQaOverride();
+          else void applyApprove();
+        }}
+        onCancel={() => setEsignOpen(false)}
+      />
     </div>
   );
 }

@@ -2,7 +2,6 @@ import {
   collection, doc, addDoc, getDoc, getDocs, updateDoc, query, where, limit, orderBy,
 } from 'firebase/firestore';
 import { createAuditLog } from '@/lib/audit-trail';
-import { generateDocumentNumber } from '@/lib/admin/document-numbering-service';
 import {
   computeOosAutoRules,
   departmentCode,
@@ -111,17 +110,8 @@ export async function fetchOosInvestigators(): Promise<OosInvestigatorOption[]> 
 export async function generateOosNumberForDepartment(department: string): Promise<string> {
   const dept = departmentCode(department);
   const year = new Date().getFullYear();
-  try {
-    const result = await generateDocumentNumber('OOS', 'OOS Investigation', {
-      departmentCode: dept,
-      date: new Date(),
-      increment: false,
-    });
-    if (result.number) return result.number;
-  } catch (e) {
-    console.error('generateDocumentNumber OOS preview', e);
-  }
-
+  // Preview uses Firestore sequence locally. Calling generateAdminDocumentNumber here
+  // only triggers browser CORS when the Cloud Function is not deployed (billing).
   const prefix = `OOS/${dept}/${year}/`;
   try {
     if (isFirebaseConfigured()) {

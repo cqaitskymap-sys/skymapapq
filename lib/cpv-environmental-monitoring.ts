@@ -10,6 +10,10 @@ export const CLEANROOM_GRADES = [
   'Grade A', 'Grade B', 'Grade C', 'Grade D', 'Controlled Area', 'Unclassified',
 ] as const;
 
+export const ISO_CLASSES = [
+  'ISO 5', 'ISO 6', 'ISO 7', 'ISO 8', 'ISO 9', 'N/A',
+] as const;
+
 export const EM_MONITORING_TYPES = [
   'Temperature',
   'Relative Humidity',
@@ -21,6 +25,13 @@ export const EM_MONITORING_TYPES = [
   'Surface Monitoring',
   'Personnel Monitoring',
   'Contact Plate',
+  'Air Velocity',
+  'Air Changes Per Hour',
+  'Compressed Gas',
+  'Water Monitoring',
+  'CO2',
+  'O2',
+  'Other',
 ] as const;
 
 export const EM_PROCESS_STAGES = [
@@ -28,21 +39,29 @@ export const EM_PROCESS_STAGES = [
   'Filling', 'Sealing', 'Visual Inspection', 'Packing', 'General Monitoring',
 ] as const;
 
-export const EM_STATUSES = ['Complies', 'Alert', 'Action', 'Excursion'] as const;
+export const EM_STATUSES = ['Complies', 'Alert', 'Action', 'Excursion', 'OOS', 'OOT'] as const;
 export const EM_REVIEW_STATUSES = ['Draft', 'Under Review', 'Approved'] as const;
+export const EM_DATA_SOURCES = ['Manual', 'IoT', 'PLC', 'SCADA', 'BMS', 'MQTT', 'OPC-UA'] as const;
 
 export const DEFAULT_EM_PARAMETERS = [
   'Room Temperature', 'Relative Humidity', 'Differential Pressure',
+  'Air Velocity', 'Air Changes Per Hour',
   'Particles >=0.5µm', 'Particles >=5.0µm', 'Viable Count',
   'Settle Plate Count', 'Active Air Count', 'Surface Count', 'Personnel Count',
+  'Compressed Air Quality', 'Nitrogen Quality', 'CO2', 'O2',
+  'Water Temperature', 'Conductivity', 'TOC', 'Microbial Count',
 ] as const;
 
 const MICROBIAL_TYPES = [
   'Viable Particle Count', 'Settle Plate', 'Active Air Sampling',
-  'Surface Monitoring', 'Personnel Monitoring', 'Contact Plate',
+  'Surface Monitoring', 'Personnel Monitoring', 'Contact Plate', 'Water Monitoring',
 ];
 
 const requiredText = z.string().trim().min(1, 'Required');
+const optionalNum = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v),
+  z.coerce.number().optional(),
+);
 
 export const environmentalMonitoringFormSchema = z.object({
   cpvProductId: requiredText,
@@ -53,20 +72,38 @@ export const environmentalMonitoringFormSchema = z.object({
   areaId: z.string().trim().default(''),
   roomNumber: requiredText,
   cleanroomGrade: z.enum(CLEANROOM_GRADES),
+  isoClass: z.enum(ISO_CLASSES).default('N/A'),
   processStage: z.enum(EM_PROCESS_STAGES).default('General Monitoring'),
   monitoringType: z.enum(EM_MONITORING_TYPES),
   samplingLocation: z.string().trim().default(''),
+  monitoringPointCode: z.string().trim().default(''),
+  monitoringPointName: z.string().trim().default(''),
+  building: z.string().trim().default(''),
+  block: z.string().trim().default(''),
+  floor: z.string().trim().default(''),
+  site: z.string().trim().default(''),
+  department: z.string().trim().default(''),
+  shift: z.string().trim().default(''),
+  zone: z.string().trim().default(''),
+  ahuId: z.string().trim().default(''),
+  ahuName: z.string().trim().default(''),
+  equipmentId: z.string().trim().default(''),
+  equipmentName: z.string().trim().default(''),
+  dataSource: z.enum(EM_DATA_SOURCES).default('Manual'),
+  sensorId: z.string().trim().default(''),
+  alarmStatus: z.string().trim().default(''),
+  communicationStatus: z.string().trim().default('OK'),
   parameterId: z.string().trim().default(''),
   parameterCode: requiredText,
   parameterName: requiredText,
   observedValue: z.union([z.coerce.number(), z.string().trim().min(1, 'Required')]),
-  targetValue: z.coerce.number().optional(),
+  targetValue: optionalNum,
   lowerLimit: z.coerce.number(),
   upperLimit: z.coerce.number(),
-  alertLimitLow: z.coerce.number().optional(),
-  alertLimitHigh: z.coerce.number().optional(),
-  actionLimitLow: z.coerce.number().optional(),
-  actionLimitHigh: z.coerce.number().optional(),
+  alertLimitLow: optionalNum,
+  alertLimitHigh: optionalNum,
+  actionLimitLow: optionalNum,
+  actionLimitHigh: optionalNum,
   unit: requiredText,
   resultType: z.enum(RESULT_TYPES).default('Numeric'),
   monitoringDate: requiredText,
@@ -76,12 +113,18 @@ export const environmentalMonitoringFormSchema = z.object({
   reviewDate: z.string().trim().default(''),
   remarks: z.string().trim().default(''),
   autoDeviationRequired: z.boolean().default(true),
+  specificationNumber: z.string().trim().default(''),
+  version: z.string().trim().default('1.0'),
+  effectiveDate: z.string().trim().default(''),
+  description: z.string().trim().default(''),
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => d.lowerLimit < d.upperLimit, {
   message: 'Upper limit must be greater than lower limit',
   path: ['upperLimit'],
 });
 
 export type EnvironmentalMonitoringFormData = z.infer<typeof environmentalMonitoringFormSchema>;
+export type EnvironmentalMonitoringSaveData = EnvironmentalMonitoringFormData;
 
 export interface EnvironmentalMonitoringRecord extends EnvironmentalMonitoringFormData, Record<string, unknown> {
   id: string;
@@ -101,6 +144,8 @@ export interface EnvironmentalMonitoringRecord extends EnvironmentalMonitoringFo
   createdByName?: string;
   updatedByName?: string;
   isDeleted: boolean;
+  oosRequired?: boolean;
+  linkedOosNumber?: string;
 }
 
 export interface EnvironmentalSummary {
@@ -109,6 +154,8 @@ export interface EnvironmentalSummary {
   alert: number;
   action: number;
   excursion: number;
+  oos: number;
+  oot: number;
   gradeAExcursions: number;
   gradeBExcursions: number;
   microbialExcursions: number;
@@ -136,19 +183,27 @@ export function evaluateEnvironmentalStatus(
 ): string {
   if (resultType === 'Pass/Fail') {
     const v = String(observed).toLowerCase();
-    return v === 'pass' ? 'Complies' : 'Excursion';
+    return v === 'pass' ? 'Complies' : 'OOS';
   }
   if (resultType === 'Complies/Does Not Comply') {
     const v = String(observed).toLowerCase();
-    return v.includes('comply') && !v.includes('not') ? 'Complies' : 'Excursion';
+    return v.includes('comply') && !v.includes('not') ? 'Complies' : 'OOS';
   }
   const num = Number(observed);
-  if (!Number.isFinite(num)) return 'Excursion';
-  if (num < lsl || num > usl) return 'Excursion';
-  if (actionLow != null && !Number.isNaN(actionLow) && num < actionLow) return 'Action';
-  if (actionHigh != null && !Number.isNaN(actionHigh) && num > actionHigh) return 'Action';
-  if (alertLow != null && !Number.isNaN(alertLow) && num < alertLow) return 'Alert';
-  if (alertHigh != null && !Number.isNaN(alertHigh) && num > alertHigh) return 'Alert';
+  if (!Number.isFinite(num)) return 'OOS';
+  if (num < lsl || num > usl) return 'OOS';
+  if (actionLow != null && Number.isFinite(actionLow) && num < actionLow) return 'Action';
+  if (actionHigh != null && Number.isFinite(actionHigh) && num > actionHigh) return 'Action';
+  if (alertLow != null && Number.isFinite(alertLow) && num < alertLow) return 'Alert';
+  if (alertHigh != null && Number.isFinite(alertHigh) && num > alertHigh) return 'Alert';
+  if (alertLow == null && alertHigh == null) {
+    const range = usl - lsl;
+    if (range > 0) {
+      const bandLow = lsl + range * 0.1;
+      const bandHigh = usl - range * 0.1;
+      if (num < bandLow || num > bandHigh) return 'OOT';
+    }
+  }
   return 'Complies';
 }
 
@@ -163,37 +218,50 @@ export function isMicrobialMonitoring(
 }
 
 export function evaluateEnvironmentalRisk(
-  record: Pick<EnvironmentalMonitoringRecord, 'cleanroomGrade' | 'processStage' | 'monitoringType' | 'parameterName' | 'status'>,
+  record: Pick<EnvironmentalMonitoringRecord, 'cleanroomGrade' | 'processStage' | 'monitoringType' | 'parameterName' | 'status'> & {
+    alarmStatus?: string;
+    communicationStatus?: string;
+  },
   failureCount: number,
 ): string {
+  if (['Sensor Failure', 'Communication Failure', 'HVAC Failure', 'AHU Failure', 'Power Failure'].includes(String(record.alarmStatus || ''))) {
+    return 'Critical';
+  }
+  if (record.communicationStatus === 'Disconnected' || record.communicationStatus === 'Failed') {
+    return 'High';
+  }
   if (failureCount >= 3) return 'High';
-  const excursion = ['Excursion', 'Action', 'Alert'].includes(record.status);
-  if (!excursion) return 'Low';
 
-  if (isMicrobialMonitoring(record.monitoringType, record.parameterName) && record.status === 'Excursion') {
+  const nonCompliant = ['Excursion', 'OOS', 'Action', 'Alert', 'OOT'].includes(record.status);
+  if (!nonCompliant) return 'Low';
+
+  if (isMicrobialMonitoring(record.monitoringType, record.parameterName) && ['OOS', 'Excursion'].includes(record.status)) {
     return 'Critical';
   }
-  if (record.cleanroomGrade === 'Grade A' && record.status === 'Excursion') return 'Critical';
-  if (record.cleanroomGrade === 'Grade B' && record.status === 'Excursion') return 'High';
-  if (record.processStage === 'Filling' && ['Grade A', 'Grade B'].includes(record.cleanroomGrade) && record.status === 'Excursion') {
+  if (record.cleanroomGrade === 'Grade A' && ['OOS', 'Excursion'].includes(record.status)) return 'Critical';
+  if (record.cleanroomGrade === 'Grade B' && ['OOS', 'Excursion'].includes(record.status)) return 'High';
+  if (record.processStage === 'Filling' && ['Grade A', 'Grade B'].includes(record.cleanroomGrade) && ['OOS', 'Excursion'].includes(record.status)) {
     return 'Critical';
   }
-  if (record.status === 'Excursion') return 'High';
+  if (['OOS', 'Excursion'].includes(record.status)) return 'High';
   if (record.status === 'Action') return 'Medium';
+  if (['Alert', 'OOT'].includes(record.status)) return 'Low';
   return 'Low';
 }
 
 export function summarizeEnvironmentalRecords(records: EnvironmentalMonitoringRecord[]): EnvironmentalSummary {
-  const isExcursion = (s: string) => s === 'Excursion';
+  const isExcursionLike = (s: string) => s === 'Excursion' || s === 'OOS';
   return {
     total: records.length,
     compliant: records.filter((r) => r.status === 'Complies').length,
-    alert: records.filter((r) => r.status === 'Alert').length,
+    alert: records.filter((r) => r.status === 'Alert' || r.status === 'OOT').length,
     action: records.filter((r) => r.status === 'Action').length,
-    excursion: records.filter((r) => isExcursion(r.status)).length,
-    gradeAExcursions: records.filter((r) => r.cleanroomGrade === 'Grade A' && isExcursion(r.status)).length,
-    gradeBExcursions: records.filter((r) => r.cleanroomGrade === 'Grade B' && isExcursion(r.status)).length,
-    microbialExcursions: records.filter((r) => isMicrobialMonitoring(r.monitoringType, r.parameterName) && isExcursion(r.status)).length,
+    excursion: records.filter((r) => isExcursionLike(r.status)).length,
+    oos: records.filter((r) => r.status === 'OOS' || r.status === 'Excursion').length,
+    oot: records.filter((r) => r.status === 'OOT').length,
+    gradeAExcursions: records.filter((r) => r.cleanroomGrade === 'Grade A' && isExcursionLike(r.status)).length,
+    gradeBExcursions: records.filter((r) => r.cleanroomGrade === 'Grade B' && isExcursionLike(r.status)).length,
+    microbialExcursions: records.filter((r) => isMicrobialMonitoring(r.monitoringType, r.parameterName) && isExcursionLike(r.status)).length,
     deviationTriggered: records.filter((r) => r.deviationRequired || r.linkedDeviationNumber).length,
     capaSuggested: records.filter((r) => r.capaRequired).length,
   };
@@ -211,6 +279,12 @@ export function parametersForMonitoringType(monitoringType: string): readonly st
     'Surface Monitoring': ['Surface Count'],
     'Personnel Monitoring': ['Personnel Count'],
     'Contact Plate': ['Surface Count'],
+    'Air Velocity': ['Air Velocity'],
+    'Air Changes Per Hour': ['Air Changes Per Hour'],
+    'Compressed Gas': ['Compressed Air Quality', 'Nitrogen Quality'],
+    'Water Monitoring': ['Water Temperature', 'Conductivity', 'TOC', 'Microbial Count'],
+    CO2: ['CO2'],
+    O2: ['O2'],
   };
   return map[monitoringType] || DEFAULT_EM_PARAMETERS.slice();
 }
@@ -229,7 +303,7 @@ export function buildEnvironmentalChartSeries(records: EnvironmentalMonitoringRe
     .sort((a, b) => a.month.localeCompare(b.month));
 
   const areaMap = new Map<string, number>();
-  records.filter((r) => r.status === 'Excursion').forEach((r) => {
+  records.filter((r) => ['Excursion', 'OOS', 'Action'].includes(r.status)).forEach((r) => {
     areaMap.set(r.areaName, (areaMap.get(r.areaName) || 0) + 1);
   });
   const areaExcursionTrend = Array.from(areaMap.entries())
@@ -238,7 +312,7 @@ export function buildEnvironmentalChartSeries(records: EnvironmentalMonitoringRe
     .slice(0, 10);
 
   const gradeMap = new Map<string, number>();
-  records.filter((r) => r.status === 'Excursion').forEach((r) => {
+  records.filter((r) => ['Excursion', 'OOS'].includes(r.status)).forEach((r) => {
     gradeMap.set(r.cleanroomGrade, (gradeMap.get(r.cleanroomGrade) || 0) + 1);
   });
   const gradeRiskTrend = Array.from(gradeMap.entries()).map(([grade, count]) => ({ grade, count }));

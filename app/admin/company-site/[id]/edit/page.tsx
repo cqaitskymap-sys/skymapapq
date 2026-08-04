@@ -8,15 +8,11 @@ import { CompanySiteForm } from '@/components/admin/company-sites/company-site-f
 import { PageHeader } from '@/components/admin/dashboard/page-header';
 import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 import { ErrorCard } from '@/components/admin/dashboard/error-card';
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { useAuth } from '@/contexts/auth-context';
 import { useAdminPermissions } from '@/hooks/use-admin-permissions';
 import { canEditCompanySites } from '@/lib/permissions';
 import {
-  fetchCompanySiteById, updateCompanySite, uploadCompanyLogo, updateCompanyLogo,
+  fetchCompanySiteById, updateCompanySite, uploadCompanyLogo, updateCompanyLogoViaCallable,
 } from '@/lib/admin/company-site-service';
 import type { CompanySiteFormData } from '@/lib/admin/schemas';
 
@@ -28,7 +24,6 @@ function EditCompanySiteContent({ id }: { id: string }) {
   const [existing, setExisting] = useState<Awaited<ReturnType<typeof fetchCompanySiteById>>>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [pending, setPending] = useState<CompanySiteFormData | null>(null);
   const [logoFile, setLogoFile] = useState<File | null>(null);
 
   const auditMeta = {
@@ -37,40 +32,60 @@ function EditCompanySiteContent({ id }: { id: string }) {
   };
 
   useEffect(() => {
-    fetchCompanySiteById(id).then((s) => {
-      if (!s) {
+    fetchCompanySiteById(id, true).then((record) => {
+      if (!record) {
         setLoading(false);
         return;
       }
-      setExisting(s);
+      setExisting(record);
       setInitial({
-        companyName: s.companyName,
-        companyCode: s.companyCode || '',
-        siteName: s.siteName,
-        siteCode: s.siteCode || '',
-        siteType: (s.siteType as CompanySiteFormData['siteType']) || 'Manufacturing Plant',
-        plantName: s.plantName || '',
-        plantCode: s.plantCode || '',
-        plantAddress: s.plantAddress || '',
-        city: s.city || '',
-        state: s.state || '',
-        country: s.country || '',
-        pinZipCode: s.pinZipCode || '',
-        gstNumber: s.gstNumber || s.gstNo || '',
-        manufacturingLicenseNumber: s.manufacturingLicenseNumber || s.licenseNo || '',
-        drugLicenseNumber: s.drugLicenseNumber || '',
-        contactPerson: s.contactPerson || '',
-        contactEmail: s.contactEmail || '',
-        contactPhone: s.contactPhone || s.contactNumber || '',
-        website: s.website || '',
-        timezone: s.timezone || s.defaultTimezone || 'Asia/Kolkata',
-        dateFormat: (s.dateFormat as CompanySiteFormData['dateFormat']) || 'DD/MM/YYYY',
-        timeFormat: (s.timeFormat as CompanySiteFormData['timeFormat']) || '24h',
-        defaultCurrency: (s.defaultCurrency as CompanySiteFormData['defaultCurrency']) || 'INR',
-        documentHeaderFormat: s.documentHeaderFormat || '',
-        documentFooterText: s.documentFooterText || '',
-        status: (s.status as CompanySiteFormData['status']) || 'Active',
-        isDefault: s.isDefault ?? false,
+        companyName: record.companyName,
+        companyCode: record.companyCode || '',
+        legalName: record.legalName || '',
+        shortName: record.shortName || '',
+        companyType: (record.companyType as CompanySiteFormData['companyType']) || '',
+        industry: (record.industry as CompanySiteFormData['industry']) || '',
+        registrationNumber: record.registrationNumber || '',
+        panNumber: record.panNumber || '',
+        licenseNumber: record.licenseNumber || '',
+        companyEmail: record.companyEmail || '',
+        companyPhone: record.companyPhone || '',
+        siteName: record.siteName,
+        siteCode: record.siteCode || '',
+        siteType: (record.siteType as CompanySiteFormData['siteType']) || 'Manufacturing Plant',
+        businessUnit: record.businessUnit || '',
+        isManufacturingUnit: record.isManufacturingUnit ?? false,
+        isWarehouse: record.isWarehouse ?? false,
+        isLaboratory: record.isLaboratory ?? false,
+        isOffice: record.isOffice ?? false,
+        plantName: record.plantName || '',
+        plantCode: record.plantCode || '',
+        plantAddress: record.plantAddress || record.siteAddress || '',
+        city: record.city || '',
+        state: record.state || '',
+        country: record.country || '',
+        pinZipCode: record.pinZipCode || '',
+        gstNumber: record.gstNumber || record.gstNo || '',
+        manufacturingLicenseNumber: record.manufacturingLicenseNumber || record.licenseNo || '',
+        drugLicenseNumber: record.drugLicenseNumber || '',
+        contactPerson: record.contactPerson || '',
+        contactEmail: record.contactEmail || '',
+        contactPhone: record.contactPhone || record.contactNumber || '',
+        siteHead: record.siteHead || '',
+        siteHeadId: record.siteHeadId || '',
+        qualityHead: record.qualityHead || '',
+        qualityHeadId: record.qualityHeadId || '',
+        website: record.website || '',
+        timezone: record.timezone || record.defaultTimezone || 'Asia/Kolkata',
+        dateFormat: (record.dateFormat as CompanySiteFormData['dateFormat']) || 'DD/MM/YYYY',
+        timeFormat: (record.timeFormat as CompanySiteFormData['timeFormat']) || '24h',
+        defaultCurrency: (record.defaultCurrency as CompanySiteFormData['defaultCurrency']) || 'INR',
+        documentHeaderFormat: record.documentHeaderFormat || '',
+        documentFooterText: record.documentFooterText || '',
+        remarks: record.remarks || '',
+        status: (record.status as CompanySiteFormData['status']) || 'Active',
+        isDefault: record.isDefault ?? false,
+        changeReason: '',
       });
       setLoading(false);
     });
@@ -83,7 +98,7 @@ function EditCompanySiteContent({ id }: { id: string }) {
   if (loading) return <LoadingSkeleton rows={1} />;
   if (!initial || !existing) return <ErrorCard title="Not Found" message="Site not found" />;
 
-  const confirmSave = async (data: CompanySiteFormData) => {
+  const onSubmit = async (data: CompanySiteFormData) => {
     setSubmitting(true);
     const result = await updateCompanySite(id, data, existing, auditMeta);
     if (result.error) {
@@ -95,14 +110,19 @@ function EditCompanySiteContent({ id }: { id: string }) {
     if (logoFile) {
       const upload = await uploadCompanyLogo(id, logoFile, auditMeta, existing.companyLogo);
       if (upload.url) {
-        await updateCompanyLogo(id, upload.url, existing, auditMeta);
+        const logoResult = await updateCompanyLogoViaCallable(id, upload.url, existing, data.changeReason);
+        if (!logoResult.success) toast.warning(`Saved but logo update failed: ${logoResult.error}`);
       } else if (upload.error) {
         toast.warning(`Saved but logo upload failed: ${upload.error}`);
       }
     }
 
     setSubmitting(false);
-    toast.success('Company/site updated');
+    if (result.cascadeCount && result.cascadeCount > 0) {
+      toast.success(`Company/site updated — ${result.cascadeCount} linked record(s) synchronized`);
+    } else {
+      toast.success('Company/site updated');
+    }
     router.push(`/admin/company-site/${id}`);
   };
 
@@ -112,27 +132,11 @@ function EditCompanySiteContent({ id }: { id: string }) {
       <CompanySiteForm
         initial={initial}
         existingLogo={existing.companyLogo}
-        onSubmit={(data) => setPending(data)}
+        onSubmit={onSubmit}
         onCancel={() => router.push(`/admin/company-site/${id}`)}
         onLogoSelect={setLogoFile}
         submitting={submitting}
       />
-      <AlertDialog open={!!pending} onOpenChange={() => setPending(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Changes</AlertDialogTitle>
-            <AlertDialogDescription>
-              Save changes to &quot;{pending?.siteName}&quot;?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction className="bg-blue-600" onClick={() => pending && confirmSave(pending)}>
-              Save Changes
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

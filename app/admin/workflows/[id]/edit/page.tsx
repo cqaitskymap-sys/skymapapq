@@ -44,8 +44,22 @@ function EditWorkflowContent({ id }: { id: string }) {
         workflowCode: w.workflowCode,
         workflowName: w.workflowName,
         moduleName: w.moduleName as WorkflowFormData['moduleName'],
+        subModule: w.subModule || '',
+        workflowCategory: w.workflowCategory || 'Approval',
+        businessUnit: w.businessUnit || '',
+        site: w.site || '',
         department: w.department || '',
         workflowType: w.workflowType,
+        triggerEvent: w.triggerEvent || '',
+        priority: w.priority || 'Medium',
+        slaHours: w.slaHours,
+        parallelApproval: w.parallelApproval ?? false,
+        sequentialApproval: w.sequentialApproval ?? true,
+        conditionalRouting: w.conditionalRouting ?? false,
+        workflowVersion: w.workflowVersion || '1.0',
+        effectiveDate: w.effectiveDate || '',
+        reviewDate: w.reviewDate || '',
+        expiryDate: w.expiryDate || '',
         initiatorRole: w.initiatorRole || '',
         reviewerRoles: w.reviewerRoles || '',
         approverRoles: w.approverRoles || '',
@@ -61,6 +75,8 @@ function EditWorkflowContent({ id }: { id: string }) {
         escalationDays: Number(w.escalationDays ?? 3),
         targetCompletionDays: Number(w.targetCompletionDays ?? 30),
         description: w.description || '',
+        remarks: w.remarks || '',
+        changeReason: '',
         steps: steps.map((s) => ({
           id: s.id,
           stepNumber: s.stepNumber,
@@ -77,6 +93,10 @@ function EditWorkflowContent({ id }: { id: string }) {
           requireComment: s.requireComment ?? false,
           dueDays: Number(s.dueDays ?? 3),
           escalationRole: s.escalationRole || '',
+          conditionExpression: s.conditionExpression || '',
+          nextStepOnApprove: s.nextStepOnApprove || '',
+          nextStepOnReject: s.nextStepOnReject || '',
+          isParallel: s.isParallel ?? false,
           status: (s.status as WorkflowFormData['steps'][0]['status']) || 'Active',
         })),
       });
@@ -112,6 +132,7 @@ function EditWorkflowContent({ id }: { id: string }) {
       <WorkflowForm
         initial={initial}
         roles={roles}
+        isEdit
         onSubmit={(data) => setPending(data)}
         onCancel={() => router.push(`/admin/workflows/${id}`)}
         submitting={submitting}

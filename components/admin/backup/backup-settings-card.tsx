@@ -37,7 +37,10 @@ export function BackupSettingsCard({ settings, canEdit, auditMeta, onSaved }: Ba
   const handleSave = async () => {
     if (!canEdit) return;
     setSaving(true);
-    const result = await updateBackupSettings(form, auditMeta);
+    const result = await updateBackupSettings({
+      ...form,
+      changeReason: 'Scheduled backup / retention configuration updated',
+    }, auditMeta);
     setSaving(false);
     if (result) {
       toast.success('Backup schedule saved');
@@ -54,7 +57,7 @@ export function BackupSettingsCard({ settings, canEdit, auditMeta, onSaved }: Ba
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          Automated backups require Firebase Cloud Functions. Settings are stored for when the scheduler is deployed.
+          When enabled, Cloud Scheduler runs `scheduledAdminBackup` daily (02:00 Asia/Kolkata) and applies Weekly/Monthly cadence gates. Payloads are AES-256-GCM encrypted in Cloud Storage.
         </p>
         <div className="flex items-center justify-between">
           <Label>Auto Backup Enabled</Label>

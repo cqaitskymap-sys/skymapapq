@@ -23,7 +23,6 @@ const LEGACY_ROLE_MAP: Record<string, AdminRoleId> = {
   warehouse: 'warehouse_manager',
   regulatory: 'regulatory_affairs',
   hr: 'hr',
-  training_coordinator: 'training_coordinator',
   document_controller: 'document_controller',
   department_head: 'department_head',
   employee: 'employee',
@@ -53,11 +52,10 @@ export const ROLE_DEFINITIONS: { id: UserRole; label: string; description: strin
   { id: 'engineering', label: 'Engineering', description: 'Equipment, utility, and validation' },
   { id: 'warehouse', label: 'Warehouse', description: 'Material, inventory, and dispensing' },
   { id: 'regulatory', label: 'Regulatory', description: 'Change control, recall, and documents' },
-  { id: 'hr', label: 'HR', description: 'Employee and training coordination' },
-  { id: 'training_coordinator', label: 'Training Coordinator', description: 'Training planning and administration' },
+  { id: 'hr', label: 'HR', description: 'Employee and HR administration' },
   { id: 'document_controller', label: 'Document Controller', description: 'Controlled document administration' },
   { id: 'department_head', label: 'Department Head', description: 'Department review and oversight' },
-  { id: 'employee', label: 'Employee', description: 'Assigned training and controlled document access' },
+  { id: 'employee', label: 'Employee', description: 'Controlled document access' },
   { id: 'auditor', label: 'Auditor', description: 'Read-only access across modules' },
   { id: 'vendor', label: 'Vendor', description: 'Restricted vendor portal access' },
   { id: 'viewer', label: 'Viewer', description: 'Read-only viewer access' },
@@ -91,7 +89,7 @@ function buildDefaultPermissions(roleId: AdminRoleId): Record<AdminModule, Recor
   const isEngineering = ['engineering_manager', 'engineering_executive'].includes(roleId);
   const isWarehouse = ['warehouse_manager', 'warehouse_executive'].includes(roleId);
   const isRegulatory = roleId === 'regulatory_affairs';
-  const isTraining = roleId === 'training_coordinator' || roleId === 'hr';
+  const isHr = roleId === 'hr';
   const isDocumentController = roleId === 'document_controller';
   const isDepartmentHead = roleId === 'department_head';
   const isEmployee = roleId === 'employee' || roleId === 'viewer';
@@ -108,7 +106,7 @@ function buildDefaultPermissions(roleId: AdminRoleId): Record<AdminModule, Recor
         matrix[mod][action] = action === 'view' || action === 'export';
       } else if (isQa) {
         matrix[mod][action] = ['Dashboard', 'PQR', 'CPV', 'CPP', 'CQA', 'Deviation', 'CAPA', 'Change Control',
-          'Complaint', 'Recall', 'Stability', 'Document', 'Training', 'Reports'].includes(mod)
+          'Complaint', 'Recall', 'Stability', 'Document', 'Reports'].includes(mod)
           ? ['view', 'create', 'edit', 'review', 'approve', 'reject', 'export', 'eSign'].includes(action)
           : action === 'view' || action === 'export';
       } else if (isQc) {
@@ -131,8 +129,8 @@ function buildDefaultPermissions(roleId: AdminRoleId): Record<AdminModule, Recor
         matrix[mod][action] = ['Dashboard', 'Change Control', 'Recall', 'Document', 'PQR', 'Complaint'].includes(mod)
           ? ['view', 'create', 'edit', 'review', 'approve', 'export'].includes(action)
           : action === 'view';
-      } else if (isTraining) {
-        matrix[mod][action] = ['Dashboard', 'Training', 'Reports'].includes(mod)
+      } else if (isHr) {
+        matrix[mod][action] = ['Dashboard', 'Document', 'Reports'].includes(mod)
           ? ['view', 'create', 'edit', 'review', 'export'].includes(action)
           : false;
       } else if (isDocumentController) {
@@ -140,11 +138,11 @@ function buildDefaultPermissions(roleId: AdminRoleId): Record<AdminModule, Recor
           ? ['view', 'create', 'edit', 'review', 'export', 'archive'].includes(action)
           : false;
       } else if (isDepartmentHead) {
-        matrix[mod][action] = ['Dashboard', 'Document', 'Training', 'Deviation', 'CAPA', 'Reports'].includes(mod)
+        matrix[mod][action] = ['Dashboard', 'Document', 'Deviation', 'CAPA', 'Reports'].includes(mod)
           ? ['view', 'review', 'approve', 'export'].includes(action)
           : false;
       } else if (isEmployee) {
-        matrix[mod][action] = ['Dashboard', 'Document', 'Training'].includes(mod) && action === 'view';
+        matrix[mod][action] = ['Dashboard', 'Document'].includes(mod) && action === 'view';
       } else if (isVendor) {
         matrix[mod][action] = mod === 'Vendor' && action === 'view';
       } else {
@@ -237,6 +235,26 @@ export function canViewSystemSettings(role?: string | null): boolean {
   return ['super_admin', 'admin', 'head_qa', 'auditor'].includes(r);
 }
 
+export function canViewModuleConfiguration(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin', 'head_qa', 'auditor', 'qa_manager'].includes(r);
+}
+
+export function canEditModuleConfiguration(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin'].includes(r);
+}
+
+export function canViewMasterDataImportExport(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin', 'head_qa', 'auditor', 'qa_manager'].includes(r);
+}
+
+export function canEditMasterDataImportExport(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin'].includes(r);
+}
+
 /** Edit general, theme, file-upload sections (non-security). */
 export function canEditSystemSettings(role?: string | null): boolean {
   const r = normalizeRole(role);
@@ -303,16 +321,24 @@ export function canAccessAdminRoute(role: string | null | undefined, pathname: s
     ['/admin/approval-matrix', canViewApprovalMatrix],
     ['/admin/document-numbering', canViewDocumentNumbering],
     ['/admin/audit-trail', canViewAuditTrail],
+    ['/admin/login-activity', canViewLoginActivity],
+    ['/admin/user-access-review', canViewAccessReview],
     ['/admin/esign-settings', canViewEsignSettings],
     ['/admin/notifications', canViewNotificationSettings],
+    ['/admin/email-sms-templates', canViewEmailSmsTemplates],
+    ['/admin/module-configuration', canViewModuleConfiguration],
+    ['/admin/master-data-import-export', canViewMasterDataImportExport],
     ['/admin/backup', canViewBackup],
     ['/admin/system-settings', canViewSystemSettings],
-    ['/dashboard/admin/login-activity', canViewAuditTrail],
-    ['/dashboard/admin/user-access-review', canViewUsers],
+    ['/admin/firebase-status', canViewSystemSettings],
+    ['/admin/system-health', canViewSystemSettings],
+    ['/dashboard/admin/login-activity', canViewLoginActivity],
+    ['/dashboard/admin/user-access-review', canViewAccessReview],
     ['/dashboard/admin/password-policy', canViewSystemSettings],
-    ['/dashboard/admin/email-sms-templates', canViewNotificationSettings],
-    ['/dashboard/admin/module-configuration', canViewSystemSettings],
-    ['/dashboard/admin/master-data-import-export', canViewSystemSettings],
+    ['/admin/system-settings/password-policy', canViewSystemSettings],
+    ['/dashboard/admin/email-sms-templates', canViewEmailSmsTemplates],
+    ['/dashboard/admin/module-configuration', canViewModuleConfiguration],
+    ['/dashboard/admin/master-data-import-export', canViewMasterDataImportExport],
     ['/dashboard/admin/data-backup-log', canViewBackup],
     ['/dashboard/admin/firebase-status', canViewSystemSettings],
     ['/dashboard/admin/system-health', canViewSystemSettings],
@@ -535,12 +561,27 @@ export function canManualOverrideDocumentNumber(role?: string | null): boolean {
 
 export function canViewNotificationSettings(role?: string | null): boolean {
   const r = normalizeRole(role);
-  return ['super_admin', 'admin', 'head_qa', 'auditor'].includes(r);
+  return ['super_admin', 'admin', 'head_qa', 'auditor', 'qa_manager'].includes(r);
 }
 
 export function canEditNotificationSettings(role?: string | null): boolean {
   const r = normalizeRole(role);
   return ['super_admin', 'admin'].includes(r);
+}
+
+export function canViewEmailSmsTemplates(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin', 'head_qa', 'auditor', 'qa_manager'].includes(r);
+}
+
+export function canEditEmailSmsTemplates(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin'].includes(r);
+}
+
+export function canApproveEmailSmsTemplates(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin', 'head_qa'].includes(r);
 }
 
 export function canViewEsignSettings(role?: string | null): boolean {
@@ -560,12 +601,71 @@ export function canRecommendEsignChanges(role?: string | null): boolean {
 
 export function canViewAuditTrail(role?: string | null): boolean {
   const r = normalizeRole(role);
-  return Boolean(r);
+  return [
+    'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive', 'qa',
+    'regulatory_affairs', 'regulatory', 'auditor',
+  ].includes(r);
+}
+
+export function canViewLoginActivity(role?: string | null): boolean {
+  return canViewAuditTrail(role);
+}
+
+export function canManageLoginSessions(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin'].includes(r);
+}
+
+export function canExportLoginActivity(role?: string | null): boolean {
+  return canExportAuditTrail(role);
+}
+
+export function canArchiveLoginActivity(role?: string | null): boolean {
+  return canArchiveAuditTrail(role);
+}
+
+export function canViewAccessReview(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive', 'qa', 'auditor', 'regulatory_affairs', 'regulatory'].includes(r);
+}
+
+export function canManageAccessReview(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin', 'head_qa', 'qa_manager'].includes(r);
+}
+
+export function canCompleteAccessReview(role?: string | null): boolean {
+  return canManageAccessReview(role);
+}
+
+export function canGenerateAccessReviewCampaign(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin'].includes(r);
+}
+
+export function canExportAccessReview(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin', 'auditor', 'head_qa'].includes(r);
+}
+
+export function canArchiveAccessReview(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin'].includes(r);
 }
 
 export function canExportAuditTrail(role?: string | null): boolean {
   const r = normalizeRole(role);
   return ['super_admin', 'admin', 'auditor'].includes(r);
+}
+
+export function canArchiveAuditTrail(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin'].includes(r);
+}
+
+export function canVerifyAuditIntegrity(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return ['super_admin', 'admin', 'auditor', 'head_qa'].includes(r);
 }
 
 export function canViewAllAuditTrail(role?: string | null): boolean {
@@ -663,13 +763,18 @@ export function canViewDepartmentUsers(role?: string | null): boolean {
 
 export type AppModule =
   | 'admin' | 'cpv' | 'pqr' | 'qms' | 'deviation' | 'oos' | 'capa' | 'change_control'
-  | 'stability' | 'complaints' | 'recall' | 'dms' | 'training' | 'audit' | 'vendors'
+  | 'stability' | 'complaints' | 'recall' | 'dms' | 'audit' | 'vendors'
   | 'validation' | 'csv' | 'equipment' | 'monitoring' | 'warehouse' | 'ebmr';
 
 const MODULE_ROLE_ACCESS: Record<AppModule, AdminRoleId[]> = {
   admin: ['super_admin', 'admin'],
   cpv: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'qc_manager', 'production_manager', 'engineering_manager'],
-  pqr: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'qc_manager', 'regulatory_affairs'],
+  pqr: [
+    'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive',
+    'qc_manager', 'qc_executive', 'production_manager', 'production_executive',
+    'engineering_manager', 'engineering_executive', 'warehouse_manager',
+    'regulatory_affairs', 'department_head',
+  ],
   qms: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'qc_manager', 'production_manager',
     'warehouse_manager', 'engineering_manager', 'regulatory_affairs'],
   deviation: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'qc_manager', 'production_manager',
@@ -681,9 +786,7 @@ const MODULE_ROLE_ACCESS: Record<AppModule, AdminRoleId[]> = {
   complaints: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'regulatory_affairs'],
   recall: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'regulatory_affairs'],
   dms: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'regulatory_affairs',
-    'document_controller', 'department_head', 'employee', 'training_coordinator', 'hr'],
-  training: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'training_coordinator',
-    'hr', 'department_head', 'employee'],
+    'document_controller', 'department_head', 'employee', 'hr'],
   audit: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'auditor'],
   vendors: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'warehouse_manager', 'vendor'],
   validation: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'engineering_manager'],
@@ -698,14 +801,14 @@ export function canAccessModule(role: string | null | undefined, module: AppModu
   const r = normalizeRole(role);
   if (r === 'super_admin') return true;
   if (['auditor', 'viewer'].includes(r)) {
-    return ['audit', 'qms', 'pqr', 'dms', 'training', 'stability', 'complaints', 'recall',
+    return ['audit', 'qms', 'pqr', 'dms', 'stability', 'complaints', 'recall',
       'deviation', 'oos', 'capa', 'change_control', 'cpv', 'vendors', 'validation', 'csv',
       'equipment', 'monitoring', 'warehouse', 'ebmr'].includes(module);
   }
   if (r === 'document_controller') return module === 'dms';
-  if (['training_coordinator', 'hr'].includes(r)) return ['training', 'dms'].includes(module);
-  if (r === 'department_head') return ['dms', 'training', 'deviation', 'capa'].includes(module);
-  if (r === 'employee') return ['dms', 'training'].includes(module);
+  if (r === 'hr') return module === 'dms';
+  if (r === 'department_head') return ['dms', 'deviation', 'capa'].includes(module);
+  if (r === 'employee') return module === 'dms';
   if (r === 'vendor') return module === 'vendors';
   return MODULE_ROLE_ACCESS[module]?.includes(r) ?? false;
 }

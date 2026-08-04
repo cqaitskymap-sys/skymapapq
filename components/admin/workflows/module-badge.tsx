@@ -11,7 +11,6 @@ const COLORS: Record<string, string> = {
   CAPA: 'bg-purple-100 text-purple-800 border-purple-200',
   'Change Control': 'bg-indigo-100 text-indigo-800 border-indigo-200',
   DMS: 'bg-slate-100 text-slate-700 border-slate-200',
-  Training: 'bg-green-100 text-green-800 border-green-200',
   Admin: 'bg-gray-100 text-gray-700 border-gray-200',
 };
 

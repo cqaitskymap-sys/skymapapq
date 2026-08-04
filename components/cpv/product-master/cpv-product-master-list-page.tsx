@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus, Download, Upload, Eye, Pencil, Power } from 'lucide-react';
+import { Plus, Download, Upload, Eye, Pencil, Power, FilterX, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
@@ -23,9 +23,10 @@ import {
   setCpvProductStatus,
   importCpvProductFromAdmin,
   logCpvProductExport,
+  buildCpvProductsExportRows,
 } from '@/lib/cpv-product-master-service';
 import type { AdminProduct } from '@/lib/admin/schemas';
-import { downloadCsv } from '@/lib/export-utils';
+import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from './cpv-page-header';
 import { CpvProductFormSheet } from './cpv-product-form-sheet';
 import { ResponsiveDataTable } from './responsive-data-table';
@@ -40,10 +41,12 @@ import {
 } from '@/components/ui/select';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { ElectronicSignatureDialog } from '@/components/electronic-signatures';
 import type { ColumnDef } from '@/components/admin/admin-data-table';
 
 export function CpvProductMasterListPage() {
@@ -63,16 +66,20 @@ export function CpvProductMasterListPage() {
   const [editing, setEditing] = useState<CpvProductRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [statusTarget, setStatusTarget] = useState<CpvProductRecord | null>(null);
+  const [statusReason, setStatusReason] = useState('');
+  const [esignOpen, setEsignOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importProductId, setImportProductId] = useState('');
   const [importOwner, setImportOwner] = useState('');
   const [importStartDate, setImportStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [importFrequency, setImportFrequency] = useState<typeof CPV_REVIEW_FREQUENCIES[number]>('Yearly');
+  const [importReason, setImportReason] = useState('Import from Admin Product Master');
 
   const [dosageFilter, setDosageFilter] = useState('all');
   const [marketFilter, setMarketFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [frequencyFilter, setFrequencyFilter] = useState('all');
+  const [siteFilter, setSiteFilter] = useState('all');
   const [search, setSearch] = useState('');
 
   const actor = {
@@ -99,6 +106,11 @@ export function CpvProductMasterListPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const sites = useMemo(
+    () => Array.from(new Set(products.map((p) => p.manufacturingSite).filter(Boolean))).sort(),
+    [products],
+  );
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return products.filter((p) => {
@@ -106,27 +118,41 @@ export function CpvProductMasterListPage() {
       if (marketFilter !== 'all' && p.market !== marketFilter) return false;
       if (statusFilter !== 'all' && p.cpvStatus !== statusFilter) return false;
       if (frequencyFilter !== 'all' && p.cpvReviewFrequency !== frequencyFilter) return false;
+      if (siteFilter !== 'all' && p.manufacturingSite !== siteFilter) return false;
       if (!q) return true;
       return (
         p.productName.toLowerCase().includes(q)
         || p.productCode.toLowerCase().includes(q)
         || p.genericName.toLowerCase().includes(q)
         || p.market.toLowerCase().includes(q)
+        || (p.productCategory || '').toLowerCase().includes(q)
+        || (p.productFamily || '').toLowerCase().includes(q)
+        || (p.manufacturingSite || '').toLowerCase().includes(q)
+        || (p.cpvProductId || '').toLowerCase().includes(q)
       );
     });
-  }, [products, search, dosageFilter, marketFilter, statusFilter, frequencyFilter]);
+  }, [products, search, dosageFilter, marketFilter, statusFilter, frequencyFilter, siteFilter]);
 
   const summary = useMemo(() => summarizeCpvProducts(products), [products]);
+
+  const clearFilters = () => {
+    setDosageFilter('all');
+    setMarketFilter('all');
+    setStatusFilter('all');
+    setFrequencyFilter('all');
+    setSiteFilter('all');
+    setSearch('');
+  };
 
   const handleSave = async (data: CpvProductFormData) => {
     setSubmitting(true);
     try {
       if (editing?.id) {
-        const { product, error: err } = await updateCpvProduct(editing.id, data, actor, editing);
+        const { error: err } = await updateCpvProduct(editing.id, data, actor, editing);
         if (err) { toast.error(err); return; }
         toast.success('CPV product updated');
       } else {
-        const { product, error: err } = await createCpvProduct(data, actor);
+        const { error: err } = await createCpvProduct(data, actor);
         if (err) { toast.error(err); return; }
         toast.success('Product added to CPV');
       }
@@ -138,13 +164,35 @@ export function CpvProductMasterListPage() {
     }
   };
 
-  const handleToggleStatus = async () => {
+  const requestStatusToggle = (row: CpvProductRecord) => {
+    setStatusTarget(row);
+    setStatusReason('');
+  };
+
+  const confirmStatusDialog = () => {
+    if (!statusTarget) return;
+    if (statusReason.trim().length < 5) {
+      toast.error('Change reason must be at least 5 characters');
+      return;
+    }
+    setEsignOpen(true);
+  };
+
+  const applyStatusChange = async () => {
     if (!statusTarget) return;
     const newStatus = statusTarget.cpvStatus === 'Active' ? 'Inactive' : 'Active';
     setSubmitting(true);
-    const { error: err } = await setCpvProductStatus(statusTarget.id, newStatus, actor, statusTarget);
+    const { error: err } = await setCpvProductStatus(
+      statusTarget.id,
+      newStatus,
+      actor,
+      statusTarget,
+      { changeReason: statusReason, esignConfirmed: true },
+    );
     setSubmitting(false);
+    setEsignOpen(false);
     setStatusTarget(null);
+    setStatusReason('');
     if (err) toast.error(err);
     else toast.success(newStatus === 'Active' ? 'Product activated' : 'Product deactivated');
     await load();
@@ -155,6 +203,10 @@ export function CpvProductMasterListPage() {
       toast.error('Select product and enter CPV owner');
       return;
     }
+    if (importReason.trim().length < 5) {
+      toast.error('Import reason must be at least 5 characters');
+      return;
+    }
     setSubmitting(true);
     const { error: err } = await importCpvProductFromAdmin(
       importProductId,
@@ -162,36 +214,27 @@ export function CpvProductMasterListPage() {
         cpvStartDate: importStartDate,
         cpvReviewFrequency: importFrequency,
         cpvOwner: importOwner,
-        cpvStatus: 'Active',
+        cpvStatus: 'Draft',
         remarks: '',
         qaReviewer: '',
+        changeReason: importReason,
       },
       actor,
     );
     setSubmitting(false);
     if (err) toast.error(err);
     else {
-      toast.success('Product imported from Admin Product Master');
+      toast.success('Product imported as Draft — activate after review');
       setImportOpen(false);
       await load();
     }
   };
 
   const handleExport = async () => {
-    const headers = ['CPV Product ID', 'Product Code', 'Product Name', 'Strength', 'Dosage Form', 'CPV Status', 'Review Frequency', 'Owner'];
-    const rows = filtered.map((p) => [
-      p.cpvProductId,
-      p.productCode,
-      p.productName,
-      p.strength,
-      p.dosageForm,
-      p.cpvStatus,
-      p.cpvReviewFrequency,
-      p.cpvOwner,
-    ]);
-    downloadCsv(`cpv-products-${Date.now()}.csv`, headers, rows);
-    await logCpvProductExport(actor, filtered.length);
-    toast.success('Export generated (placeholder CSV)');
+    const { headers, rows } = buildCpvProductsExportRows(filtered);
+    downloadCsv(`cpv-products-${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+    await logCpvProductExport(actor, filtered.length, 'CSV');
+    toast.success(`Exported ${filtered.length} CPV products`);
   };
 
   const columns: ColumnDef<CpvProductRecord>[] = [
@@ -200,6 +243,7 @@ export function CpvProductMasterListPage() {
     { key: 'productName', header: 'Product Name' },
     { key: 'strength', header: 'Strength' },
     { key: 'dosageForm', header: 'Dosage Form' },
+    { key: 'manufacturingSite', header: 'Site', render: (row) => row.manufacturingSite || '—' },
     { key: 'market', header: 'Market' },
     {
       key: 'cpvStatus',
@@ -236,28 +280,32 @@ export function CpvProductMasterListPage() {
   }
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div id="cpv-product-master-root" className="space-y-6 p-4 sm:p-6">
       <CpvPageHeader
         title="CPV Product Master"
         description="Manage products under Continued Process Verification"
         trail={[
+          { label: 'Dashboard', href: '/dashboard' },
           { label: 'Continued Process Verification', href: '/cpv/dashboard' },
           { label: 'Product Master' },
         ]}
         actions={
           <>
             {canImportExport && (
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => setImportOpen(true)}>
+              <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => setImportOpen(true)}>
                 <Upload className="h-4 w-4" />Import
               </Button>
             )}
             {canImportExport && (
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => void handleExport()}>
+              <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => void handleExport()}>
                 <Download className="h-4 w-4" />Export
               </Button>
             )}
+            <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => printPage()}>
+              <Printer className="h-4 w-4" />Print
+            </Button>
             {canManage && !isReadOnly && (
-              <Button size="sm" className="gap-2" onClick={() => { setEditing(null); setFormOpen(true); }}>
+              <Button size="sm" className="gap-2 no-print" onClick={() => { setEditing(null); setFormOpen(true); }}>
                 <Plus className="h-4 w-4" />Add to CPV
               </Button>
             )}
@@ -265,29 +313,30 @@ export function CpvProductMasterListPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
         <KpiCard label="Total CPV Products" value={summary.total} tone="blue" />
         <KpiCard label="Active" value={summary.active} tone="green" />
+        <KpiCard label="Draft" value={summary.draft} tone="blue" />
         <KpiCard label="Inactive" value={summary.inactive} tone="amber" />
-        <KpiCard label="Under Review" value={summary.underReview} tone="amber" />
+        <KpiCard label="Under Review / Approved" value={summary.underReview} tone="amber" />
         <KpiCard label="Without CPP Link" value={summary.withoutCppLink} tone="red" />
         <KpiCard label="Without CQA Link" value={summary.withoutCqaLink} tone="red" />
         <KpiCard label="Due For Review" value={summary.dueForReview} tone="amber" />
       </div>
 
-      <Card>
+      <Card className="no-print">
         <CardContent className="p-4 space-y-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end">
             <div className="flex-1">
               <Label className="text-xs text-muted-foreground">Search</Label>
               <Input
                 className="mt-1"
-                placeholder="Product name, code, generic, market..."
+                placeholder="Code, name, category, family, site, CPV ID..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
               <div>
                 <Label className="text-xs text-muted-foreground">Dosage Form</Label>
                 <Select value={dosageFilter} onValueChange={setDosageFilter}>
@@ -319,6 +368,16 @@ export function CpvProductMasterListPage() {
                 </Select>
               </div>
               <div>
+                <Label className="text-xs text-muted-foreground">Site</Label>
+                <Select value={siteFilter} onValueChange={setSiteFilter}>
+                  <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    {sites.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
                 <Label className="text-xs text-muted-foreground">Review Frequency</Label>
                 <Select value={frequencyFilter} onValueChange={setFrequencyFilter}>
                   <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
@@ -329,6 +388,9 @@ export function CpvProductMasterListPage() {
                 </Select>
               </div>
             </div>
+            <Button variant="ghost" size="sm" className="h-9" onClick={clearFilters}>
+              <FilterX className="h-3.5 w-3.5 mr-1" />Clear
+            </Button>
           </div>
 
           {filtered.length === 0 ? (
@@ -337,7 +399,7 @@ export function CpvProductMasterListPage() {
             <ResponsiveDataTable
               columns={columns}
               data={filtered}
-              searchKeys={['productName', 'productCode', 'genericName', 'market']}
+              searchKeys={['productName', 'productCode', 'genericName', 'market', 'cpvProductId']}
               onRowClick={(row) => router.push(`/cpv/product-master/${row.id}`)}
               pageSize={10}
               statusKey="cpvStatus"
@@ -360,7 +422,7 @@ export function CpvProductMasterListPage() {
                     <Button
                       size="icon"
                       variant="ghost"
-                      onClick={() => setStatusTarget(row)}
+                      onClick={() => requestStatusToggle(row)}
                     >
                       <Power className="h-4 w-4" />
                     </Button>
@@ -381,19 +443,44 @@ export function CpvProductMasterListPage() {
         submitting={submitting}
       />
 
-      <ConfirmDialog
-        open={Boolean(statusTarget)}
-        onOpenChange={(v) => !v && setStatusTarget(null)}
-        title={statusTarget?.cpvStatus === 'Active' ? 'Deactivate CPV Product?' : 'Activate CPV Product?'}
-        description={
-          statusTarget?.cpvStatus === 'Active'
-            ? 'Inactive products cannot register new batches or CPP/CQA entries. Existing data remains viewable.'
-            : 'This product will be available for CPV batch and monitoring activities.'
-        }
-        confirmLabel={statusTarget?.cpvStatus === 'Active' ? 'Deactivate' : 'Activate'}
-        destructive={statusTarget?.cpvStatus === 'Active'}
-        loading={submitting}
-        onConfirm={handleToggleStatus}
+      <Dialog open={Boolean(statusTarget) && !esignOpen} onOpenChange={(v) => { if (!v) { setStatusTarget(null); setStatusReason(''); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {statusTarget?.cpvStatus === 'Active' ? 'Deactivate CPV Product?' : 'Activate CPV Product?'}
+            </DialogTitle>
+            <DialogDescription>
+              {statusTarget?.cpvStatus === 'Active'
+                ? 'Inactive products cannot register new batches or CPP/CQA entries. Electronic signature is required.'
+                : 'Activation requires electronic signature. Product will be available for CPV activities.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            <Label>Change Reason *</Label>
+            <Textarea
+              className="mt-1"
+              rows={3}
+              value={statusReason}
+              onChange={(e) => setStatusReason(e.target.value)}
+              placeholder="Reason for status change (min 5 characters)"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setStatusTarget(null); setStatusReason(''); }}>Cancel</Button>
+            <Button onClick={confirmStatusDialog} disabled={submitting}>Continue to E-Sign</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ElectronicSignatureDialog
+        open={esignOpen}
+        onOpenChange={(v) => { setEsignOpen(v); if (!v) setSubmitting(false); }}
+        moduleName="CPV Product Master"
+        recordId={statusTarget?.id || 'cpv-product'}
+        documentNumber={statusTarget?.cpvProductId}
+        actionType={statusTarget?.cpvStatus === 'Active' ? 'Deactivate' : 'Activate'}
+        onSuccess={() => { void applyStatusChange(); }}
+        onCancel={() => setEsignOpen(false)}
       />
 
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
@@ -430,10 +517,14 @@ export function CpvProductMasterListPage() {
               <Label>CPV Owner *</Label>
               <Input className="mt-1" value={importOwner} onChange={(e) => setImportOwner(e.target.value)} />
             </div>
+            <div>
+              <Label>Change Reason *</Label>
+              <Textarea className="mt-1" rows={2} value={importReason} onChange={(e) => setImportReason(e.target.value)} />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setImportOpen(false)}>Cancel</Button>
-            <Button onClick={() => void handleImport()} disabled={submitting}>Import</Button>
+            <Button onClick={() => void handleImport()} disabled={submitting}>Import as Draft</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

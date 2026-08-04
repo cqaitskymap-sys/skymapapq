@@ -1,27 +1,30 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Plus, Download, Eye, Pencil, CheckCircle, Layers, Warehouse } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import { Plus, Download, Eye, Pencil, CheckCircle, Layers, Warehouse, FilterX, Printer, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { z } from 'zod';
 import { BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie } from 'recharts';
 import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
 import {
   summarizeRawMaterialRecords, buildRawMaterialChartSeries, RM_MATERIAL_TYPES, RM_QC_STATUSES,
-  RM_COMPLIANCE_STATUSES, type RawMaterialMonitoringFormData, type RawMaterialMonitoringRecord,
+  RM_COMPLIANCE_STATUSES, rawMaterialMonitoringFormSchema,
+  type RawMaterialMonitoringFormData, type RawMaterialMonitoringRecord,
 } from '@/lib/cpv-raw-material-monitoring';
 import {
   fetchRawMaterialRecords, fetchRmBatchesForProduct, fetchMaterialMasterOptions, fetchVendorOptions,
   createRawMaterialRecord, updateRawMaterialRecord, approveRawMaterialRecord, reviewRawMaterialRecord,
   bulkCreateRawMaterialRecords, importFromWarehouseReceipt, fetchWarehouseReceiptsForImport,
-  logRawMaterialExport,
+  logRawMaterialExport, softDeleteRawMaterialRecord,
 } from '@/lib/cpv-raw-material-monitoring-service';
 import { fetchActiveCpvProductsForBatch as fetchProducts } from '@/lib/cpv-batch-registration-service';
 import type { CpvProductRecord } from '@/lib/cpv-product-master';
 import type { MaterialMaster } from '@/lib/material-schemas';
 import type { VendorRecord } from '@/lib/vendor-mgmt-types';
-import { downloadCsv } from '@/lib/export-utils';
+import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ResponsiveDataTable } from '@/components/cpv/product-master/responsive-data-table';
 import { KpiCard, StatusBadge } from '@/components/cpv/cpv-ui';
@@ -37,17 +40,88 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ElectronicSignatureDialog } from '@/components/electronic-signatures';
 import type { ColumnDef } from '@/components/admin/admin-data-table';
+import type { RawMaterialActor } from '@/lib/cpv-raw-material-monitoring-service';
 
 const CHART_COLORS = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed'];
 const FORM_CATEGORY_OPTIONS: Array<{ label: string; value: RawMaterialMonitoringFormData['materialType'] }> = [
   { label: 'API', value: 'API' },
   { label: 'Excipients', value: 'Excipient' },
 ];
+
+const rawMaterialSaveSchema = z.object({
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
+});
+
+type RawMaterialSaveData = RawMaterialMonitoringFormData & { changeReason: string };
+
+type EsignAction = 'approve' | 'delete' | 'qa-override';
+
+function buildRawMaterialExportRows(records: RawMaterialMonitoringRecord[]) {
+  const headers = [
+    'RM ID', 'Product Code', 'Product', 'Batch', 'Material Code', 'Material', 'Type',
+    'Vendor', 'AR No', 'GRN', 'Lot', 'Used Qty', 'Unit', 'QC Status', 'Compliance',
+    'Risk', 'AVL', 'Review Status', 'MFG', 'EXP', 'Retest', 'OOS Ref', 'Deviation', 'CAPA',
+  ];
+  const rows = records.map((r) => [
+    r.rawMaterialMonitoringId,
+    r.productCode,
+    r.productName,
+    r.batchNumber,
+    r.materialCode,
+    r.materialName,
+    r.materialType,
+    r.vendorName,
+    r.arNumber,
+    r.grnNumber || '',
+    r.materialLotNumber || '',
+    r.usedQuantity,
+    r.unit,
+    r.qcStatus,
+    r.complianceStatus,
+    r.riskLevel,
+    r.avlStatus,
+    r.reviewStatus,
+    r.mfgDate,
+    r.expDate,
+    r.retestDate || '',
+    r.linkedOosNumber || '',
+    r.linkedDeviationNumber || '',
+    r.linkedCapaNumber || '',
+  ]);
+  return { headers, rows };
+}
+
+async function callReview(id: string, actor: RawMaterialActor, changeReason = 'Submitted for QA review') {
+  return reviewRawMaterialRecord(id, actor, changeReason);
+}
+
+async function callApprove(
+  id: string,
+  actor: RawMaterialActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  return approveRawMaterialRecord(id, actor, changeReason, options);
+}
+
+async function callSoftDelete(
+  id: string,
+  actor: RawMaterialActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  return softDeleteRawMaterialRecord(id, actor, changeReason, options);
+}
+
+async function callLogExport(count: number, actor: RawMaterialActor) {
+  await logRawMaterialExport(actor, count);
+}
 
 function RiskBadge({ level }: { level: string }) {
   const cls = level === 'Critical' ? 'bg-red-900/10 text-red-900 border-red-300'
@@ -62,8 +136,19 @@ function AvlBadge({ status }: { status: string }) {
   return <span className={`rounded-md border px-2 py-0.5 text-xs font-medium ${ok ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>{status}</span>;
 }
 
+function mapMaterialType(t: string): RawMaterialMonitoringFormData['materialType'] {
+  const map: Record<string, RawMaterialMonitoringFormData['materialType']> = {
+    API: 'API', Excipient: 'Excipient', Preservative: 'Preservative', Solvent: 'Solvent',
+    Buffer: 'Buffer', 'pH Adjuster': 'pH Adjuster', 'Raw Material': 'Raw Material', Other: 'Other',
+  };
+  return map[t] || 'Other';
+}
+
 export function RawMaterialMonitoringPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const productQuery = searchParams.get('product') || '';
+  const batchQuery = searchParams.get('batch') || '';
   const { user, profile } = useAuth();
   const role = profile?.role;
   const canCreate = cpvPermissions.canCreateRawMaterial(role) && !cpvPermissions.isRawMaterialViewOnly(role);
@@ -84,8 +169,15 @@ export function RawMaterialMonitoringPage() {
   const [warehouseOpen, setWarehouseOpen] = useState(false);
   const [editing, setEditing] = useState<RawMaterialMonitoringRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [approveTarget, setApproveTarget] = useState<RawMaterialMonitoringRecord | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<RawMaterialMonitoringRecord | null>(null);
+  const [actionReason, setActionReason] = useState('');
+  const [esignOpen, setEsignOpen] = useState(false);
+  const [esignAction, setEsignAction] = useState<EsignAction>('approve');
 
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(productQuery || batchQuery);
+  const [productFilter, setProductFilter] = useState('all');
+  const [batchFilter, setBatchFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [qcFilter, setQcFilter] = useState('all');
   const [complianceFilter, setComplianceFilter] = useState('all');
@@ -93,14 +185,26 @@ export function RawMaterialMonitoringPage() {
 
   const [formProductId, setFormProductId] = useState('');
   const [formBatches, setFormBatches] = useState<Awaited<ReturnType<typeof fetchRmBatchesForProduct>>>([]);
-  const [form, setForm] = useState<Partial<RawMaterialMonitoringFormData>>({});
+  const [form, setForm] = useState<Partial<RawMaterialSaveData>>({ changeReason: '' });
   const [bulkProductId, setBulkProductId] = useState('');
   const [bulkBatchId, setBulkBatchId] = useState('');
+  const [bulkReason, setBulkReason] = useState('Bulk raw material entry');
   const [bulkRows, setBulkRows] = useState<Array<{ material: MaterialMaster; used: string; remarks: string }>>([]);
   const [warehouseReceiptId, setWarehouseReceiptId] = useState('');
   const [warehouseUsedQty, setWarehouseUsedQty] = useState('');
+  const [warehouseReason, setWarehouseReason] = useState('Warehouse receipt import');
 
   const actor = { id: user?.uid || 'system', name: profile?.full_name || 'System', role: role || '' };
+
+  useEffect(() => {
+    if (productQuery) setSearch(productQuery);
+    else if (batchQuery) setSearch(batchQuery);
+  }, [productQuery, batchQuery]);
+
+  useEffect(() => {
+    if (batchQuery) setBatchFilter(batchQuery);
+    if (productQuery) setProductFilter(productQuery);
+  }, [batchQuery, productQuery]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -127,6 +231,8 @@ export function RawMaterialMonitoringPage() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return records.filter((r) => {
+      if (productFilter !== 'all' && r.productName !== productFilter && r.productCode !== productFilter) return false;
+      if (batchFilter !== 'all' && r.batchNumber !== batchFilter) return false;
       if (typeFilter !== 'all' && r.materialType !== typeFilter) return false;
       if (qcFilter !== 'all' && r.qcStatus !== qcFilter) return false;
       if (complianceFilter !== 'all' && r.complianceStatus !== complianceFilter) return false;
@@ -134,16 +240,50 @@ export function RawMaterialMonitoringPage() {
       if (!q) return true;
       return r.productName.toLowerCase().includes(q) || r.batchNumber.toLowerCase().includes(q)
         || r.materialName.toLowerCase().includes(q) || r.vendorName.toLowerCase().includes(q)
-        || r.arNumber.toLowerCase().includes(q) || r.grnNumber.toLowerCase().includes(q);
+        || r.arNumber.toLowerCase().includes(q) || r.grnNumber.toLowerCase().includes(q)
+        || r.productCode.toLowerCase().includes(q);
     });
-  }, [records, search, typeFilter, qcFilter, complianceFilter, riskFilter]);
+  }, [records, search, productFilter, batchFilter, typeFilter, qcFilter, complianceFilter, riskFilter]);
+
+  const clearFilters = () => {
+    setSearch('');
+    setProductFilter('all');
+    setBatchFilter('all');
+    setTypeFilter('all');
+    setQcFilter('all');
+    setComplianceFilter('all');
+    setRiskFilter('all');
+  };
 
   const summary = useMemo(() => summarizeRawMaterialRecords(records), [records]);
   const charts = useMemo(() => buildRawMaterialChartSeries(filtered), [filtered]);
+  const productNames = useMemo(() => Array.from(new Set(records.map((r) => r.productName))), [records]);
+  const batchNumbers = useMemo(() => Array.from(new Set(records.map((r) => r.batchNumber))), [records]);
   const filteredMaterials = useMemo(() => {
     if (!form.materialType || !FORM_CATEGORY_OPTIONS.some((o) => o.value === form.materialType)) return materials;
     return materials.filter((m) => mapMaterialType(m.materialType) === form.materialType);
   }, [materials, form.materialType]);
+
+  const crossLinks = useMemo(() => [
+    ...(productQuery
+      ? [{ href: `/cpv/product-master?search=${encodeURIComponent(productQuery)}`, label: 'Product Master' }]
+      : [{ href: '/cpv/product-master', label: 'Product Master' }]),
+    ...(batchQuery
+      ? [{ href: `/cpv/batch-registration?search=${encodeURIComponent(batchQuery)}`, label: 'Batch Master' }]
+      : [{ href: '/cpv/batch-registration', label: 'Batch Master' }]),
+    { href: batchQuery ? `/cpv/cpp?batch=${encodeURIComponent(batchQuery)}` : productQuery ? `/cpv/cpp?product=${encodeURIComponent(productQuery)}` : '/cpv/cpp', label: 'CPP' },
+    { href: batchQuery ? `/cpv/cqa?batch=${encodeURIComponent(batchQuery)}` : productQuery ? `/cpv/cqa?product=${encodeURIComponent(productQuery)}` : '/cpv/cqa', label: 'CQA' },
+    { href: '/qms/deviation', label: 'Deviation' },
+    { href: '/qms/capa', label: 'CAPA' },
+    { href: '/admin/audit-trail', label: 'Audit Trail' },
+    { href: '/cpv/reports-analytics', label: 'Reports' },
+  ], [productQuery, batchQuery]);
+
+  const resolveProductIdFromQuery = useCallback(() => {
+    if (!productQuery) return '';
+    const match = products.find((p) => p.productCode === productQuery || p.productName === productQuery);
+    return match?.id || '';
+  }, [productQuery, products]);
 
   const onProductChange = async (productId: string) => {
     setFormProductId(productId);
@@ -152,6 +292,9 @@ export function RawMaterialMonitoringPage() {
     setForm((f) => ({ ...f, cpvProductId: productId, productName: p.productName, productCode: p.productCode }));
     const batches = await fetchRmBatchesForProduct(p.productName);
     setFormBatches(batches);
+    if (batchQuery && batches.some((b) => b.batchNumber === batchQuery)) {
+      setForm((f) => ({ ...f, batchNumber: batchQuery }));
+    }
   };
 
   const onMaterialChange = (materialId: string) => {
@@ -175,7 +318,7 @@ export function RawMaterialMonitoringPage() {
     if (!v) return;
     setForm((f) => ({
       ...f,
-      vendorId: vendorId,
+      vendorId,
       vendorName: v.vendor_name,
       vendorStatus: v.vendor_status === 'Active' ? 'Active' : v.vendor_status,
       avlStatus: v.approval_status,
@@ -197,37 +340,172 @@ export function RawMaterialMonitoringPage() {
       unit: 'kg',
       vendorStatus: 'Active',
       avlStatus: 'Approved',
+      changeReason: '',
     });
+    const preselectId = resolveProductIdFromQuery();
+    if (preselectId) void onProductChange(preselectId);
+    else {
+      setFormProductId('');
+      setFormBatches([]);
+    }
     setFormOpen(true);
   };
 
-  const saveForm = async (qaOverride = false) => {
-    if (!form.cpvProductId || !form.batchNumber || !form.materialName || !form.arNumber) {
-      toast.error('Complete required fields');
+  const parseFormData = (): RawMaterialSaveData | null => {
+    const parsed = rawMaterialMonitoringFormSchema.safeParse(form);
+    if (!parsed.success) {
+      toast.error(parsed.error.issues[0]?.message || 'Validation failed');
+      return null;
+    }
+    const reasonParsed = rawMaterialSaveSchema.safeParse({ changeReason: form.changeReason || '' });
+    if (!reasonParsed.success) {
+      toast.error(reasonParsed.error.issues[0]?.message || 'Change reason required');
+      return null;
+    }
+    return { ...parsed.data, changeReason: reasonParsed.data.changeReason };
+  };
+
+  const saveForm = async () => {
+    const data = parseFormData();
+    if (!data) return;
+
+    const needsQaOverride = Boolean(
+      (vendorWarning || (editing?.isLocked && editing.reviewStatus === 'Approved')) && canQaOverride,
+    );
+    if (needsQaOverride) {
+      setEsignAction('qa-override');
+      setEsignOpen(true);
       return;
     }
+
+    if (vendorWarning) {
+      toast.error('Vendor/AVL not approved — QA override required.');
+      return;
+    }
+
     setSubmitting(true);
-    const data = form as RawMaterialMonitoringFormData;
+    const payload = data as RawMaterialMonitoringFormData & { changeReason: string };
     if (editing) {
-      const { error: err } = await updateRawMaterialRecord(editing.id, data, actor, editing, editing.attachments, qaOverride || (editing.isLocked && canQaOverride));
+      const { error: err } = await updateRawMaterialRecord(
+        editing.id,
+        payload,
+        actor,
+        editing,
+        editing.attachments,
+        false,
+      );
       if (err) toast.error(err);
       else { toast.success('Record updated'); setFormOpen(false); await load(); }
     } else {
-      const { error: err } = await createRawMaterialRecord(data, actor, [], qaOverride);
+      const { error: err } = await createRawMaterialRecord(payload, actor);
       if (err) toast.error(err);
       else { toast.success('Record created'); setFormOpen(false); await load(); }
     }
     setSubmitting(false);
   };
 
+  const applyQaOverride = async () => {
+    const data = parseFormData();
+    if (!data) return;
+    setSubmitting(true);
+    const payload = data as RawMaterialMonitoringFormData & { changeReason: string };
+    if (editing) {
+      const { error: err } = await updateRawMaterialRecord(
+        editing.id,
+        payload,
+        actor,
+        editing,
+        editing.attachments,
+        true,
+        { esignConfirmed: true },
+      );
+      if (err) toast.error(err);
+      else {
+        toast.success('Record updated (QA override)');
+        setFormOpen(false);
+        await load();
+      }
+    } else {
+      const { error: err } = await createRawMaterialRecord(
+        payload,
+        actor,
+        [],
+        true,
+        { esignConfirmed: true },
+      );
+      if (err) toast.error(err);
+      else {
+        toast.success('Record created (QA override)');
+        setFormOpen(false);
+        await load();
+      }
+    }
+    setSubmitting(false);
+    setEsignOpen(false);
+  };
+
+  const confirmApprove = () => {
+    if (!approveTarget) return;
+    if (actionReason.trim().length < 5) {
+      toast.error('Change reason must be at least 5 characters');
+      return;
+    }
+    setEsignAction('approve');
+    setEsignOpen(true);
+  };
+
+  const applyApprove = async () => {
+    if (!approveTarget) return;
+    setSubmitting(true);
+    const { error: err } = await callApprove(approveTarget.id, actor, actionReason, { esignConfirmed: true });
+    setSubmitting(false);
+    setEsignOpen(false);
+    setApproveTarget(null);
+    setActionReason('');
+    if (err) toast.error(err);
+    else {
+      toast.success('Record approved');
+      await load();
+    }
+  };
+
+  const confirmDelete = () => {
+    if (!deleteTarget) return;
+    if (actionReason.trim().length < 5) {
+      toast.error('Change reason must be at least 5 characters');
+      return;
+    }
+    setEsignAction('delete');
+    setEsignOpen(true);
+  };
+
+  const applyDelete = async () => {
+    if (!deleteTarget) return;
+    setSubmitting(true);
+    const { error: err } = await callSoftDelete(deleteTarget.id, actor, actionReason, { esignConfirmed: true });
+    setSubmitting(false);
+    setEsignOpen(false);
+    setDeleteTarget(null);
+    setActionReason('');
+    if (err) toast.error(err);
+    else {
+      toast.success('Record soft-deleted');
+      await load();
+    }
+  };
+
   const saveWarehouseImport = async () => {
     const p = products.find((x) => x.id === formProductId);
     const batch = formBatches.find((b) => b.id === bulkBatchId);
     if (!p || !batch || !warehouseReceiptId) { toast.error('Select product, batch and receipt'); return; }
+    if (warehouseReason.trim().length < 5) {
+      toast.error('Change reason must be at least 5 characters');
+      return;
+    }
     setSubmitting(true);
     const { error: err } = await importFromWarehouseReceipt(
       warehouseReceiptId, p.id, p.productName, p.productCode, batch.batchNumber,
-      Number(warehouseUsedQty) || 0, actor,
+      Number(warehouseUsedQty) || 0, actor, warehouseReason,
     );
     setSubmitting(false);
     if (err) toast.error(err);
@@ -238,6 +516,10 @@ export function RawMaterialMonitoringPage() {
     const p = products.find((x) => x.id === bulkProductId);
     const batch = formBatches.find((b) => b.id === bulkBatchId);
     if (!p || !batch) { toast.error('Select product and batch'); return; }
+    if (bulkReason.trim().length < 5) {
+      toast.error('Bulk change reason must be at least 5 characters');
+      return;
+    }
     const rows: RawMaterialMonitoringFormData[] = bulkRows.filter((r) => r.used).map((row) => ({
       cpvProductId: bulkProductId,
       productName: p.productName,
@@ -246,36 +528,57 @@ export function RawMaterialMonitoringPage() {
       materialCode: row.material.materialCode,
       materialName: row.material.materialName,
       materialType: mapMaterialType(row.material.materialType),
-      materialGrade: row.material.grade,
+      materialGrade: row.material.grade || '',
+      materialCategory: mapMaterialType(row.material.materialType),
       manufacturerName: row.material.materialName,
       supplierName: row.material.materialName,
       vendorId: '',
       vendorName: 'To be assigned',
       vendorStatus: 'Active',
       avlStatus: 'Approved',
+      vendorCode: '',
+      pharmacopoeiaStandard: '',
       grnNumber: '',
+      purchaseOrderNumber: '',
       arNumber: `AR-${Date.now()}-${row.material.materialCode}`,
       coaNumber: '',
       materialLotNumber: '',
+      supplierBatchNumber: '',
       mfgDate: new Date().toISOString().split('T')[0],
       expDate: new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0],
       retestDate: '',
+      shelfLifeMonths: '',
       receivedQuantity: 0,
+      acceptedQuantity: 0,
+      rejectedQuantity: 0,
+      quarantineQuantity: 0,
       issuedQuantity: Number(row.used),
       usedQuantity: Number(row.used),
       unit: 'kg',
-      storageCondition: row.material.storageCondition,
+      storageCondition: row.material.storageCondition || '',
+      warehouseLocation: '',
+      storageArea: '',
+      site: '',
+      department: 'Warehouse',
+      shift: '',
       qcStatus: 'Under Test',
+      qaStatus: '',
+      releaseStatus: '',
+      samplingStatus: '',
       coaAvailable: 'No',
-      specificationNumber: row.material.specificationNo,
+      specificationNumber: row.material.specificationNo || '',
+      specificationVersion: '',
       stpNumber: '',
       testParameter: '',
       testUnit: '',
       testResultSummary: '',
-      remarks: row.remarks,
+      remarks: row.remarks || '',
+      effectiveDate: '',
+      version: '1.0',
+      changeReason: bulkReason,
     }));
     setSubmitting(true);
-    const { created, errors } = await bulkCreateRawMaterialRecords(rows, actor);
+    const { created, errors } = await bulkCreateRawMaterialRecords(rows, actor, bulkReason);
     setSubmitting(false);
     if (errors.length) toast.error(errors[0]);
     toast.success(`${created} records saved`);
@@ -292,9 +595,22 @@ export function RawMaterialMonitoringPage() {
     { key: 'complianceStatus', header: 'Compliance', render: (r) => <StatusBadge status={r.complianceStatus} /> },
     { key: 'riskLevel', header: 'Risk', render: (r) => <RiskBadge level={r.riskLevel} /> },
     { key: 'avlStatus', header: 'AVL', render: (r) => <AvlBadge status={r.avlStatus} /> },
+    { key: 'reviewStatus', header: 'Review' },
   ];
 
   const vendorWarning = form.avlStatus && !['Approved', 'Conditional Approved', 'Conditionally Approved'].includes(form.avlStatus);
+
+  const esignRecordId = esignAction === 'qa-override'
+    ? (editing?.id || 'raw-material')
+    : esignAction === 'delete'
+      ? (deleteTarget?.id || 'raw-material')
+      : (approveTarget?.id || 'raw-material');
+
+  const esignDocNo = esignAction === 'qa-override'
+    ? editing?.rawMaterialMonitoringId
+    : esignAction === 'delete'
+      ? deleteTarget?.rawMaterialMonitoringId
+      : approveTarget?.rawMaterialMonitoringId;
 
   if (loading) return <div className="p-4 sm:p-6"><LoadingSkeleton rows={2} /></div>;
   if (error) return <div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={load} /></div>;
@@ -304,36 +620,66 @@ export function RawMaterialMonitoringPage() {
       <CpvPageHeader
         title="Raw Material Monitoring"
         description="Monitor API and raw material quality, vendor compliance and batch-wise usage for CPV"
-        trail={[{ label: 'Continued Process Verification', href: '/cpv/dashboard' }, { label: 'Raw Material Monitoring' }]}
+        trail={[
+          { label: 'Dashboard', href: '/dashboard' },
+          { label: 'Continued Process Verification', href: '/cpv/dashboard' },
+          { label: 'Raw Material Monitoring' },
+        ]}
         actions={
           <>
             {canImportExport && (
-              <Button variant="outline" size="sm" onClick={() => toast.info('Excel import placeholder — upload template coming soon')}>Import Excel</Button>
+              <Button variant="outline" size="sm" className="gap-2 no-print" onClick={async () => {
+                const { headers, rows } = buildRawMaterialExportRows(filtered);
+                downloadCsv(`raw-materials-${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+                await callLogExport(filtered.length, actor);
+                toast.success(`Exported ${filtered.length} raw material records`);
+              }}>
+                <Download className="h-4 w-4" />Export
+              </Button>
             )}
+            <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => printPage()}>
+              <Printer className="h-4 w-4" />Print
+            </Button>
             {canCreate && (
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => { setWarehouseOpen(true); if (products[0]) void onProductChange(products[0].id); }}>
+              <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => {
+                setWarehouseOpen(true);
+                const preselectId = resolveProductIdFromQuery() || products[0]?.id;
+                if (preselectId) void onProductChange(preselectId);
+              }}>
                 <Warehouse className="h-4 w-4" />From Warehouse
               </Button>
             )}
-            {canImportExport && (
-              <Button variant="outline" size="sm" className="gap-2" onClick={async () => {
-                downloadCsv(`raw-materials-${Date.now()}.csv`, ['Batch', 'Material', 'AR', 'Compliance', 'Risk'],
-                  filtered.map((r) => [r.batchNumber, r.materialName, r.arNumber, r.complianceStatus, r.riskLevel]));
-                await logRawMaterialExport(actor, filtered.length);
-                toast.success('Export CSV generated');
-              }}><Download className="h-4 w-4" />Export</Button>
-            )}
             {canCreate && !isReadOnly && (
               <>
-                <Button variant="outline" size="sm" className="gap-2" onClick={() => { if (products[0]) { setBulkProductId(products[0].id); void onProductChange(products[0].id); setBulkRows(materials.slice(0, 5).map((m) => ({ material: m, used: '', remarks: '' }))); setBulkOpen(true); } }}>
+                <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => {
+                  const preselectId = resolveProductIdFromQuery() || products[0]?.id;
+                  if (preselectId) {
+                    setBulkProductId(preselectId);
+                    void onProductChange(preselectId);
+                    setBulkRows(materials.slice(0, 5).map((m) => ({ material: m, used: '', remarks: '' })));
+                    setBulkOpen(true);
+                  }
+                }}>
                   <Layers className="h-4 w-4" />Bulk Entry
                 </Button>
-                <Button size="sm" className="gap-2" onClick={openCreate}><Plus className="h-4 w-4" />New Record</Button>
+                <Button size="sm" className="gap-2 no-print" onClick={openCreate}><Plus className="h-4 w-4" />New Record</Button>
               </>
             )}
           </>
         }
       />
+
+      <div className="no-print flex flex-wrap gap-1.5">
+        {crossLinks.map((l) => (
+          <Link
+            key={l.href + l.label}
+            href={l.href}
+            className="rounded-md border px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900"
+          >
+            {l.label}
+          </Link>
+        ))}
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-9">
         <KpiCard label="Total Lots" value={summary.total} tone="blue" />
@@ -408,14 +754,21 @@ export function RawMaterialMonitoringPage() {
 
       <Card>
         <CardContent className="p-4 space-y-4">
-          <div className="grid gap-3 lg:grid-cols-5">
+          <div className="grid gap-3 lg:grid-cols-8">
             <Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="lg:col-span-2" />
+            <Select value={productFilter} onValueChange={setProductFilter}><SelectTrigger><SelectValue placeholder="Product" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All Products</SelectItem>{productNames.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent></Select>
+            <Select value={batchFilter} onValueChange={setBatchFilter}><SelectTrigger><SelectValue placeholder="Batch" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All Batches</SelectItem>{batchNumbers.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent></Select>
             <Select value={typeFilter} onValueChange={setTypeFilter}><SelectTrigger><SelectValue placeholder="Type" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All Types</SelectItem>{RM_MATERIAL_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent></Select>
             <Select value={qcFilter} onValueChange={setQcFilter}><SelectTrigger><SelectValue placeholder="QC" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All QC</SelectItem>{RM_QC_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
             <Select value={complianceFilter} onValueChange={setComplianceFilter}><SelectTrigger><SelectValue placeholder="Compliance" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All</SelectItem>{RM_COMPLIANCE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
+            <Select value={riskFilter} onValueChange={setRiskFilter}><SelectTrigger><SelectValue placeholder="Risk" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All Risk</SelectItem>{['Low', 'Medium', 'High', 'Critical'].map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent></Select>
+            <Button variant="outline" size="sm" className="gap-1" onClick={clearFilters}><FilterX className="h-3.5 w-3.5" />Clear</Button>
           </div>
           {filtered.length === 0 ? <EmptyState title="No raw material records" /> : (
             <ResponsiveDataTable
@@ -427,13 +780,34 @@ export function RawMaterialMonitoringPage() {
                 <div className="flex gap-1">
                   <Button size="icon" variant="ghost" onClick={() => router.push(`/cpv/raw-material-monitoring/${row.id}`)}><Eye className="h-4 w-4" /></Button>
                   {canCreate && !isReadOnly && (!row.isLocked || canQaOverride) && (
-                    <Button size="icon" variant="ghost" onClick={() => { setEditing(row); setForm(row); setFormProductId(row.cpvProductId); void onProductChange(row.cpvProductId); setFormOpen(true); }}><Pencil className="h-4 w-4" /></Button>
+                    <Button size="icon" variant="ghost" onClick={() => {
+                      setEditing(row);
+                      setForm({ ...row, changeReason: '' });
+                      setFormProductId(row.cpvProductId);
+                      void onProductChange(row.cpvProductId);
+                      setFormOpen(true);
+                    }}><Pencil className="h-4 w-4" /></Button>
                   )}
                   {canReview && row.reviewStatus === 'Draft' && (
-                    <Button size="icon" variant="ghost" onClick={async () => { await reviewRawMaterialRecord(row.id, actor, row); await load(); }}><CheckCircle className="h-4 w-4" /></Button>
+                    <Button size="icon" variant="ghost" onClick={async () => {
+                      const { error: err } = await callReview(row.id, actor);
+                      if (err) toast.error(err);
+                      else { toast.success('Submitted for review'); await load(); }
+                    }}><CheckCircle className="h-4 w-4" /></Button>
                   )}
-                  {canReview && row.reviewStatus === 'Under Review' && (
-                    <Button size="sm" variant="outline" onClick={async () => { await approveRawMaterialRecord(row.id, actor, row); await load(); }}>Approve</Button>
+                  {canReview && (row.reviewStatus === 'Under Review' || row.reviewStatus === 'Draft') && (
+                    <Button size="sm" variant="outline" onClick={() => {
+                      setApproveTarget(row);
+                      setActionReason('');
+                      setEsignAction('approve');
+                    }}>Approve</Button>
+                  )}
+                  {canReview && !row.isDeleted && (
+                    <Button size="icon" variant="ghost" className="text-red-600" onClick={() => {
+                      setDeleteTarget(row);
+                      setActionReason('');
+                      setEsignAction('delete');
+                    }}><Trash2 className="h-4 w-4" /></Button>
                   )}
                 </div>
               )}
@@ -449,7 +823,12 @@ export function RawMaterialMonitoringPage() {
             {vendorWarning && (
               <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                 Vendor/AVL not approved. Save blocked unless QA override.
-                {canQaOverride && <Button variant="link" className="h-auto p-0 ml-2" onClick={() => void saveForm(true)}>QA Override</Button>}
+                {canQaOverride && (
+                  <Button variant="link" className="h-auto p-0 ml-2" onClick={() => {
+                    setEsignAction('qa-override');
+                    setEsignOpen(true);
+                  }}>QA Override</Button>
+                )}
               </div>
             )}
             {!editing && (
@@ -461,7 +840,7 @@ export function RawMaterialMonitoringPage() {
               </div>
             )}
             <div><Label>Batch *</Label>
-              <Select value={form.batchNumber || ''} onValueChange={(v) => setForm((f) => ({ ...f, batchNumber: v }))}>
+              <Select value={form.batchNumber || ''} onValueChange={(v) => setForm((f) => ({ ...f, batchNumber: v }))} disabled={Boolean(editing?.isLocked && !canQaOverride)}>
                 <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                 <SelectContent>{formBatches.map((b) => <SelectItem key={b.id} value={b.batchNumber}>{b.batchNumber}</SelectItem>)}</SelectContent>
               </Select>
@@ -488,6 +867,10 @@ export function RawMaterialMonitoringPage() {
                 <SelectContent>{filteredMaterials.map((m) => <SelectItem key={m.id} value={m.id || ''}>{m.materialName}</SelectItem>)}</SelectContent>
               </Select>
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>Material Grade</Label><Input className="mt-1" value={form.materialGrade || ''} onChange={(e) => setForm((f) => ({ ...f, materialGrade: e.target.value }))} /></div>
+              <div><Label>Storage Condition</Label><Input className="mt-1" value={form.storageCondition || ''} onChange={(e) => setForm((f) => ({ ...f, storageCondition: e.target.value }))} /></div>
+            </div>
             <div><Label>Vendor *</Label>
               <Select value={form.vendorId || ''} onValueChange={onVendorChange}>
                 <SelectTrigger className="mt-1"><SelectValue placeholder="Vendor" /></SelectTrigger>
@@ -496,9 +879,20 @@ export function RawMaterialMonitoringPage() {
               {form.avlStatus && <div className="mt-1"><AvlBadge status={form.avlStatus} /></div>}
             </div>
             <div className="grid grid-cols-2 gap-3">
+              <div><Label>Manufacturer</Label><Input className="mt-1" value={form.manufacturerName || ''} onChange={(e) => setForm((f) => ({ ...f, manufacturerName: e.target.value }))} /></div>
+              <div><Label>Supplier</Label><Input className="mt-1" value={form.supplierName || ''} onChange={(e) => setForm((f) => ({ ...f, supplierName: e.target.value }))} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>GRN Number</Label><Input className="mt-1" value={form.grnNumber || ''} onChange={(e) => setForm((f) => ({ ...f, grnNumber: e.target.value }))} /></div>
               <div><Label>AR Number *</Label><Input className="mt-1" value={form.arNumber || ''} onChange={(e) => setForm((f) => ({ ...f, arNumber: e.target.value }))} /></div>
+              <div><Label>COA Number</Label><Input className="mt-1" value={form.coaNumber || ''} onChange={(e) => setForm((f) => ({ ...f, coaNumber: e.target.value }))} /></div>
+              <div><Label>Material Lot</Label><Input className="mt-1" value={form.materialLotNumber || ''} onChange={(e) => setForm((f) => ({ ...f, materialLotNumber: e.target.value }))} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
               <div><Label>MFG Date *</Label><Input className="mt-1" type="month" value={(form.mfgDate || '').slice(0, 7)} onChange={(e) => setForm((f) => ({ ...f, mfgDate: e.target.value }))} /></div>
               <div><Label>EXP Date *</Label><Input className="mt-1" type="month" value={(form.expDate || '').slice(0, 7)} onChange={(e) => setForm((f) => ({ ...f, expDate: e.target.value }))} /></div>
+              <div><Label>Retest Date</Label><Input className="mt-1" type="month" value={(form.retestDate || '').slice(0, 7)} onChange={(e) => setForm((f) => ({ ...f, retestDate: e.target.value }))} /></div>
+              <div><Label>Received Qty</Label><Input className="mt-1" type="number" value={form.receivedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, receivedQuantity: Number(e.target.value) }))} /></div>
               <div><Label>Standard Qty</Label><Input className="mt-1" type="number" value={form.issuedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, issuedQuantity: Number(e.target.value) }))} /></div>
               <div><Label>Used Qty *</Label><Input className="mt-1" type="number" value={form.usedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, usedQuantity: Number(e.target.value) }))} /></div>
               <div><Label>Unit *</Label><Input className="mt-1" value={form.unit || ''} onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))} /></div>
@@ -515,8 +909,28 @@ export function RawMaterialMonitoringPage() {
                 </Select>
               </div>
             </div>
-            <div><Label>Test result summery</Label><Input className="mt-1" value={form.testResultSummary || ''} onChange={(e) => setForm((f) => ({ ...f, testResultSummary: e.target.value }))} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>Spec No</Label><Input className="mt-1" value={form.specificationNumber || ''} onChange={(e) => setForm((f) => ({ ...f, specificationNumber: e.target.value }))} /></div>
+              <div><Label>STP No</Label><Input className="mt-1" value={form.stpNumber || ''} onChange={(e) => setForm((f) => ({ ...f, stpNumber: e.target.value }))} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>Test Parameter</Label><Input className="mt-1" value={form.testParameter || ''} onChange={(e) => setForm((f) => ({ ...f, testParameter: e.target.value }))} /></div>
+              <div><Label>Test Unit</Label><Input className="mt-1" value={form.testUnit || ''} onChange={(e) => setForm((f) => ({ ...f, testUnit: e.target.value }))} /></div>
+              <div><Label>Observed Result</Label><Input className="mt-1" value={String(form.observedResult ?? '')} onChange={(e) => setForm((f) => ({ ...f, observedResult: e.target.value }))} /></div>
+              <div><Label>Lower Limit</Label><Input className="mt-1" type="number" value={form.lowerLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, lowerLimit: Number(e.target.value) }))} /></div>
+              <div><Label>Upper Limit</Label><Input className="mt-1" type="number" value={form.upperLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, upperLimit: Number(e.target.value) }))} /></div>
+            </div>
+            <div><Label>Test Result Summary</Label><Input className="mt-1" value={form.testResultSummary || ''} onChange={(e) => setForm((f) => ({ ...f, testResultSummary: e.target.value }))} /></div>
             <div><Label>Remarks</Label><Textarea className="mt-1" value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} /></div>
+            <div>
+              <Label>Change Reason * (ALCOA+ / Part 11)</Label>
+              <Textarea
+                className="mt-1"
+                placeholder="Describe why this create/update is being performed"
+                value={form.changeReason || ''}
+                onChange={(e) => setForm((f) => ({ ...f, changeReason: e.target.value }))}
+              />
+            </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button>
               <Button onClick={() => void saveForm()} disabled={submitting}>{submitting ? 'Saving...' : 'Save'}</Button>
@@ -548,6 +962,10 @@ export function RawMaterialMonitoringPage() {
               </Select>
             </div>
             <div><Label>Used Quantity</Label><Input className="mt-1" type="number" value={warehouseUsedQty} onChange={(e) => setWarehouseUsedQty(e.target.value)} /></div>
+            <div>
+              <Label>Change Reason *</Label>
+              <Input className="mt-1" value={warehouseReason} onChange={(e) => setWarehouseReason(e.target.value)} />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setWarehouseOpen(false)}>Cancel</Button>
@@ -590,19 +1008,67 @@ export function RawMaterialMonitoringPage() {
             </TableBody>
           </Table>
           <DialogFooter>
+            <div className="mr-auto w-full max-w-sm">
+              <Label className="text-xs">Change Reason *</Label>
+              <Input className="mt-1" value={bulkReason} onChange={(e) => setBulkReason(e.target.value)} placeholder="Bulk entry reason" />
+            </div>
             <Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button>
             <Button onClick={() => void saveBulk()} disabled={submitting}>Save All</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={Boolean(approveTarget) && !esignOpen} onOpenChange={(o) => { if (!o) setApproveTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve Raw Material Record</DialogTitle>
+            <DialogDescription>Electronic signature is required. Change reason is mandatory (ALCOA+ / Part 11).</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Change Reason *</Label>
+            <Textarea value={actionReason} onChange={(e) => setActionReason(e.target.value)} placeholder="Why is this record being approved?" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveTarget(null)}>Cancel</Button>
+            <Button disabled={submitting} onClick={() => void confirmApprove()}>Continue to E-Sign</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(deleteTarget) && !esignOpen} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Soft Delete Raw Material Record</DialogTitle>
+            <DialogDescription>Electronic signature is required. Change reason is mandatory (ALCOA+ / Part 11).</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Change Reason *</Label>
+            <Textarea value={actionReason} onChange={(e) => setActionReason(e.target.value)} placeholder="Why is this record being deleted?" />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={submitting} onClick={() => void confirmDelete()}>Continue to E-Sign</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ElectronicSignatureDialog
+        open={esignOpen}
+        onOpenChange={(v) => {
+          setEsignOpen(v);
+          if (!v) setSubmitting(false);
+        }}
+        moduleName="Raw Material Monitoring"
+        recordId={esignRecordId}
+        documentNumber={esignDocNo}
+        actionType={esignAction === 'qa-override' ? 'QA Override' : esignAction === 'delete' ? 'Soft Delete' : 'Approve'}
+        onSuccess={() => {
+          if (esignAction === 'qa-override') void applyQaOverride();
+          else if (esignAction === 'delete') void applyDelete();
+          else void applyApprove();
+        }}
+        onCancel={() => setEsignOpen(false)}
+      />
     </div>
   );
-}
-
-function mapMaterialType(t: string): RawMaterialMonitoringFormData['materialType'] {
-  const map: Record<string, RawMaterialMonitoringFormData['materialType']> = {
-    API: 'API', Excipient: 'Excipient', Preservative: 'Preservative', Solvent: 'Solvent',
-    Buffer: 'Buffer', 'pH Adjuster': 'pH Adjuster', 'Raw Material': 'Raw Material', Other: 'Other',
-  };
-  return map[t] || 'Other';
 }

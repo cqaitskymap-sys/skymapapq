@@ -9,7 +9,7 @@ import { cpvPermissions } from '@/lib/cpv';
 import { canAcknowledgeAlertSource } from '@/lib/cpv-alert-records';
 import {
   acknowledgeCpvAlert, assignCpvAlert, closeCpvAlert, escalateCpvAlert,
-  fetchAlertAuditTrail, fetchCpvAlertById, linkCpvAlert, rejectCpvAlert,
+  fetchAlertAuditTrail, fetchCpvAlertById, investigateCpvAlert, linkCpvAlert, rejectCpvAlert,
 } from '@/lib/cpv-alert-service';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { AlertTimeline } from './alert-timeline';
@@ -18,10 +18,11 @@ import { KpiCard } from '@/components/cpv/cpv-ui';
 import { ErrorCard } from '@/components/admin/dashboard/error-card';
 import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
@@ -33,6 +34,8 @@ export function AlertEngineDetailView({ id }: { id: string }) {
   const [audit, setAudit] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading] = useState(true);
   const [closureRemarks, setClosureRemarks] = useState('');
+  const [changeReason, setChangeReason] = useState('Alert workflow update');
+  const [esignConfirmed, setEsignConfirmed] = useState(false);
   const [capaLink, setCapaLink] = useState('');
   const [deviationLink, setDeviationLink] = useState('');
   const [assignTo, setAssignTo] = useState('');
@@ -77,11 +80,27 @@ export function AlertEngineDetailView({ id }: { id: string }) {
         }
       />
 
-      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
-        <KpiCard label="Priority" value={record.alertPriority} tone={record.alertPriority === 'Critical' ? 'red' : 'amber'} />
+      <div className="flex flex-wrap gap-2 text-xs">
+        {[
+          { href: '/cpv/alert-engine', label: 'Alert Dashboard' },
+          { href: '/qms/deviation', label: 'Deviation' },
+          { href: '/qms/capa', label: 'CAPA' },
+          { href: '/cpv/risk-assessment', label: 'Risk' },
+          { href: '/cpv/reports-analytics', label: 'Reports' },
+          { href: '/qms/audit-trail', label: 'Audit Trail' },
+        ].map((link) => (
+          <Button key={link.href} variant="ghost" size="sm" className="h-7 px-2" onClick={() => router.push(link.href)}>
+            {link.label}
+          </Button>
+        ))}
+      </div>
+
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
+        <KpiCard label="Priority" value={record.alertPriority} tone={['Critical', 'Emergency'].includes(record.alertPriority) ? 'red' : 'amber'} />
         <KpiCard label="Status" value={record.alertStatus} tone="blue" />
         <KpiCard label="Source" value={record.alertSource} />
-        <KpiCard label="Due Date" value={record.dueDate || '—'} />
+        <KpiCard label="SLA (h)" value={record.slaHours || '—'} />
+        <KpiCard label="AI Confidence" value={`${record.aiIntelligence?.aiConfidenceScore || 0}%`} tone="blue" />
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -94,6 +113,7 @@ export function AlertEngineDetailView({ id }: { id: string }) {
       <Tabs defaultValue="details">
         <TabsList>
           <TabsTrigger value="details">Details</TabsTrigger>
+          <TabsTrigger value="ai">AI Intelligence</TabsTrigger>
           <TabsTrigger value="timeline">Timeline</TabsTrigger>
           <TabsTrigger value="actions">Actions</TabsTrigger>
           <TabsTrigger value="audit">Audit</TabsTrigger>
@@ -104,11 +124,27 @@ export function AlertEngineDetailView({ id }: { id: string }) {
             <p><span className="text-muted-foreground">Product:</span> {record.productName}</p>
             <p><span className="text-muted-foreground">Batch:</span> {record.batchNumber || '—'}</p>
             <p><span className="text-muted-foreground">Parameter:</span> {record.parameterName || '—'}</p>
+            <p><span className="text-muted-foreground">Category:</span> {record.alertCategory || '—'}</p>
             <p><span className="text-muted-foreground">Observed:</span> {String(record.observedValue || '—')}</p>
             <p><span className="text-muted-foreground">Limit:</span> {String(record.limitValue || '—')}</p>
             <p><span className="text-muted-foreground">Detected:</span> {String(record.detectedDateTime).slice(0, 16)}</p>
+            <p><span className="text-muted-foreground">Channels:</span> {(record.deliveryChannels || []).join(', ') || 'In-App'}</p>
             <p className="sm:col-span-2">{record.alertMessage}</p>
           </CardContent></Card>
+        </TabsContent>
+
+        <TabsContent value="ai">
+          <Card>
+            <CardHeader><CardTitle className="text-sm">AI Alert Intelligence</CardTitle></CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <p><span className="text-muted-foreground">Root cause:</span> {record.aiIntelligence?.aiRootCauseSuggestion || '—'}</p>
+              <p><span className="text-muted-foreground">Recommended actions:</span> {record.aiIntelligence?.aiRecommendedActions || '—'}</p>
+              <p><span className="text-muted-foreground">Risk prediction:</span> {record.aiIntelligence?.riskPrediction || '—'}</p>
+              <p><span className="text-muted-foreground">Failure prediction:</span> {record.aiIntelligence?.failurePrediction || '—'}</p>
+              <p><span className="text-muted-foreground">Cluster:</span> {record.aiIntelligence?.aiClusterId || '—'}</p>
+              <p><span className="text-muted-foreground">Predictive:</span> {record.aiIntelligence?.isPredictive ? 'Yes' : 'No'}</p>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="timeline">
@@ -116,9 +152,15 @@ export function AlertEngineDetailView({ id }: { id: string }) {
         </TabsContent>
 
         <TabsContent value="actions" className="space-y-4">
+          {!isClosed && (
+            <div className="space-y-2">
+              <Label>Change Reason (ALCOA+) *</Label>
+              <Textarea value={changeReason} onChange={(e) => setChangeReason(e.target.value)} rows={2} />
+            </div>
+          )}
           {!isClosed && canAck && record.alertStatus === 'Open' && (
             <Button onClick={async () => {
-              const { error } = await acknowledgeCpvAlert(record.id, actor, record);
+              const { error } = await acknowledgeCpvAlert(record.id, actor, record, changeReason);
               if (error) return toast.error(error);
               toast.success('Acknowledged');
               await load();
@@ -128,7 +170,7 @@ export function AlertEngineDetailView({ id }: { id: string }) {
             <div className="grid gap-4 sm:grid-cols-2">
               <div><Label>Assign To</Label><Input className="mt-1" value={assignTo} onChange={(e) => setAssignTo(e.target.value)} />
                 <Button className="mt-2" size="sm" onClick={async () => {
-                  const { error } = await assignCpvAlert(record.id, assignTo, record.assignedRole || 'qa', actor, record);
+                  const { error } = await assignCpvAlert(record.id, assignTo, record.assignedRole || 'qa', actor, record, changeReason);
                   if (error) return toast.error(error);
                   toast.success('Assigned');
                   await load();
@@ -136,33 +178,54 @@ export function AlertEngineDetailView({ id }: { id: string }) {
               <div><Label>Link Deviation</Label><div className="mt-1 flex gap-2">
                 <Input value={deviationLink} onChange={(e) => setDeviationLink(e.target.value)} />
                 <Button size="sm" onClick={async () => {
-                  await linkCpvAlert(record.id, 'linkedDeviationNumber', deviationLink, actor, record);
+                  const { error } = await linkCpvAlert(record.id, 'linkedDeviationNumber', deviationLink, actor, record, changeReason);
+                  if (error) return toast.error(error);
                   toast.success('Linked');
                   await load();
                 }}>Link</Button></div></div>
               <div><Label>Link CAPA</Label><div className="mt-1 flex gap-2">
                 <Input value={capaLink} onChange={(e) => setCapaLink(e.target.value)} />
                 <Button size="sm" onClick={async () => {
-                  await linkCpvAlert(record.id, 'linkedCapaNumber', capaLink, actor, record);
+                  const { error } = await linkCpvAlert(record.id, 'linkedCapaNumber', capaLink, actor, record, changeReason);
+                  if (error) return toast.error(error);
                   toast.success('Linked');
                   await load();
                 }}>Link</Button></div></div>
+              <div>
+                <Button variant="outline" size="sm" onClick={async () => {
+                  const { error } = await investigateCpvAlert(record.id, record, changeReason);
+                  if (error) return toast.error(error);
+                  toast.success('Under investigation');
+                  await load();
+                }}>Start Investigation</Button>
+              </div>
               <div className="sm:col-span-2"><Label>Closure Remarks *</Label>
                 <Textarea className="mt-1" value={closureRemarks} onChange={(e) => setClosureRemarks(e.target.value)} rows={2} />
+                <div className="mt-3 flex items-center gap-2">
+                  <Checkbox id="esign" checked={esignConfirmed} onCheckedChange={(v) => setEsignConfirmed(v === true)} />
+                  <Label htmlFor="esign" className="text-sm font-normal">
+                    I confirm this electronic signature for close / reject / escalate (21 CFR Part 11)
+                  </Label>
+                </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Button onClick={async () => {
-                    const { error } = await closeCpvAlert(record.id, closureRemarks, actor, record);
+                    if (!esignConfirmed) return toast.error('Electronic signature required');
+                    const { error } = await closeCpvAlert(record.id, closureRemarks, actor, record, { changeReason, esignConfirmed });
                     if (error) return toast.error(error);
                     toast.success('Closed');
                     await load();
                   }}>Close Alert</Button>
                   <Button variant="outline" onClick={async () => {
-                    await escalateCpvAlert(record.id, actor, record);
+                    if (!esignConfirmed) return toast.error('Electronic signature required');
+                    const { error } = await escalateCpvAlert(record.id, actor, record, 'head_qa', { changeReason, esignConfirmed });
+                    if (error) return toast.error(error);
                     toast.success('Escalated');
                     await load();
                   }}>Escalate</Button>
                   <Button variant="destructive" onClick={async () => {
-                    await rejectCpvAlert(record.id, closureRemarks || 'Rejected', actor, record);
+                    if (!esignConfirmed) return toast.error('Electronic signature required');
+                    const { error } = await rejectCpvAlert(record.id, closureRemarks || 'Rejected', actor, record, { changeReason, esignConfirmed });
+                    if (error) return toast.error(error);
                     toast.success('Rejected');
                     await load();
                   }}>Reject</Button>
@@ -175,12 +238,13 @@ export function AlertEngineDetailView({ id }: { id: string }) {
           <Card><CardContent className="pt-6">
             {audit.length ? (
               <Table>
-                <TableHeader><TableRow><TableHead>Action</TableHead><TableHead>User</TableHead><TableHead>When</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Action</TableHead><TableHead>User</TableHead><TableHead>Reason</TableHead><TableHead>When</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {audit.map((row) => (
                     <TableRow key={String(row.id)}>
                       <TableCell>{String(row.action || row.actionType || '')}</TableCell>
                       <TableCell>{String(row.userName || row.userId || '')}</TableCell>
+                      <TableCell>{String(row.reason || '—')}</TableCell>
                       <TableCell>{String(row.createdAt || row.timestamp || '')}</TableCell>
                     </TableRow>
                   ))}

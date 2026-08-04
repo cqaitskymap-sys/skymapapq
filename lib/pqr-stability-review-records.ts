@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeRole } from '@/lib/permissions';
 import {
   DEFAULT_STABILITY_LIMITS,
   DEFAULT_STABILITY_PARAMETERS,
@@ -14,6 +15,7 @@ export const PQR_STABILITY_REVIEW_MODULE = 'PQR Stability Review';
 
 export const PQR_STABILITY_REVIEW_COLLECTIONS = {
   review: 'pqr_stability_review',
+  batchReview: 'pqr_batch_review',
   sections: 'pqr_sections',
   records: 'pqr_records',
   stabilityMonitoring: 'stability_monitoring',
@@ -23,6 +25,7 @@ export const PQR_STABILITY_REVIEW_COLLECTIONS = {
   oosRecords: 'oos_records',
   deviations: 'deviations',
   capaRecords: 'capa_records',
+  changeControls: 'change_controls',
 } as const;
 
 export const PQR_STABILITY_RESULT_STATUSES = [
@@ -64,6 +67,8 @@ export interface PqrStabilityReviewRecord {
   ootCount: number;
   oosCount: number;
   capaCount: number;
+  deviationCount?: number;
+  changeControlCount?: number;
   complianceStatus: PqrStabilityComplianceStatus | string;
   complianceReasons: string[];
   riskLevel: string;
@@ -71,6 +76,9 @@ export interface PqrStabilityReviewRecord {
   impactOnProductQuality: string;
   conclusion: string;
   remarks: string;
+  chamberId?: string;
+  protocolNumber?: string;
+  specificationVersion?: string;
   sourceType?: 'manual' | 'pull';
   sourceIds?: string[];
   attachmentUrls?: string[];
@@ -264,17 +272,26 @@ function computeStabilityRisk(
   return riskFromEval || 'Low';
 }
 
+/** A stability "study" is uniquely identified by its study number, else by batch+type+storage. */
+function studyKeyOf(r: PqrStabilityReviewRecord): string {
+  const num = (r.studyNumber || '').trim();
+  if (num) return `sn:${num.toLowerCase()}`;
+  return `bts:${r.batchNumber}|${r.studyType}|${r.storageCondition}`.toLowerCase();
+}
+
 export function computeStabilityReviewSummary(records: PqrStabilityReviewRecord[]): PqrStabilityReviewSummary {
   const active = records.filter((r) => !r.isDeleted);
-  const studySet = new Set(active.map((r) => r.studyNumber || `${r.batchNumber}-${r.studyType}`).filter(Boolean));
+  const studySet = new Set(active.map(studyKeyOf));
   const batchSet = new Set(active.map((r) => r.batchNumber).filter(Boolean));
+  const uniqueStudiesOfType = (type: string) =>
+    new Set(active.filter((r) => r.studyType === type).map(studyKeyOf)).size;
 
   return {
     totalStabilityStudies: studySet.size,
     totalStabilityBatches: batchSet.size,
-    longTermStudies: active.filter((r) => r.studyType === 'Long Term').length,
-    acceleratedStudies: active.filter((r) => r.studyType === 'Accelerated').length,
-    intermediateStudies: active.filter((r) => r.studyType === 'Intermediate').length,
+    longTermStudies: uniqueStudiesOfType('Long Term'),
+    acceleratedStudies: uniqueStudiesOfType('Accelerated'),
+    intermediateStudies: uniqueStudiesOfType('Intermediate'),
     samplesDue: active.filter((r) => {
       const ps = (r.samplePullStatus || '').toLowerCase();
       return ps === 'pending' || ps === 'due soon' || (r.samplePullingDueDate && !r.actualPullingDate);
@@ -401,33 +418,62 @@ export function buildStabilityReviewCharts(records: PqrStabilityReviewRecord[]):
   };
 }
 
+const VIEW_ROLES = new Set([
+  'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive',
+  'qc_manager', 'qc_executive', 'warehouse_manager',
+  'production_manager', 'production_executive', 'auditor', 'viewer',
+]);
+
+const MANAGE_ROLES = new Set([
+  'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive',
+]);
+
+const PULL_ROLES = new Set([
+  ...Array.from(MANAGE_ROLES), 'warehouse_manager',
+]);
+
+const ADD_ROLES = new Set([
+  ...Array.from(MANAGE_ROLES), 'qc_manager', 'warehouse_manager',
+]);
+
+const UPDATE_TEST_ROLES = new Set([
+  'super_admin', 'admin', 'head_qa', 'qa_manager', 'qc_manager', 'qc_executive',
+]);
+
+const UPDATE_PULL_ROLES = new Set([
+  'super_admin', 'admin', 'warehouse_manager', 'qa_manager',
+]);
+
+const EXPORT_ROLES = new Set([
+  'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive', 'auditor',
+]);
+
 export function canViewStabilityReview(role?: string): boolean {
-  return [
-    'super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'qa_executive',
-    'qc', 'qc_manager', 'qc_executive', 'warehouse', 'warehouse_manager',
-    'production', 'production_manager', 'production_executive',
-    'auditor', 'viewer',
-  ].includes(role || '');
+  return VIEW_ROLES.has(normalizeRole(role));
 }
 
 export function canManageStabilityReview(role?: string): boolean {
-  return ['super_admin', 'admin'].includes(role || '');
+  return MANAGE_ROLES.has(normalizeRole(role));
+}
+
+export function canAddStabilityReview(role?: string): boolean {
+  return ADD_ROLES.has(normalizeRole(role));
 }
 
 export function canPullStabilityReview(role?: string): boolean {
-  return ['super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'qa_executive'].includes(role || '');
+  return PULL_ROLES.has(normalizeRole(role));
 }
 
 export function canUpdateStabilityTestData(role?: string): boolean {
-  return ['super_admin', 'admin', 'qc', 'qc_manager', 'qc_executive'].includes(role || '');
+  return UPDATE_TEST_ROLES.has(normalizeRole(role));
 }
 
 export function canUpdateSamplePulling(role?: string): boolean {
-  return ['super_admin', 'admin', 'warehouse', 'warehouse_manager'].includes(role || '');
+  return UPDATE_PULL_ROLES.has(normalizeRole(role));
 }
 
 export function canExportStabilityReview(role?: string): boolean {
-  return ['super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'auditor'].includes(role || '');
+  return EXPORT_ROLES.has(normalizeRole(role));
 }
 
 export function resultStatusColor(status: string): string {
@@ -459,4 +505,127 @@ export function intervalBadgeColor(): string {
   return 'bg-slate-50 text-slate-700 border-slate-200';
 }
 
-export { DEFAULT_STABILITY_PARAMETERS, STABILITY_PULLING_INTERVALS, STABILITY_STORAGE_CONDITIONS, STABILITY_STUDY_TYPES };
+export interface PqrStabilityReviewFilters {
+  studyType?: string;
+  storageCondition?: string;
+  pullingInterval?: string;
+  resultStatus?: string;
+  complianceStatus?: string;
+  riskLevel?: string;
+  parameter?: string;
+  batch?: string;
+  search?: string;
+}
+
+const S = (v: unknown, fb = ''): string => (v === null || v === undefined ? fb : String(v));
+const N = (v: unknown, fb = 0): number => { const n = Number(v); return Number.isFinite(n) ? n : fb; };
+
+function normalizeObserved(v: unknown): string | number {
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  const n = Number(v);
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(n)) return n;
+  return String(v);
+}
+
+export function normalizeStabilityReviewRecord(raw: Record<string, unknown>): PqrStabilityReviewRecord {
+  const partial: Partial<PqrStabilityReviewRecord> = {
+    parameterName: S(raw.parameterName),
+    resultStatus: S(raw.resultStatus, 'Complies'),
+    samplePullStatus: S(raw.samplePullStatus, 'Pending'),
+    ootCount: N(raw.ootCount),
+    oosCount: N(raw.oosCount),
+    capaCount: N(raw.capaCount),
+    impactOnShelfLife: S(raw.impactOnShelfLife, 'No'),
+    impactOnProductQuality: S(raw.impactOnProductQuality, 'No'),
+    remarks: S(raw.remarks),
+  };
+  const hasComputed = raw.complianceStatus && Array.isArray(raw.complianceReasons) && raw.riskLevel;
+  const computed = hasComputed
+    ? {
+      complianceStatus: S(raw.complianceStatus) as PqrStabilityComplianceStatus,
+      complianceReasons: raw.complianceReasons as string[],
+      riskLevel: S(raw.riskLevel, 'Low'),
+    }
+    : computeStabilityCompliance(partial);
+
+  return {
+    id: S(raw.id) || undefined,
+    stabilityReviewId: S(raw.stabilityReviewId, `STAB-REV-${S(raw.id, 'X')}`),
+    pqrId: S(raw.pqrId),
+    pqrNumber: S(raw.pqrNumber),
+    product: S(raw.product || raw.productName),
+    productCode: S(raw.productCode),
+    batchNumber: S(raw.batchNumber),
+    studyNumber: S(raw.studyNumber),
+    studyType: S(raw.studyType),
+    storageCondition: S(raw.storageCondition),
+    pullingInterval: S(raw.pullingInterval),
+    samplePullingDueDate: S(raw.samplePullingDueDate).slice(0, 10),
+    actualPullingDate: S(raw.actualPullingDate).slice(0, 10),
+    testDate: S(raw.testDate).slice(0, 10),
+    studyStartDate: S(raw.studyStartDate).slice(0, 10),
+    parameterName: S(raw.parameterName),
+    observedResult: normalizeObserved(raw.observedResult),
+    lowerLimit: N(raw.lowerLimit),
+    upperLimit: N(raw.upperLimit),
+    unit: S(raw.unit),
+    resultStatus: S(raw.resultStatus, 'Complies'),
+    samplePullStatus: S(raw.samplePullStatus, 'Pending'),
+    ootCount: N(raw.ootCount),
+    oosCount: N(raw.oosCount),
+    capaCount: N(raw.capaCount),
+    deviationCount: N(raw.deviationCount),
+    changeControlCount: N(raw.changeControlCount),
+    complianceStatus: computed.complianceStatus,
+    complianceReasons: computed.complianceReasons,
+    riskLevel: computed.riskLevel,
+    impactOnShelfLife: S(raw.impactOnShelfLife, 'No'),
+    impactOnProductQuality: S(raw.impactOnProductQuality, 'No'),
+    conclusion: S(raw.conclusion),
+    remarks: S(raw.remarks),
+    chamberId: S(raw.chamberId) || undefined,
+    protocolNumber: S(raw.protocolNumber) || undefined,
+    specificationVersion: S(raw.specificationVersion) || undefined,
+    sourceType: (raw.sourceType as PqrStabilityReviewRecord['sourceType']) || 'manual',
+    sourceIds: Array.isArray(raw.sourceIds) ? (raw.sourceIds as unknown[]).map((s) => String(s)) : [],
+    attachmentUrls: Array.isArray(raw.attachmentUrls) ? raw.attachmentUrls as string[] : [],
+    createdAt: S(raw.createdAt),
+    updatedAt: S(raw.updatedAt),
+    createdBy: S(raw.createdBy),
+    updatedBy: S(raw.updatedBy),
+    createdByName: S(raw.createdByName),
+    updatedByName: S(raw.updatedByName),
+    isDeleted: Boolean(raw.isDeleted),
+  };
+}
+
+export function filterStabilityReviewRecords(
+  records: PqrStabilityReviewRecord[],
+  filters: PqrStabilityReviewFilters,
+): PqrStabilityReviewRecord[] {
+  const search = (filters.search || '').trim().toLowerCase();
+  return records.filter((r) => {
+    if (r.isDeleted) return false;
+    if (filters.studyType && filters.studyType !== 'all' && r.studyType !== filters.studyType) return false;
+    if (filters.storageCondition && filters.storageCondition !== 'all' && r.storageCondition !== filters.storageCondition) return false;
+    if (filters.pullingInterval && filters.pullingInterval !== 'all' && r.pullingInterval !== filters.pullingInterval) return false;
+    if (filters.resultStatus && filters.resultStatus !== 'all' && r.resultStatus !== filters.resultStatus) return false;
+    if (filters.complianceStatus && filters.complianceStatus !== 'all' && r.complianceStatus !== filters.complianceStatus) return false;
+    if (filters.riskLevel && filters.riskLevel !== 'all' && r.riskLevel !== filters.riskLevel) return false;
+    if (filters.parameter && filters.parameter !== 'all'
+      && !r.parameterName.toLowerCase().includes(filters.parameter.toLowerCase())) return false;
+    if (filters.batch && filters.batch !== 'all'
+      && !r.batchNumber.toLowerCase().includes(filters.batch.toLowerCase())) return false;
+    if (search) {
+      const hay = [
+        r.batchNumber, r.studyNumber, r.studyType, r.storageCondition, r.pullingInterval,
+        r.parameterName, r.product, r.productCode, r.remarks, r.conclusion,
+      ].join(' ').toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
+}
+
+export { DEFAULT_STABILITY_PARAMETERS, DEFAULT_STABILITY_LIMITS, STABILITY_PULLING_INTERVALS, STABILITY_STORAGE_CONDITIONS, STABILITY_STUDY_TYPES };

@@ -9,17 +9,20 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Button } from '@/components/ui/button';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import {
-  SITE_TYPES, RECORD_STATUSES, DATE_FORMATS, TIME_FORMATS,
+  SITE_TYPES, COMPANY_TYPES, INDUSTRIES, RECORD_STATUSES, DATE_FORMATS, TIME_FORMATS,
   CURRENCY_OPTIONS, TIMEZONE_OPTIONS, LOGO_MAX_BYTES,
 } from '@/lib/admin/constants';
 import { companySiteFormSchema, type CompanySiteFormData, type CompanySite } from '@/lib/admin/schemas';
 import { validateLogoFile } from '@/lib/admin/company-site-service';
+import { fetchActiveUsers } from '@/lib/admin/department-service';
+import type { AdminUser } from '@/lib/admin/schemas';
 import { DocumentPreviewCard } from './document-preview-card';
 
 interface CompanySiteFormProps {
@@ -43,15 +46,30 @@ export function CompanySiteForm({
 }: CompanySiteFormProps) {
   const [logoPreview, setLogoPreview] = useState(existingLogo || '');
   const [logoError, setLogoError] = useState<string | null>(null);
+  const [users, setUsers] = useState<AdminUser[]>([]);
 
   const form = useForm<CompanySiteFormData>({
     resolver: zodResolver(companySiteFormSchema),
     defaultValues: {
       companyName: '',
       companyCode: '',
+      legalName: '',
+      shortName: '',
+      companyType: '',
+      industry: '',
+      registrationNumber: '',
+      panNumber: '',
+      licenseNumber: '',
+      companyEmail: '',
+      companyPhone: '',
       siteName: '',
       siteCode: '',
       siteType: 'Manufacturing Plant',
+      businessUnit: '',
+      isManufacturingUnit: false,
+      isWarehouse: false,
+      isLaboratory: false,
+      isOffice: false,
       plantName: '',
       plantCode: '',
       plantAddress: '',
@@ -65,6 +83,10 @@ export function CompanySiteForm({
       contactPerson: '',
       contactEmail: '',
       contactPhone: '',
+      siteHead: '',
+      siteHeadId: '',
+      qualityHead: '',
+      qualityHeadId: '',
       website: '',
       timezone: 'Asia/Kolkata',
       dateFormat: 'DD/MM/YYYY',
@@ -72,14 +94,20 @@ export function CompanySiteForm({
       defaultCurrency: 'INR',
       documentHeaderFormat: '',
       documentFooterText: '',
+      remarks: '',
       status: 'Active',
       isDefault: false,
+      changeReason: '',
       ...initial,
     },
   });
 
   useEffect(() => {
-    if (initial) form.reset({ ...form.getValues(), ...initial });
+    fetchActiveUsers().then(setUsers).catch(() => setUsers([]));
+  }, []);
+
+  useEffect(() => {
+    if (initial) form.reset({ ...form.getValues(), ...initial, changeReason: initial.changeReason || '' });
   }, [initial, form]);
 
   useEffect(() => {
@@ -87,13 +115,10 @@ export function CompanySiteForm({
   }, [existingLogo]);
 
   const watched = form.watch();
-  const previewSite: Partial<CompanySite> = {
-    ...watched,
-    companyLogo: logoPreview,
-  };
+  const previewSite: Partial<CompanySite> = { ...watched, companyLogo: logoPreview };
 
-  const handleLogo = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleLogo = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
     if (!file) return;
     const check = validateLogoFile(file);
     if (!check.valid) {
@@ -105,10 +130,21 @@ export function CompanySiteForm({
     onLogoSelect?.(file);
   };
 
+  const selectUser = (field: 'siteHead' | 'qualityHead', userId: string) => {
+    const user = users.find((item) => item.id === userId || item.userId === userId);
+    if (!user) {
+      form.setValue(`${field}Id`, '');
+      form.setValue(field, '');
+      return;
+    }
+    form.setValue(`${field}Id`, user.id || user.userId || '');
+    form.setValue(field, user.fullName || '');
+  };
+
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
       <Card>
-        <CardHeader><CardTitle className="text-base">Company & Site Identity</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">Company Identity</CardTitle></CardHeader>
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Company Name *</Label>
@@ -117,51 +153,71 @@ export function CompanySiteForm({
           </div>
           <div className="space-y-2">
             <Label>Company Code *</Label>
-            <Input {...form.register('companyCode')} disabled={readOnly} />
+            <Input {...form.register('companyCode')} disabled={readOnly} className="uppercase" />
             {form.formState.errors.companyCode && <p className="text-xs text-red-500">{form.formState.errors.companyCode.message}</p>}
           </div>
           <div className="space-y-2">
-            <Label>Site Name *</Label>
-            <Input {...form.register('siteName')} disabled={readOnly} />
-            {form.formState.errors.siteName && <p className="text-xs text-red-500">{form.formState.errors.siteName.message}</p>}
+            <Label>Legal Name</Label>
+            <Input {...form.register('legalName')} disabled={readOnly} />
           </div>
           <div className="space-y-2">
-            <Label>Site Code *</Label>
-            <Input {...form.register('siteCode')} disabled={readOnly} />
-            {form.formState.errors.siteCode && <p className="text-xs text-red-500">{form.formState.errors.siteCode.message}</p>}
+            <Label>Short Name</Label>
+            <Input {...form.register('shortName')} disabled={readOnly} />
           </div>
           <div className="space-y-2">
-            <Label>Site Type</Label>
+            <Label>Company Type</Label>
             <Select
-              value={form.watch('siteType')}
-              onValueChange={(v) => form.setValue('siteType', v as CompanySiteFormData['siteType'])}
+              value={form.watch('companyType') || 'none'}
+              onValueChange={(value) => form.setValue('companyType', value === 'none' ? '' : value as CompanySiteFormData['companyType'])}
               disabled={readOnly}
             >
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
               <SelectContent>
-                {SITE_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                <SelectItem value="none">Not specified</SelectItem>
+                {COMPANY_TYPES.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-2">
-            <Label>Plant Name</Label>
-            <Input {...form.register('plantName')} disabled={readOnly} />
+            <Label>Industry</Label>
+            <Select
+              value={form.watch('industry') || 'none'}
+              onValueChange={(value) => form.setValue('industry', value === 'none' ? '' : value as CompanySiteFormData['industry'])}
+              disabled={readOnly}
+            >
+              <SelectTrigger><SelectValue placeholder="Select industry" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Not specified</SelectItem>
+                {INDUSTRIES.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
-            <Label>Plant Code</Label>
-            <Input {...form.register('plantCode')} disabled={readOnly} />
+            <Label>Registration Number</Label>
+            <Input {...form.register('registrationNumber')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>PAN Number</Label>
+            <Input {...form.register('panNumber')} disabled={readOnly} className="uppercase" />
+          </div>
+          <div className="space-y-2">
+            <Label>License Number</Label>
+            <Input {...form.register('licenseNumber')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Company Email</Label>
+            <Input type="email" {...form.register('companyEmail')} disabled={readOnly} />
+            {form.formState.errors.companyEmail && <p className="text-xs text-red-500">{form.formState.errors.companyEmail.message}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label>Company Phone</Label>
+            <Input {...form.register('companyPhone')} disabled={readOnly} />
           </div>
           <div className="space-y-2 sm:col-span-2">
             <Label>Company Logo</Label>
             <div className="flex items-center gap-4">
               {logoPreview && (
-                <Image
-                  src={logoPreview}
-                  alt="Logo"
-                  width={180}
-                  height={48}
-                  className="h-12 w-auto rounded border p-1 object-contain"
-                />
+                <Image src={logoPreview} alt="Logo" width={180} height={48} className="h-12 w-auto rounded border p-1 object-contain" />
               )}
               {!readOnly && (
                 <div>
@@ -181,17 +237,75 @@ export function CompanySiteForm({
       </Card>
 
       <Card>
+        <CardHeader><CardTitle className="text-base">Site Identity</CardTitle></CardHeader>
+        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>Site Name *</Label>
+            <Input {...form.register('siteName')} disabled={readOnly} />
+            {form.formState.errors.siteName && <p className="text-xs text-red-500">{form.formState.errors.siteName.message}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label>Site Code *</Label>
+            <Input {...form.register('siteCode')} disabled={readOnly} className="uppercase" />
+            {form.formState.errors.siteCode && <p className="text-xs text-red-500">{form.formState.errors.siteCode.message}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label>Site Type</Label>
+            <Select
+              value={form.watch('siteType')}
+              onValueChange={(value) => form.setValue('siteType', value as CompanySiteFormData['siteType'])}
+              disabled={readOnly}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {SITE_TYPES.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Business Unit</Label>
+            <Input {...form.register('businessUnit')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Plant Name</Label>
+            <Input {...form.register('plantName')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Plant Code</Label>
+            <Input {...form.register('plantCode')} disabled={readOnly} />
+          </div>
+          <div className="flex flex-wrap gap-4 sm:col-span-2">
+            {([
+              ['isManufacturingUnit', 'Manufacturing Unit'],
+              ['isWarehouse', 'Warehouse'],
+              ['isLaboratory', 'Laboratory'],
+              ['isOffice', 'Office'],
+            ] as const).map(([field, label]) => (
+              <label key={field} className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={form.watch(field)}
+                  onCheckedChange={(checked) => form.setValue(field, Boolean(checked))}
+                  disabled={readOnly}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardHeader><CardTitle className="text-base">Address & Licenses</CardTitle></CardHeader>
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2 sm:col-span-2">
-            <Label>Plant Address *</Label>
+            <Label>Site Address *</Label>
             <Textarea {...form.register('plantAddress')} disabled={readOnly} rows={2} />
             {form.formState.errors.plantAddress && <p className="text-xs text-red-500">{form.formState.errors.plantAddress.message}</p>}
           </div>
           <div className="space-y-2"><Label>City</Label><Input {...form.register('city')} disabled={readOnly} /></div>
           <div className="space-y-2"><Label>State</Label><Input {...form.register('state')} disabled={readOnly} /></div>
           <div className="space-y-2"><Label>Country</Label><Input {...form.register('country')} disabled={readOnly} /></div>
-          <div className="space-y-2"><Label>PIN / ZIP Code</Label><Input {...form.register('pinZipCode')} disabled={readOnly} /></div>
+          <div className="space-y-2"><Label>Postal Code</Label><Input {...form.register('pinZipCode')} disabled={readOnly} /></div>
           <div className="space-y-2"><Label>GST Number</Label><Input {...form.register('gstNumber')} disabled={readOnly} /></div>
           <div className="space-y-2"><Label>Manufacturing License</Label><Input {...form.register('manufacturingLicenseNumber')} disabled={readOnly} /></div>
           <div className="space-y-2"><Label>Drug License Number</Label><Input {...form.register('drugLicenseNumber')} disabled={readOnly} /></div>
@@ -199,8 +313,44 @@ export function CompanySiteForm({
       </Card>
 
       <Card>
-        <CardHeader><CardTitle className="text-base">Contact & Regional Settings</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">Site Leadership & Contact</CardTitle></CardHeader>
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>Site Head</Label>
+            <Select
+              value={form.watch('siteHeadId') || 'none'}
+              onValueChange={(value) => selectUser('siteHead', value === 'none' ? '' : value)}
+              disabled={readOnly}
+            >
+              <SelectTrigger><SelectValue placeholder="Select site head" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Not assigned</SelectItem>
+                {users.map((user) => (
+                  <SelectItem key={user.id || user.userId} value={user.id || user.userId || ''}>
+                    {user.fullName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Quality Head</Label>
+            <Select
+              value={form.watch('qualityHeadId') || 'none'}
+              onValueChange={(value) => selectUser('qualityHead', value === 'none' ? '' : value)}
+              disabled={readOnly}
+            >
+              <SelectTrigger><SelectValue placeholder="Select quality head" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Not assigned</SelectItem>
+                {users.map((user) => (
+                  <SelectItem key={user.id || user.userId} value={user.id || user.userId || ''}>
+                    {user.fullName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="space-y-2"><Label>Contact Person</Label><Input {...form.register('contactPerson')} disabled={readOnly} /></div>
           <div className="space-y-2">
             <Label>Contact Email</Label>
@@ -209,58 +359,64 @@ export function CompanySiteForm({
           </div>
           <div className="space-y-2"><Label>Contact Phone</Label><Input {...form.register('contactPhone')} disabled={readOnly} /></div>
           <div className="space-y-2"><Label>Website</Label><Input {...form.register('website')} disabled={readOnly} /></div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle className="text-base">Regional Settings</CardTitle></CardHeader>
+        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Timezone</Label>
-            <Select value={form.watch('timezone')} onValueChange={(v) => form.setValue('timezone', v)} disabled={readOnly}>
+            <Select value={form.watch('timezone')} onValueChange={(value) => form.setValue('timezone', value)} disabled={readOnly}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {TIMEZONE_OPTIONS.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                {TIMEZONE_OPTIONS.map((tz) => <SelectItem key={tz} value={tz}>{tz}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-2">
             <Label>Date Format</Label>
-            <Select value={form.watch('dateFormat')} onValueChange={(v) => form.setValue('dateFormat', v as CompanySiteFormData['dateFormat'])} disabled={readOnly}>
+            <Select value={form.watch('dateFormat')} onValueChange={(value) => form.setValue('dateFormat', value as CompanySiteFormData['dateFormat'])} disabled={readOnly}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {DATE_FORMATS.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                {DATE_FORMATS.map((format) => <SelectItem key={format} value={format}>{format}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-2">
             <Label>Time Format</Label>
-            <Select value={form.watch('timeFormat')} onValueChange={(v) => form.setValue('timeFormat', v as CompanySiteFormData['timeFormat'])} disabled={readOnly}>
+            <Select value={form.watch('timeFormat')} onValueChange={(value) => form.setValue('timeFormat', value as CompanySiteFormData['timeFormat'])} disabled={readOnly}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {TIME_FORMATS.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                {TIME_FORMATS.map((format) => <SelectItem key={format} value={format}>{format}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-2">
             <Label>Default Currency</Label>
-            <Select value={form.watch('defaultCurrency')} onValueChange={(v) => form.setValue('defaultCurrency', v as CompanySiteFormData['defaultCurrency'])} disabled={readOnly}>
+            <Select value={form.watch('defaultCurrency')} onValueChange={(value) => form.setValue('defaultCurrency', value as CompanySiteFormData['defaultCurrency'])} disabled={readOnly}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {CURRENCY_OPTIONS.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                {CURRENCY_OPTIONS.map((currency) => <SelectItem key={currency} value={currency}>{currency}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-2">
             <Label>Status</Label>
-            <Select value={form.watch('status')} onValueChange={(v) => form.setValue('status', v as CompanySiteFormData['status'])} disabled={readOnly}>
+            <Select value={form.watch('status')} onValueChange={(value) => form.setValue('status', value as CompanySiteFormData['status'])} disabled={readOnly}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {RECORD_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                {RECORD_STATUSES.map((status) => <SelectItem key={status} value={status}>{status}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
-          <div className="flex items-center justify-between p-3 border rounded-lg sm:col-span-2">
+          <div className="flex items-center justify-between p-3 border rounded-lg">
             <Label>Default Site</Label>
-            <Switch
-              checked={form.watch('isDefault')}
-              onCheckedChange={(v) => form.setValue('isDefault', v)}
-              disabled={readOnly}
-            />
+            <Switch checked={form.watch('isDefault')} onCheckedChange={(value) => form.setValue('isDefault', value)} disabled={readOnly} />
+          </div>
+          <div className="space-y-2 sm:col-span-2">
+            <Label>Remarks</Label>
+            <Textarea {...form.register('remarks')} disabled={readOnly} rows={2} />
           </div>
         </CardContent>
       </Card>
@@ -281,11 +437,29 @@ export function CompanySiteForm({
       </Card>
 
       {!readOnly && (
+        <Card>
+          <CardHeader><CardTitle className="text-base">Change Control</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            <Label htmlFor="changeReason">Change Reason * (ALCOA+ / Part 11)</Label>
+            <Textarea
+              id="changeReason"
+              {...form.register('changeReason')}
+              rows={2}
+              placeholder="Document why this company/site change is required"
+            />
+            {form.formState.errors.changeReason && (
+              <p className="text-xs text-destructive">{form.formState.errors.changeReason.message}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {!readOnly && (
         <div className="flex justify-end gap-3">
-          <button type="button" className="px-4 py-2 border rounded-md text-sm" onClick={onCancel}>Cancel</button>
-          <button type="submit" disabled={submitting} className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 disabled:opacity-50">
-            {submitting ? 'Saving...' : 'Save Company / Site'}
-          </button>
+          <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button type="submit" disabled={submitting} className="bg-blue-600 hover:bg-blue-700">
+            {submitting ? 'Saving…' : 'Save Company / Site'}
+          </Button>
         </div>
       )}
     </form>

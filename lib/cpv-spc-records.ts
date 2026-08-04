@@ -16,8 +16,15 @@ export const CHART_TYPES = [
   'Moving Range Chart',
   'X-Bar Chart',
   'R Chart',
+  'S Chart',
   'X-Bar R Chart',
+  'EWMA Chart',
+  'CUSUM Chart',
   'Run Chart',
+  'P Chart',
+  'NP Chart',
+  'C Chart',
+  'U Chart',
 ] as const;
 
 export const DATA_SOURCES = [
@@ -65,6 +72,21 @@ export const spcFormSchema = z.object({
   cpvProductId: requiredText,
   productName: requiredText,
   productCode: requiredText,
+  spcCode: z.string().trim().default(''),
+  studyNumber: z.string().trim().default(''),
+  productVersion: z.string().trim().default(''),
+  batchNumber: z.string().trim().default(''),
+  manufacturingOrder: z.string().trim().default(''),
+  process: z.string().trim().default(''),
+  processStep: z.string().trim().default(''),
+  equipmentId: z.string().trim().default(''),
+  equipmentName: z.string().trim().default(''),
+  machine: z.string().trim().default(''),
+  department: z.string().trim().default(''),
+  productionLine: z.string().trim().default(''),
+  operator: z.string().trim().default(''),
+  shift: z.string().trim().default(''),
+  site: z.string().trim().default(''),
   chartType: z.enum(CHART_TYPES),
   dataSource: z.enum(DATA_SOURCES),
   parameterType: z.enum(PARAMETER_TYPES),
@@ -73,9 +95,15 @@ export const spcFormSchema = z.object({
   reviewPeriodFrom: requiredText,
   reviewPeriodTo: requiredText,
   subgroupSize: z.coerce.number().int().min(2).max(10).default(4),
+  sampleSize: z.coerce.number().int().min(1).max(100).default(1),
+  samplingFrequency: z.string().trim().default(''),
+  targetValue: z.coerce.number().optional(),
+  effectiveDate: z.string().trim().default(''),
+  description: z.string().trim().default(''),
   conclusion: z.string().trim().default(''),
   recommendation: z.string().trim().default(''),
   remarks: z.string().trim().default(''),
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => {
   const from = new Date(d.reviewPeriodFrom);
   const to = new Date(d.reviewPeriodTo);
@@ -126,6 +154,11 @@ export interface SpcRecord extends SpcFormData, Record<string, unknown> {
   spcRecordId: string;
   batchCount: number;
   dataPointsCount: number;
+  mean: number;
+  median: number;
+  mode: number | null;
+  range: number;
+  variance: number;
   centerLine: number;
   upperControlLimit: number;
   lowerControlLimit: number;
@@ -134,17 +167,53 @@ export interface SpcRecord extends SpcFormData, Record<string, unknown> {
   movingRangeAverage: number;
   averageRange: number;
   standardDeviation: number;
+  cp: number;
+  cpk: number;
+  cpu: number;
+  cpl: number;
+  pp: number;
+  ppk: number;
+  sigmaLevel: number;
+  zScoreMean: number;
+  confidenceIntervalLow: number;
+  confidenceIntervalHigh: number;
+  skewness: number;
+  kurtosis: number;
+  outlierCount: number;
+  ewmaLast: number;
+  cusumHighLast: number;
+  cusumLowLast: number;
+  ewmaData: SpcChartPoint[];
+  cusumHighData: SpcChartPoint[];
+  cusumLowData: SpcChartPoint[];
+  sChartData: SpcChartPoint[];
+  processDriftDetected: boolean;
+  specialCauseVariation: boolean;
+  commonCauseOnly: boolean;
+  healthScore: number;
+  confidenceScore: number;
+  aiRecommendation: string;
+  goldenBatchNumber: string;
+  goldenBatchDelta: number;
+  forecastNext: number;
+  westernElectricCount: number;
+  nelsonRuleCount: number;
   spcStatus: typeof SPC_STATUSES[number];
   ruleViolationsCount: number;
   outOfControlPoints: number;
   riskLevel: typeof RISK_LEVELS[number];
   capaSuggested: boolean;
+  deviationRequired: boolean;
   generatedBy: string;
   generatedDate: string;
   reviewedBy: string;
   reviewDate: string;
+  approvedBy: string;
+  approvalDate: string;
   status: typeof WORKFLOW_STATUSES[number];
   linkedRiskId: string;
+  linkedDeviationNumber: string;
+  linkedCapaNumber: string;
   isLocked: boolean;
   chartData: SpcChartPoint[];
   movingRangeData: SpcChartPoint[];
@@ -176,6 +245,11 @@ export interface SpcSummary {
 export interface SpcCalculationResult {
   batchCount: number;
   dataPointsCount: number;
+  mean: number;
+  median: number;
+  mode: number | null;
+  range: number;
+  variance: number;
   centerLine: number;
   upperControlLimit: number;
   lowerControlLimit: number;
@@ -184,11 +258,43 @@ export interface SpcCalculationResult {
   movingRangeAverage: number;
   averageRange: number;
   standardDeviation: number;
+  cp: number;
+  cpk: number;
+  cpu: number;
+  cpl: number;
+  pp: number;
+  ppk: number;
+  sigmaLevel: number;
+  zScoreMean: number;
+  confidenceIntervalLow: number;
+  confidenceIntervalHigh: number;
+  skewness: number;
+  kurtosis: number;
+  outlierCount: number;
+  ewmaLast: number;
+  cusumHighLast: number;
+  cusumLowLast: number;
+  ewmaData: SpcChartPoint[];
+  cusumHighData: SpcChartPoint[];
+  cusumLowData: SpcChartPoint[];
+  sChartData: SpcChartPoint[];
+  processDriftDetected: boolean;
+  specialCauseVariation: boolean;
+  commonCauseOnly: boolean;
+  healthScore: number;
+  confidenceScore: number;
+  aiRecommendation: string;
+  goldenBatchNumber: string;
+  goldenBatchDelta: number;
+  forecastNext: number;
+  westernElectricCount: number;
+  nelsonRuleCount: number;
   spcStatus: typeof SPC_STATUSES[number];
   ruleViolationsCount: number;
   outOfControlPoints: number;
   riskLevel: typeof RISK_LEVELS[number];
   capaSuggested: boolean;
+  deviationRequired: boolean;
   chartData: SpcChartPoint[];
   movingRangeData: SpcChartPoint[];
   xbarChartData: SpcChartPoint[];
@@ -441,6 +547,11 @@ export function calculateSpcAnalysis(
   const empty: SpcCalculationResult = {
     batchCount,
     dataPointsCount: values.length,
+    mean: 0,
+    median: 0,
+    mode: null,
+    range: 0,
+    variance: 0,
     centerLine: 0,
     upperControlLimit: 0,
     lowerControlLimit: 0,
@@ -449,11 +560,43 @@ export function calculateSpcAnalysis(
     movingRangeAverage: 0,
     averageRange: 0,
     standardDeviation: 0,
+    cp: 0,
+    cpk: 0,
+    cpu: 0,
+    cpl: 0,
+    pp: 0,
+    ppk: 0,
+    sigmaLevel: 0,
+    zScoreMean: 0,
+    confidenceIntervalLow: 0,
+    confidenceIntervalHigh: 0,
+    skewness: 0,
+    kurtosis: 0,
+    outlierCount: 0,
+    ewmaLast: 0,
+    cusumHighLast: 0,
+    cusumLowLast: 0,
+    ewmaData: [],
+    cusumHighData: [],
+    cusumLowData: [],
+    sChartData: [],
+    processDriftDetected: false,
+    specialCauseVariation: false,
+    commonCauseOnly: true,
+    healthScore: 0,
+    confidenceScore: 0,
+    aiRecommendation: 'Insufficient data — collect at least 5 points for SPC.',
+    goldenBatchNumber: '',
+    goldenBatchDelta: 0,
+    forecastNext: 0,
+    westernElectricCount: 0,
+    nelsonRuleCount: 0,
     spcStatus: 'Insufficient Data',
     ruleViolationsCount: 0,
     outOfControlPoints: 0,
     riskLevel: 'Low',
     capaSuggested: false,
+    deviationRequired: false,
     chartData: [],
     movingRangeData: [],
     xbarChartData: [],
@@ -463,14 +606,28 @@ export function calculateSpcAnalysis(
 
   if (values.length < 5) return empty;
 
+  const n = values.length;
   const observations = toObservations(sorted, form.productName, form.parameterName);
   const analysis = runSpcAnalysis(observations, form.subgroupSize || 4);
 
   const individuals = analysis.individuals;
   const mrValues = values.slice(1).map((v, i) => Math.abs(v - values[i]));
   const mrBar = mrValues.length ? mrValues.reduce((s, v) => s + v, 0) / mrValues.length : 0;
-  const mean = values.reduce((s, v) => s + v, 0) / values.length;
+  const mean = values.reduce((s, v) => s + v, 0) / n;
+  const sortedVals = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(n / 2);
+  const median = n % 2 ? sortedVals[mid] : (sortedVals[mid - 1] + sortedVals[mid]) / 2;
+  const freq = new Map<number, number>();
+  sortedVals.forEach((v) => freq.set(v, (freq.get(v) || 0) + 1));
+  let mode: number | null = null;
+  let maxF = 1;
+  freq.forEach((f, v) => { if (f > maxF) { maxF = f; mode = v; } });
+  const min = sortedVals[0];
+  const max = sortedVals[n - 1];
+  const variance = n > 1 ? values.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1) : 0;
+  const sd = Math.sqrt(variance);
 
+  // I-chart: UCL/LCL = X̄ ± 2.66 × MR̄ (equivalent to 3σ with σ = MR̄/d2, d2=1.128)
   if (mrBar > 0) {
     individuals.limits = {
       centerLine: round(mean),
@@ -478,11 +635,7 @@ export function calculateSpcAnalysis(
       lcl: round(mean - 2.66 * mrBar),
     };
   } else {
-    individuals.limits = {
-      centerLine: round(mean),
-      ucl: round(mean),
-      lcl: round(mean),
-    };
+    individuals.limits = { centerLine: round(mean), ucl: round(mean), lcl: round(mean) };
   }
 
   const extended = detectExtendedRules(values, batches, dates, individuals.limits);
@@ -502,6 +655,71 @@ export function calculateSpcAnalysis(
     }
   });
 
+  // EWMA (λ=0.2)
+  const lambda = 0.2;
+  const ewmaVals: number[] = [values[0]];
+  for (let i = 1; i < n; i++) ewmaVals.push(lambda * values[i] + (1 - lambda) * ewmaVals[i - 1]);
+  const ewmaSigma = sd * Math.sqrt(lambda / (2 - lambda));
+  const ewmaData: SpcChartPoint[] = ewmaVals.map((v, i) => ({
+    index: i + 1,
+    label: batches[i],
+    batchNumber: batches[i],
+    date: dates[i],
+    value: round(v),
+    movingRange: 0,
+    centerLine: round(mean),
+    ucl: round(mean + 3 * ewmaSigma),
+    lcl: round(mean - 3 * ewmaSigma),
+    outOfControl: v > mean + 3 * ewmaSigma || v < mean - 3 * ewmaSigma,
+    violated: false,
+  }));
+
+  // CUSUM
+  const k = (sd || 1) * 0.5;
+  let sh = 0;
+  let sl = 0;
+  const cusumHighData: SpcChartPoint[] = [];
+  const cusumLowData: SpcChartPoint[] = [];
+  values.forEach((v, i) => {
+    sh = Math.max(0, sh + (v - mean) - k);
+    sl = Math.max(0, sl + (mean - v) - k);
+    const h = 5 * (sd || 1);
+    cusumHighData.push({
+      index: i + 1, label: batches[i], batchNumber: batches[i], date: dates[i],
+      value: round(sh), movingRange: 0, centerLine: 0, ucl: round(h), lcl: 0,
+      outOfControl: sh > h, violated: sh > h,
+    });
+    cusumLowData.push({
+      index: i + 1, label: batches[i], batchNumber: batches[i], date: dates[i],
+      value: round(sl), movingRange: 0, centerLine: 0, ucl: round(h), lcl: 0,
+      outOfControl: sl > h, violated: sl > h,
+    });
+  });
+
+  // S-chart from subgroups (use within-subgroup SD when enough points)
+  const subgroupSize = Math.min(Math.max(2, form.subgroupSize || 4), 10);
+  const sChartData: SpcChartPoint[] = [];
+  for (let i = 0; i + subgroupSize <= n; i += subgroupSize) {
+    const group = values.slice(i, i + subgroupSize);
+    const gMean = group.reduce((s, v) => s + v, 0) / group.length;
+    const gVar = group.reduce((s, v) => s + (v - gMean) ** 2, 0) / (group.length - 1);
+    const s = Math.sqrt(gVar);
+    const idx = Math.floor(i / subgroupSize) + 1;
+    sChartData.push({
+      index: idx,
+      label: `SG${idx}`,
+      batchNumber: batches[i],
+      date: dates[i],
+      value: round(s),
+      movingRange: 0,
+      centerLine: round(sd),
+      ucl: round(sd * 2),
+      lcl: 0,
+      outOfControl: s > sd * 2,
+      violated: s > sd * 2,
+    });
+  }
+
   const outOfControlPoints = chartData.filter((p) => p.outOfControl).length;
   const violations = mapViolations(
     [...allViolations, ...analysis.movingRange.violations, ...analysis.xbar.violations, ...analysis.rChart.violations],
@@ -512,18 +730,93 @@ export function calculateSpcAnalysis(
     spcRecordId,
   );
 
-  const hasCritical = violations.some((v) => v.severity === 'Critical' || v.severity === 'High');
+  const westernElectricCount = violations.filter((v) => /Rule [1-4]|Western|Beyond 3|2 of 3|4 of 5|8 consecutive/.test(v.violationType)).length;
+  const nelsonRuleCount = violations.filter((v) => /Nelson|trend|Alternating|Stratification|Mixture|same side|near control/i.test(v.violationType)).length;
+
+  let outlierCount = 0;
+  if (n >= 4) {
+    const q1 = sortedVals[Math.floor(n * 0.25)];
+    const q3 = sortedVals[Math.floor(n * 0.75)];
+    const iqr = q3 - q1;
+    outlierCount = sortedVals.filter((v) => v < q1 - 1.5 * iqr || v > q3 + 1.5 * iqr).length;
+  }
+
+  let m3 = 0;
+  let m4 = 0;
+  if (sd > 0) {
+    values.forEach((v) => {
+      const d = (v - mean) / sd;
+      m3 += d ** 3;
+      m4 += d ** 4;
+    });
+  }
+  const skewness = round(m3 / n);
+  const kurtosis = round(m4 / n - 3);
+  const se = sd / Math.sqrt(n);
+  const confidenceIntervalLow = round(mean - 1.96 * se);
+  const confidenceIntervalHigh = round(mean + 1.96 * se);
+
+  const withinSd = mrBar > 0 ? mrBar / 1.128 : sd;
+  let cp = 0; let cpu = 0; let cpl = 0; let cpk = 0; let pp = 0; let ppk = 0;
+  if (Number.isFinite(lsl) && Number.isFinite(usl) && usl > lsl && withinSd > 0) {
+    cp = (usl - lsl) / (6 * withinSd);
+    cpu = (usl - mean) / (3 * withinSd);
+    cpl = (mean - lsl) / (3 * withinSd);
+    cpk = Math.min(cpu, cpl);
+    pp = sd > 0 ? (usl - lsl) / (6 * sd) : 0;
+    ppk = sd > 0 ? Math.min((usl - mean) / (3 * sd), (mean - lsl) / (3 * sd)) : 0;
+  }
+
+  // Drift: regression slope vs SD
+  let sumX = 0; let sumY = 0; let sumXY = 0; let sumXX = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += i; sumY += values[i]; sumXY += i * values[i]; sumXX += i * i;
+  }
+  const denom = n * sumXX - sumX * sumX;
+  const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
+  const intercept = (sumY - slope * sumX) / n;
+  const processDriftDetected = Math.abs(slope) > (sd || 1) * 0.05;
+  const specialCauseVariation = outOfControlPoints > 0 || violations.length > 0;
+  const commonCauseOnly = !specialCauseVariation;
+
+  const goldenSlice = sorted.slice(0, Math.max(1, Math.floor(n * 0.3)));
+  const goldenIdx = goldenSlice.reduce((best, p, i) => (
+    Math.abs(p.value - mean) < Math.abs(goldenSlice[best].value - mean) ? i : best
+  ), 0);
+  const golden = goldenSlice[goldenIdx];
+
   let spcStatus: typeof SPC_STATUSES[number] = 'In Control';
   if (outOfControlPoints > 0) spcStatus = 'Out Of Control';
-  else if (violations.length > 0) spcStatus = 'Warning';
+  else if (violations.length > 0 || processDriftDetected) spcStatus = 'Warning';
 
-  const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
-  const sd = Math.sqrt(variance);
-  const capaSuggested = outOfControlPoints > 0 || violations.filter((v) => v.severity === 'Critical').length > 0;
+  const capaSuggested = outOfControlPoints > 0
+    || violations.filter((v) => v.severity === 'Critical' || v.severity === 'High').length > 0;
+  const deviationRequired = outOfControlPoints > 0 || spcStatus === 'Out Of Control';
+
+  let healthScore = 100;
+  if (outOfControlPoints) healthScore -= Math.min(40, outOfControlPoints * 12);
+  if (violations.length) healthScore -= Math.min(25, violations.length * 3);
+  if (processDriftDetected) healthScore -= 10;
+  if (cpk > 0 && cpk < 1.33) healthScore -= 10;
+  healthScore = Math.max(0, Math.min(100, healthScore));
+  const confidenceScore = Math.max(20, Math.min(99, round(45 + Math.min(35, n) + (commonCauseOnly ? 10 : 0) - outlierCount * 2, 1)));
+
+  const tips: string[] = [];
+  if (outOfControlPoints > 0) tips.push(`${outOfControlPoints} OOC point(s) — investigate special causes and consider deviation.`);
+  if (westernElectricCount > 0) tips.push(`${westernElectricCount} Western Electric signal(s) detected.`);
+  if (nelsonRuleCount > 0) tips.push(`${nelsonRuleCount} Nelson rule signal(s) detected.`);
+  if (processDriftDetected) tips.push(`Process drift detected (slope ${round(slope, 4)}) — compare to golden batch.`);
+  if (cpk > 0 && cpk < 1.33) tips.push(`Cpk ${round(cpk)} below target (≥1.33).`);
+  if (!tips.length) tips.push(`Process In Control — health ${round(healthScore, 1)}. Continue routine SPC monitoring.`);
 
   return {
     batchCount,
-    dataPointsCount: values.length,
+    dataPointsCount: n,
+    mean: round(mean),
+    median: round(median),
+    mode: mode == null ? null : round(mode),
+    range: round(max - min),
+    variance: round(variance),
     centerLine: individuals.limits.centerLine,
     upperControlLimit: individuals.limits.ucl,
     lowerControlLimit: individuals.limits.lcl,
@@ -532,11 +825,43 @@ export function calculateSpcAnalysis(
     movingRangeAverage: round(mrBar),
     averageRange: round(analysis.rChart.limits.centerLine),
     standardDeviation: round(sd),
+    cp: round(cp),
+    cpk: round(cpk),
+    cpu: round(cpu),
+    cpl: round(cpl),
+    pp: round(pp),
+    ppk: round(ppk),
+    sigmaLevel: cpk > 0 ? round(cpk * 3) : (sd > 0 ? round(Math.abs(mean) / sd) : 0),
+    zScoreMean: sd > 0 ? round((values[n - 1] - mean) / sd) : 0,
+    confidenceIntervalLow,
+    confidenceIntervalHigh,
+    skewness,
+    kurtosis,
+    outlierCount,
+    ewmaLast: round(ewmaVals[ewmaVals.length - 1] || mean),
+    cusumHighLast: cusumHighData[cusumHighData.length - 1]?.value || 0,
+    cusumLowLast: cusumLowData[cusumLowData.length - 1]?.value || 0,
+    ewmaData: ewmaData.slice(0, 100),
+    cusumHighData: cusumHighData.slice(0, 100),
+    cusumLowData: cusumLowData.slice(0, 100),
+    sChartData: sChartData.slice(0, 50),
+    processDriftDetected,
+    specialCauseVariation,
+    commonCauseOnly,
+    healthScore: round(healthScore, 1),
+    confidenceScore,
+    aiRecommendation: tips.join(' '),
+    goldenBatchNumber: golden?.batchNumber || '',
+    goldenBatchDelta: golden ? round(Math.abs(values[n - 1] - golden.value)) : 0,
+    forecastNext: round(intercept + slope * n),
+    westernElectricCount,
+    nelsonRuleCount,
     spcStatus,
     ruleViolationsCount: violations.length,
     outOfControlPoints,
     riskLevel: evaluateSpcRisk(spcStatus, form.parameterName),
     capaSuggested,
+    deviationRequired,
     chartData,
     movingRangeData,
     xbarChartData,

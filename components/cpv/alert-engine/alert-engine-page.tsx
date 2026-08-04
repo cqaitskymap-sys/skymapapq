@@ -73,8 +73,10 @@ export function AlertEnginePage() {
       alertTitle: '', alertSource: 'Manual Alert', moduleName: 'Manual Alert',
       productName: '', productCode: '', batchNumber: '', parameterName: '',
       observedValue: '', limitValue: '', alertType: 'Alert Limit Crossed',
-      alertPriority: 'Medium', alertSeverity: 'Warning', alertMessage: '',
+      alertCategory: 'Operational', alertPriority: 'Medium', alertSeverity: 'Warning', alertMessage: '',
       assignedTo: '', assignedRole: 'qa', dueDate: '',
+      deliveryChannels: ['In-App', 'Toast'],
+      changeReason: 'Manual CPV alert created',
     },
   });
 
@@ -182,6 +184,32 @@ export function AlertEnginePage() {
         )}
       />
 
+      <div className="flex flex-wrap gap-2 text-xs">
+        {[
+          { href: '/cpv/dashboard', label: 'Dashboard' },
+          { href: '/cpv/cpp', label: 'CPP' },
+          { href: '/cpv/cqa', label: 'CQA' },
+          { href: '/cpv/yield-monitoring', label: 'Yield' },
+          { href: '/cpv/environmental-monitoring', label: 'Environmental' },
+          { href: '/cpv/utility-monitoring', label: 'Utility' },
+          { href: '/cpv/hold-time-monitoring', label: 'Hold Time' },
+          { href: '/cpv/stability-monitoring', label: 'Stability' },
+          { href: '/cpv/statistical-process-control', label: 'SPC' },
+          { href: '/cpv/process-capability', label: 'Capability' },
+          { href: '/cpv/trend-analysis', label: 'Trend' },
+          { href: '/cpv/risk-assessment', label: 'Risk' },
+          { href: '/cpv/annual-review', label: 'Annual Review' },
+          { href: '/cpv/reports-analytics', label: 'Reports' },
+          { href: '/cpv/ai-analytics', label: 'AI Analytics' },
+          { href: '/qms/audit-trail', label: 'Audit Trail' },
+          { href: '/admin/system-health', label: 'System Health' },
+        ].map((link) => (
+          <Button key={link.href} variant="ghost" size="sm" className="h-7 px-2" onClick={() => router.push(link.href)}>
+            {link.label}
+          </Button>
+        ))}
+      </div>
+
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-5 xl:grid-cols-10">
         <KpiCard label="Total Alerts" value={summary.total} tone="blue" />
         <KpiCard label="Open" value={summary.open} tone={summary.open ? 'red' : 'green'} />
@@ -197,8 +225,11 @@ export function AlertEnginePage() {
 
       <Tabs defaultValue="alerts">
         <TabsList>
-          <TabsTrigger value="alerts">Alert Register</TabsTrigger>
-          <TabsTrigger value="charts">Analytics</TabsTrigger>
+          <TabsTrigger value="alerts">Alert Dashboard</TabsTrigger>
+          <TabsTrigger value="critical">Critical / Emergency</TabsTrigger>
+          <TabsTrigger value="escalation">Escalation</TabsTrigger>
+          <TabsTrigger value="charts">AI & Analytics</TabsTrigger>
+          <TabsTrigger value="rules">Alert Rules</TabsTrigger>
         </TabsList>
 
         <TabsContent value="alerts" className="space-y-4">
@@ -221,7 +252,7 @@ export function AlertEnginePage() {
               <SelectTrigger className="w-[160px]"><SelectValue placeholder="Status" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Status</SelectItem>
-                {['Open', 'Acknowledged', 'Under Investigation', 'Linked to Deviation', 'Linked to OOS', 'Linked to CAPA', 'Closed', 'Overdue'].map((s) => (
+                {['Open', 'Acknowledged', 'Under Investigation', 'Linked to Deviation', 'Linked to OOS', 'Linked to CAPA', 'Closed', 'Overdue', 'Rejected'].map((s) => (
                   <SelectItem key={s} value={s}>{s}</SelectItem>
                 ))}
               </SelectContent>
@@ -231,9 +262,41 @@ export function AlertEnginePage() {
           <Card>
             <CardContent className="pt-6">
               {filtered.length ? (
-                <ResponsiveDataTable columns={columns} data={filtered} searchKeys={['alertNumber', 'productName', 'batchNumber', 'parameterName']} />
+                <ResponsiveDataTable columns={columns} data={filtered} searchKeys={['alertNumber', 'productName', 'batchNumber', 'parameterName', 'alertTitle']} />
               ) : (
                 <EmptyState title="No alerts" message="Run a source scan or create a manual alert." />
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="critical" className="space-y-4">
+          <Card>
+            <CardContent className="pt-6">
+              {records.filter((r) => ['Critical', 'Emergency'].includes(r.alertPriority) && !['Closed', 'Rejected'].includes(r.alertStatus)).length ? (
+                <ResponsiveDataTable
+                  columns={columns}
+                  data={records.filter((r) => ['Critical', 'Emergency'].includes(r.alertPriority) && !['Closed', 'Rejected'].includes(r.alertStatus))}
+                  searchKeys={['alertNumber', 'productName', 'batchNumber']}
+                />
+              ) : (
+                <EmptyState title="No critical alerts" message="Critical and emergency alerts will appear here." />
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="escalation" className="space-y-4">
+          <Card>
+            <CardContent className="pt-6">
+              {records.filter((r) => r.alertStatus === 'Overdue' || r.escalationLevel > 0).length ? (
+                <ResponsiveDataTable
+                  columns={columns}
+                  data={records.filter((r) => r.alertStatus === 'Overdue' || r.escalationLevel > 0)}
+                  searchKeys={['alertNumber', 'productName']}
+                />
+              ) : (
+                <EmptyState title="No escalations" message="SLA escalations and overdue alerts appear here." />
               )}
             </CardContent>
           </Card>
@@ -257,7 +320,39 @@ export function AlertEnginePage() {
               <CardContent className="h-56"><ResponsiveContainer width="100%" height="100%">
                 <BarChart data={charts.trendByMonth}><XAxis dataKey="name" /><YAxis /><Tooltip /><Bar dataKey="value" fill="#2563eb" /></BarChart>
               </ResponsiveContainer></CardContent></Card>
+            <Card className="lg:col-span-2">
+              <CardHeader><CardTitle className="text-sm">AI Predictive / High-Confidence Alerts</CardTitle></CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                {records.filter((r) => r.aiIntelligence?.isPredictive || (r.aiIntelligence?.aiConfidenceScore || 0) >= 80).slice(0, 8).map((r) => (
+                  <div key={r.id} className="rounded-md border p-3">
+                    <p className="font-medium">{r.alertNumber} · {r.alertTitle}</p>
+                    <p className="text-muted-foreground">Confidence {r.aiIntelligence?.aiConfidenceScore || 0}% · {r.aiIntelligence?.riskPrediction || '—'}</p>
+                    <p className="text-xs mt-1">{r.aiIntelligence?.aiRecommendedActions || ''}</p>
+                  </div>
+                ))}
+                {!records.some((r) => r.aiIntelligence?.isPredictive || (r.aiIntelligence?.aiConfidenceScore || 0) >= 80) && (
+                  <EmptyState title="No AI predictions yet" message="Predictive intelligence appears after alerts are generated." />
+                )}
+              </CardContent>
+            </Card>
           </div>
+        </TabsContent>
+
+        <TabsContent value="rules" className="space-y-4">
+          <Card>
+            <CardContent className="pt-6 space-y-2">
+              {rules.map((rule) => (
+                <div key={rule.id} className="rounded-md border p-3 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-semibold">{rule.ruleName}</p>
+                    <PriorityBadge priority={rule.priority} />
+                  </div>
+                  <p className="text-muted-foreground">{rule.moduleName} · {rule.conditionType} · SLA {rule.slaHours || 24}h</p>
+                  <p className="text-xs mt-1">Channels: {(rule.deliveryChannels || ['In-App']).join(', ')} · Notify {rule.notifyRole} → Escalate {rule.escalationRole}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 
@@ -310,6 +405,9 @@ export function AlertEnginePage() {
               </div>
               <FormField control={form.control} name="alertMessage" render={({ field }) => (
                 <FormItem><FormLabel>Message *</FormLabel><FormControl><Textarea {...field} rows={3} /></FormControl><FormMessage /></FormItem>
+              )} />
+              <FormField control={form.control} name="changeReason" render={({ field }) => (
+                <FormItem><FormLabel>Change Reason (ALCOA+) *</FormLabel><FormControl><Textarea {...field} rows={2} /></FormControl><FormMessage /></FormItem>
               )} />
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>

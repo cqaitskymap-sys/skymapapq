@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { FORMAT_TOKENS } from '@/lib/admin/constants';
-import { buildDocumentNumberPreview } from '@/lib/admin/document-numbering-service';
+import { parseFormatTokens, buildDocumentNumberPreview } from './document-numbering-api';
 import type { DocumentNumberingFormData } from '@/lib/admin/schemas';
 
 interface FormatBuilderProps {

@@ -1,14 +1,14 @@
 import {
-  addDoc, collection, getDocs, limit, orderBy, query, where,
+  collection, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
+import { isCpvProductOperational } from '@/lib/cpv-product-master';
 import { fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
-import { createAlert } from '@/lib/cpv-module-service';
 import {
   STABILITY_STUDIES_COLLECTION,
   STABILITY_SCHEDULES_COLLECTION,
@@ -42,41 +42,6 @@ export interface StabilityActor {
   role?: string;
 }
 
-function actorCtx(actor: StabilityActor) {
-  return { moduleName: STABILITY_MODULE_NAME, actor: { id: actor.id, name: actor.name } as DocumentActor };
-}
-
-async function logStabilityAudit(
-  actionType: string,
-  recordId: string,
-  actor: StabilityActor,
-  oldVal?: unknown,
-  newVal?: unknown,
-  docNo?: string,
-) {
-  await createAuditLog({
-    moduleName: STABILITY_MODULE_NAME,
-    collectionName: STABILITY_RESULTS_COLLECTION,
-    recordId,
-    documentNumber: docNo,
-    actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-  await writeAuditTrail({
-    collectionName: STABILITY_RESULTS_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: STABILITY_MODULE_NAME,
-  });
-}
-
 function str(v: unknown, fb = ''): string {
   if (v === null || v === undefined) return fb;
   return String(v);
@@ -85,6 +50,20 @@ function str(v: unknown, fb = ''): string {
 function num(v: unknown, fb = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fb;
+}
+
+function optionalNum(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const message = String((e as { message?: string }).message || '');
+    if (message) return message.replace(/^Firebase:\s*/i, '').replace(/\s*\(.*\)$/, '').trim() || fallback;
+  }
+  return fallback;
 }
 
 function normalizeStudy(raw: Record<string, unknown>): StabilityStudyRecord {
@@ -97,6 +76,12 @@ function normalizeStudy(raw: Record<string, unknown>): StabilityStudyRecord {
     cpvProductId: str(raw.cpvProductId || raw.cpv_product_id),
     productName: str(raw.productName || raw.product_name),
     productCode: str(raw.productCode || raw.product_code),
+    productVersion: str(raw.productVersion || raw.product_version),
+    strength: str(raw.strength),
+    dosageForm: str(raw.dosageForm || raw.dosage_form),
+    packSize: str(raw.packSize || raw.pack_size),
+    packagingType: str(raw.packagingType || raw.packaging_type),
+    shelfLifeMonths: optionalNum(raw.shelfLifeMonths ?? raw.shelf_life_months),
     batchNumber,
     manufacturingDate: str(raw.manufacturingDate || raw.manufacturing_date),
     expiryDate: str(raw.expiryDate || raw.expiry_date),
@@ -104,8 +89,15 @@ function normalizeStudy(raw: Record<string, unknown>): StabilityStudyRecord {
     storageCondition: (str(raw.storageCondition || raw.storage_condition, '25°C / 60% RH') as StabilityStudyRecord['storageCondition']),
     studyStartDate: str(raw.studyStartDate || raw.study_start_date || raw.study_initiation_date),
     studyEndDate: str(raw.studyEndDate || raw.study_end_date),
+    protocolVersion: str(raw.protocolVersion || raw.protocol_version),
+    specificationVersion: str(raw.specificationVersion || raw.specification_version),
+    site: str(raw.site),
+    department: str(raw.department),
+    chamberId: str(raw.chamberId || raw.chamber_id),
+    chamberName: str(raw.chamberName || raw.chamber_name),
     studyStatus: (str(raw.studyStatus || raw.study_status || raw.status, 'Ongoing') as StabilityStudyRecord['studyStatus']),
     remarks: str(raw.remarks),
+    changeReason: str(raw.changeReason || raw.change_reason),
     createdAt: str(raw.createdAt || raw.created_at),
     updatedAt: str(raw.updatedAt || raw.updated_at),
     createdBy: str(raw.createdBy || raw.created_by),
@@ -191,19 +183,22 @@ function normalizeResult(raw: Record<string, unknown>): StabilityResultRecord {
     parameterCode,
     parameterName: str(raw.parameterName || raw.parameter_name),
     observedResult: observed as number | string,
-    targetValue: num(raw.targetValue ?? raw.target_value ?? raw.target),
+    targetValue: optionalNum(raw.targetValue ?? raw.target_value ?? raw.target),
     lowerLimit: lower,
     upperLimit: upper,
-    alertLimitLow: num(raw.alertLimitLow ?? raw.alert_limit_low),
-    alertLimitHigh: num(raw.alertLimitHigh ?? raw.alert_limit_high),
-    actionLimitLow: num(raw.actionLimitLow ?? raw.action_limit_low),
-    actionLimitHigh: num(raw.actionLimitHigh ?? raw.action_limit_high),
+    alertLimitLow: optionalNum(raw.alertLimitLow ?? raw.alert_limit_low),
+    alertLimitHigh: optionalNum(raw.alertLimitHigh ?? raw.alert_limit_high),
+    actionLimitLow: optionalNum(raw.actionLimitLow ?? raw.action_limit_low),
+    actionLimitHigh: optionalNum(raw.actionLimitHigh ?? raw.action_limit_high),
     unit: str(raw.unit),
     resultType: (resultType as StabilityResultRecord['resultType']),
     analyst: str(raw.analyst || raw.analyst_name),
     reviewedBy: str(raw.reviewedBy || raw.reviewed_by),
     reviewDate: str(raw.reviewDate || raw.review_date),
+    chamberId: str(raw.chamberId || raw.chamber_id),
+    chamberName: str(raw.chamberName || raw.chamber_name),
     remarks: str(raw.remarks),
+    changeReason: str(raw.changeReason || raw.change_reason),
     status,
     riskLevel: str(raw.riskLevel || raw.risk_level, 'Low'),
     ootRequired: Boolean(raw.ootRequired || raw.oot_required || status === 'OOT'),
@@ -339,433 +334,168 @@ export async function fetchStabilityBatchesForProduct(productName: string, produ
   );
 }
 
-async function countOotIntervals(batchNumber: string, parameterName: string): Promise<number> {
-  const results = await fetchStabilityResults(1000);
-  const intervals = new Set(
-    results.filter((r) =>
-      r.batchNumber === batchNumber
-      && r.parameterName === parameterName
-      && (r.status === 'OOT' || r.status === 'Action')
-      && !r.isDeleted,
-    ).map((r) => r.pullingInterval),
-  );
-  return intervals.size;
-}
-
-async function maybeCreateOos(record: StabilityResultRecord, actor: StabilityActor): Promise<string> {
-  if (record.status !== 'OOS') return '';
-  try {
-    const { createOosFromCpv } = await import('@/lib/oos-service');
-    const oos = await createOosFromCpv({
-      id: record.id,
-      product: record.productName,
-      batchNumber: record.batchNumber,
-      parameter: record.parameterName,
-      observedValue: Number(record.observedResult),
-      lower: record.lowerLimit,
-      upper: record.upperLimit,
-      unit: record.unit,
-      status: 'OOS',
-    }, { id: actor.id, name: actor.name, role: actor.role || 'qc' });
-    if (!oos) return '';
-    return String((oos as { oos_number?: string }).oos_number || oos.id || '');
-  } catch {
-    return '';
-  }
-}
-
-async function maybeCreateAlert(record: StabilityResultRecord, actor: StabilityActor) {
-  if (record.status === 'Complies') return;
-  try {
-    await createAlert({
-      alertType: record.status === 'OOT' ? 'OOT' : 'Limit Exceeded',
-      severity: record.riskLevel === 'Critical' ? 'Critical' : record.riskLevel === 'High' ? 'High' : 'Medium',
-      module: STABILITY_MODULE_NAME,
-      productName: record.productName,
-      batchNo: record.batchNumber,
-      parameterName: record.parameterName,
-      message: `Stability ${record.parameterName} ${record.status} at ${record.pullingInterval} for batch ${record.batchNumber}`,
-      observedValue: Number(record.observedResult),
-      recordId: record.id,
-    }, { id: actor.id, name: actor.name, role: actor.role });
-  } catch { /* optional */ }
-  if (!isFirebaseConfigured()) return;
-  try {
-    await addDoc(collection(getFirebaseFirestore(), 'notifications'), {
-      title: `Stability ${record.status}`,
-      message: `${record.batchNumber}: ${record.parameterName} ${record.status}`,
-      module: STABILITY_MODULE_NAME,
-      record_id: record.id,
-      target_roles: ['qa', 'qc', 'cpv'],
-      read: false,
-      created_at: new Date().toISOString(),
-    });
-  } catch { /* optional */ }
-}
-
 export async function createStabilityStudy(
   data: StabilityStudyFormData,
-  actor: StabilityActor,
+  _actor: StabilityActor,
 ): Promise<{ result: StabilityStudyRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
+    if (data.changeReason.trim().length < 5) return { result: null, error: 'Change reason (min 5 characters) is required.' };
     const product = await fetchCpvProductById(data.cpvProductId);
-    if (product?.cpvStatus === 'Inactive') return { result: null, error: 'Inactive CPV product — entry not allowed.' };
-    const batches = await fetchStabilityBatchesForProduct(data.productName, data.cpvProductId);
-    const batchMatch = batches.find((b) => b.batchNumber === data.batchNumber);
-    if (batches.length && !batchMatch) return { result: null, error: 'Batch does not belong to selected product.' };
-    if (batchMatch && ['Cancelled', 'Rejected'].includes(batchMatch.batchStatus)) {
-      return { result: null, error: 'Cancelled or rejected batch — entry not allowed.' };
-    }
-
-    const studyNumber = buildStabilityStudyNumber(data.batchNumber, data.studyType);
-    const existing = await fetchStabilityStudies(1000);
-    const duplicate = existing.find(
-      (s) => s.batchNumber === data.batchNumber
-        && s.studyType === data.studyType
-        && s.storageCondition === data.storageCondition
-        && !s.isDeleted,
-    );
-    if (duplicate) return { result: null, error: 'Stability study already exists for this batch, type and condition.' };
-
-    const payload = {
-      ...data,
-      stabilityStudyNumber: studyNumber,
-      stabilityMonitoringId: studyNumber,
-      studyStatus: 'Ongoing' as const,
-      createdByName: actor.name,
-      updatedByName: actor.name,
-    };
-
-    const created = await createRecord(
-      STABILITY_STUDIES_COLLECTION,
-      payload as Omit<StabilityStudyRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
-    );
-    const result = normalizeStudy(created as unknown as Record<string, unknown>);
-    await logStabilityAudit('create stability study', result.id, actor, null, result, result.stabilityStudyNumber);
-    return { result, error: null };
+    if (product && !isCpvProductOperational(product.cpvStatus)) return { result: null, error: 'Selected CPV product is not operational.' };
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(getFirebaseFunctions(), 'createAdminStabilityStudy');
+    const result = await fn(data);
+    return { result: normalizeStudy(result.data), error: null };
   } catch (e) {
     console.error('createStabilityStudy failed', e);
-    return { result: null, error: 'Failed to create stability study.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to create stability study.') };
   }
 }
 
 export async function updateStabilityStudy(
   id: string,
   data: Partial<StabilityStudyFormData>,
-  actor: StabilityActor,
+  _actor: StabilityActor,
   existing: StabilityStudyRecord,
 ): Promise<{ result: StabilityStudyRecord | null; error: string | null }> {
   try {
-    const updated = await updateRecord(
-      STABILITY_STUDIES_COLLECTION,
-      id,
-      { ...data, updatedByName: actor.name } as Partial<StabilityStudyRecord>,
-      actorCtx(actor),
-    );
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeStudy(updated as unknown as Record<string, unknown>);
-    await logStabilityAudit('edit stability study', id, actor, existing, result, result.stabilityStudyNumber);
-    return { result, error: null };
+    const changeReason = data.changeReason || existing.changeReason;
+    if (!changeReason || changeReason.trim().length < 5) return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(getFirebaseFunctions(), 'updateAdminStabilityStudy');
+    const result = await fn({ ...existing, ...data, id, changeReason });
+    return { result: normalizeStudy(result.data), error: null };
   } catch (e) {
     console.error('updateStabilityStudy failed', e);
-    return { result: null, error: 'Failed to update stability study.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to update stability study.') };
   }
 }
 
 export async function generateStabilitySchedule(
   studyId: string,
   intervals: string[],
-  actor: StabilityActor,
+  _actor: StabilityActor,
+  changeReason = 'Generate stability schedule',
 ): Promise<{ schedules: StabilityScheduleRecord[]; error: string | null }> {
   if (!isFirebaseConfigured()) return { schedules: [], error: 'Firebase is not configured.' };
   try {
-    const study = await fetchStabilityStudyById(studyId);
-    if (!study) return { schedules: [], error: 'Study not found.' };
-
-    const existing = await fetchStabilitySchedules(studyId);
-    if (existing.length) return { schedules: existing, error: null };
-
-    const useIntervals = intervals.length
-      ? intervals
-      : INTERVALS_BY_STUDY_TYPE[study.studyType] || INTERVALS_BY_STUDY_TYPE['Long Term'];
-
-    const created: StabilityScheduleRecord[] = [];
-    for (const interval of useIntervals) {
-      const months = intervalToMonths(interval);
-      const dueDate = addMonthsToDate(study.studyStartDate, months);
-      const scheduleStatus = computeScheduleStatus(dueDate, '', 'Pending');
-      const payload = {
-        studyId,
-        stabilityStudyNumber: study.stabilityStudyNumber,
-        batchNumber: study.batchNumber,
-        studyType: study.studyType,
-        storageCondition: study.storageCondition,
-        interval,
-        samplePullingDueDate: dueDate,
-        actualPullingDate: '',
-        scheduleStatus,
-        resultEntryStatus: 'Pending',
-        createdBy: actor.id,
-        updatedBy: actor.id,
-      };
-      const row = await createRecord(
-        STABILITY_SCHEDULES_COLLECTION,
-        payload as Omit<StabilityScheduleRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-        actorCtx(actor),
-      );
-      created.push(normalizeSchedule(row as unknown as Record<string, unknown>));
-    }
-    await logStabilityAudit('generate schedule', studyId, actor, null, { count: created.length }, study.stabilityStudyNumber);
-    return { schedules: created, error: null };
+    if (changeReason.trim().length < 5) return { schedules: [], error: 'Change reason (min 5 characters) is required.' };
+    const fn = httpsCallable<Record<string, unknown>, { schedules: Record<string, unknown>[] }>(getFirebaseFunctions(), 'generateAdminStabilitySchedule');
+    const result = await fn({ studyId, intervals, changeReason });
+    return { schedules: result.data.schedules.map(normalizeSchedule), error: null };
   } catch (e) {
     console.error('generateStabilitySchedule failed', e);
-    return { schedules: [], error: 'Failed to generate schedule.' };
+    return { schedules: [], error: cfErrorMessage(e, 'Failed to generate schedule.') };
   }
 }
 
 export async function updateSchedulePull(
   scheduleId: string,
   actualPullingDate: string,
-  actor: StabilityActor,
+  _actor: StabilityActor,
+  changeReason = 'Update sample pull',
 ): Promise<{ result: StabilityScheduleRecord | null; error: string | null }> {
   try {
-    const existing = await getRecord<Record<string, unknown>>(STABILITY_SCHEDULES_COLLECTION, scheduleId);
-    if (!existing) return { result: null, error: 'Schedule not found.' };
-    const prev = normalizeSchedule(existing);
-    const scheduleStatus = computeScheduleStatus(prev.samplePullingDueDate, actualPullingDate, prev.resultEntryStatus);
-    const updated = await updateRecord(
-      STABILITY_SCHEDULES_COLLECTION,
-      scheduleId,
-      {
-        actualPullingDate: actualPullingDate,
-        scheduleStatus,
-        updatedBy: actor.id,
-      },
-      actorCtx(actor),
-    );
-    if (!updated) return { result: null, error: 'Update failed.' };
-    const result = normalizeSchedule(updated as unknown as Record<string, unknown>);
-    const action = actualPullingDate ? 'sample pulled' : 'sample missed';
-    await logStabilityAudit(action, scheduleId, actor, prev, result, prev.stabilityStudyNumber);
-    if (result.scheduleStatus === 'Missed') {
-      try {
-        await createAlert({
-          alertType: 'Limit Exceeded',
-          severity: 'High',
-          module: STABILITY_MODULE_NAME,
-          productName: prev.batchNumber,
-          batchNo: prev.batchNumber,
-          parameterName: prev.interval,
-          message: `Sample pulling missed for interval ${prev.interval}`,
-          recordId: scheduleId,
-        }, { id: actor.id, name: actor.name, role: actor.role });
-      } catch { /* optional */ }
-    }
-    return { result, error: null };
+    if (changeReason.trim().length < 5) return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(getFirebaseFunctions(), 'updateAdminStabilityPull');
+    const result = await fn({ scheduleId, actualPullingDate, changeReason });
+    return { result: normalizeSchedule(result.data), error: null };
   } catch (e) {
     console.error('updateSchedulePull failed', e);
-    return { result: null, error: 'Failed to update sample pull.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to update sample pull.') };
   }
 }
 
-export async function refreshScheduleStatuses(actor: StabilityActor): Promise<void> {
-  const schedules = await fetchStabilitySchedules();
-  const today = new Date().toISOString().split('T')[0];
-  for (const s of schedules) {
-    if (s.scheduleStatus === 'Cancelled' || s.scheduleStatus === 'Testing Completed') continue;
-    const newStatus = computeScheduleStatus(s.samplePullingDueDate, s.actualPullingDate, s.resultEntryStatus);
-    if (newStatus !== s.scheduleStatus) {
-      await updateRecord(STABILITY_SCHEDULES_COLLECTION, s.id, { scheduleStatus: newStatus }, actorCtx(actor));
-      if (newStatus === 'Missed' && s.samplePullingDueDate < today) {
-        await logStabilityAudit('sample missed', s.id, actor, s.scheduleStatus, newStatus, s.stabilityStudyNumber);
-      }
-    }
-  }
+export async function refreshScheduleStatuses(_actor: StabilityActor): Promise<void> {
+  if (!isFirebaseConfigured()) return;
+  const fn = httpsCallable(getFirebaseFunctions(), 'refreshAdminStabilitySchedules');
+  await fn({});
 }
 
 export async function createStabilityResult(
   data: StabilityResultFormData,
-  actor: StabilityActor,
+  _actor: StabilityActor,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean },
 ): Promise<{ result: StabilityResultRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
+    if (data.changeReason.trim().length < 5) return { result: null, error: 'Change reason (min 5 characters) is required.' };
     const product = await fetchCpvProductById(data.cpvProductId);
-    if (product?.cpvStatus === 'Inactive') return { result: null, error: 'Inactive CPV product — entry not allowed.' };
-    const batches = await fetchStabilityBatchesForProduct(data.productName, data.cpvProductId);
-    const batchMatch = batches.find((b) => b.batchNumber === data.batchNumber);
-    if (batches.length && !batchMatch) return { result: null, error: 'Batch does not belong to selected product.' };
-
-    const existing = await fetchStabilityResults(1000);
-    const duplicate = existing.find(
-      (r) => r.batchNumber === data.batchNumber
-        && r.pullingInterval === data.pullingInterval
-        && r.parameterCode === data.parameterCode
-        && r.studyType === data.studyType
-        && r.storageCondition === data.storageCondition
-        && !r.isDeleted,
-    );
-    if (duplicate) return { result: null, error: 'Result already exists for this batch, interval and parameter.' };
-
-    const computed = buildStabilityComputedFields(data);
-    const batchResults = existing.filter((r) => r.batchNumber === data.batchNumber && !r.isDeleted);
-    const assaySlope = computeParameterSlope(batchResults, 'Assay');
-    const phSlope = computeParameterSlope(batchResults, 'pH');
-    const ootCount = await countOotIntervals(data.batchNumber, data.parameterName);
-    const riskLevel = evaluateStabilityRisk(
-      { ...data, ...computed },
-      ootCount,
-      { assay: assaySlope, ph: phSlope },
-    );
-    const capaRequired = ootCount >= 2 || computed.status === 'OOS';
-
-    const payload = {
-      ...data,
-      ...computed,
-      stabilityMonitoringId: buildStabilityMonitoringId(data.batchNumber, data.pullingInterval, data.parameterCode),
-      riskLevel,
-      deviationRequired: computed.status === 'OOS' || computed.status === 'OOT',
-      capaRequired,
-      linkedOosNumber: '',
-      linkedDeviationNumber: '',
-      linkedCapaNumber: '',
-      reviewStatus: 'Draft' as const,
-      isLocked: false,
-      attachments: [] as StabilityAttachment[],
-      scheduleId: '',
-      createdByName: actor.name,
-      updatedByName: actor.name,
-    };
-
-    const created = await createRecord(
-      STABILITY_RESULTS_COLLECTION,
-      payload as Omit<StabilityResultRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
-    );
-    let result = normalizeResult(created as unknown as Record<string, unknown>);
-
-    const oosNo = await maybeCreateOos(result, actor);
-    if (oosNo) {
-      const updated = await updateRecord(STABILITY_RESULTS_COLLECTION, result.id, {
-        linkedOosNumber: oosNo,
-        oosRequired: true,
-      }, actorCtx(actor));
-      if (updated) result = normalizeResult(updated as unknown as Record<string, unknown>);
-      await logStabilityAudit('OOS auto-created', result.id, actor, null, oosNo, result.stabilityMonitoringId);
-    }
-
-    if (computed.status === 'OOT') {
-      await maybeCreateAlert(result, actor);
-      await logStabilityAudit('OOT alert created', result.id, actor, null, result.status, result.stabilityMonitoringId);
-    }
-    if (capaRequired) await logStabilityAudit('CAPA suggested', result.id, actor, null, { ootCount }, result.stabilityMonitoringId);
-
-    await logStabilityAudit('result entry', result.id, actor, null, result, result.stabilityMonitoringId);
-    await logStabilityAudit('status calculation', result.id, actor, null, computed.status, result.stabilityMonitoringId);
-    await logStabilityAudit('risk calculation', result.id, actor, null, riskLevel, result.stabilityMonitoringId);
-
-    if (data.studyId && data.pullingInterval) {
-      const schedules = await fetchStabilitySchedules(data.studyId);
-      const sched = schedules.find((s) => s.interval === data.pullingInterval);
-      if (sched) {
-        await updateRecord(STABILITY_SCHEDULES_COLLECTION, sched.id, {
-          resultEntryStatus: 'Completed',
-          scheduleStatus: 'Testing Completed',
-        }, actorCtx(actor));
-      }
-    }
-
-    return { result, error: null };
+    if (product && !isCpvProductOperational(product.cpvStatus)) return { result: null, error: 'Selected CPV product is not operational.' };
+    if (qaOverride && options?.esignConfirmed !== true) return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(getFirebaseFunctions(), 'createAdminStabilityResult');
+    const result = await fn({ ...data, qaOverride, esignConfirmed: options?.esignConfirmed === true });
+    return { result: normalizeResult(result.data), error: null };
   } catch (e) {
     console.error('createStabilityResult failed', e);
-    return { result: null, error: 'Failed to create stability result.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to create stability result.') };
   }
 }
 
 export async function updateStabilityResult(
   id: string,
   data: Partial<StabilityResultFormData>,
-  actor: StabilityActor,
+  _actor: StabilityActor,
   existing: StabilityResultRecord,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean },
 ): Promise<{ result: StabilityResultRecord | null; error: string | null }> {
-  if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Approved stability result is locked. QA override required.' };
-  }
   try {
-    const merged = { ...existing, ...data };
-    const computed = buildStabilityComputedFields(merged);
-    const batchResults = await fetchStabilityResults(1000);
-    const batchOnly = batchResults.filter((r) => r.batchNumber === merged.batchNumber && !r.isDeleted);
-    const assaySlope = computeParameterSlope(batchOnly, 'Assay');
-    const phSlope = computeParameterSlope(batchOnly, 'pH');
-    const ootCount = await countOotIntervals(merged.batchNumber, merged.parameterName);
-    const riskLevel = evaluateStabilityRisk(
-      { ...merged, ...computed },
-      ootCount,
-      { assay: assaySlope, ph: phSlope },
-    );
-    const updates = {
-      ...data,
-      ...computed,
-      riskLevel,
-      capaRequired: ootCount >= 2 || computed.status === 'OOS',
-      updatedByName: actor.name,
-    };
-    const updated = await updateRecord(STABILITY_RESULTS_COLLECTION, id, updates as Partial<StabilityResultRecord>, actorCtx(actor));
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeResult(updated as unknown as Record<string, unknown>);
-    await logStabilityAudit(qaOverride ? 'QA override' : 'edit stability result', id, actor, existing, result, result.stabilityMonitoringId);
-    return { result, error: null };
+    const changeReason = data.changeReason || existing.changeReason;
+    if (!changeReason || changeReason.trim().length < 5) return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) return { result: null, error: 'Approved stability result is locked. QA override required.' };
+    if (qaOverride && options?.esignConfirmed !== true) return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(getFirebaseFunctions(), 'updateAdminStabilityResult');
+    const result = await fn({ ...existing, ...data, id, changeReason, qaOverride, esignConfirmed: options?.esignConfirmed === true });
+    return { result: normalizeResult(result.data), error: null };
   } catch (e) {
     console.error('updateStabilityResult failed', e);
-    return { result: null, error: 'Failed to update stability result.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to update stability result.') };
   }
 }
 
-export async function reviewStabilityResult(id: string, actor: StabilityActor, existing: StabilityResultRecord) {
-  const updated = await updateRecord(STABILITY_RESULTS_COLLECTION, id, {
-    reviewStatus: 'Under Review',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeResult(updated as unknown as Record<string, unknown>);
-  await logStabilityAudit('review stability result', id, actor, existing.reviewStatus, 'Under Review', result.stabilityMonitoringId);
-  return { result, error: null };
+export async function reviewStabilityResult(id: string, _actor: StabilityActor, changeReason = 'Submitted for QA review') {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(getFirebaseFunctions(), 'reviewAdminStabilityResult');
+    const result = await fn({ id, changeReason });
+    return { result: normalizeResult(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to submit stability review.') };
+  }
 }
 
-export async function approveStabilityResult(id: string, actor: StabilityActor, existing: StabilityResultRecord) {
-  const updated = await updateRecord(STABILITY_RESULTS_COLLECTION, id, {
-    reviewStatus: 'Approved',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    isLocked: true,
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeResult(updated as unknown as Record<string, unknown>);
-  await logStabilityAudit('approve stability result', id, actor, existing.reviewStatus, 'Approved', result.stabilityMonitoringId);
-  return { result, error: null };
+export async function approveStabilityResult(
+  id: string,
+  _actor: StabilityActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  if (!changeReason || changeReason.trim().length < 5) return { result: null, error: 'Change reason (min 5 characters) is required.' };
+  if (options?.esignConfirmed !== true) return { result: null, error: 'Electronic signature confirmation required.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(getFirebaseFunctions(), 'approveAdminStabilityResult');
+    const result = await fn({ id, changeReason, esignConfirmed: true });
+    return { result: normalizeResult(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to approve stability result.') };
+  }
 }
 
 export async function bulkCreateStabilityResults(
   rows: StabilityResultFormData[],
-  actor: StabilityActor,
-  qaOverride = false,
+  _actor: StabilityActor,
+  changeReason = 'Bulk stability result entry',
 ): Promise<{ created: number; errors: string[] }> {
-  let created = 0;
-  const errors: string[] = [];
-  for (const row of rows) {
-    const { error } = await createStabilityResult(row, actor, qaOverride);
-    if (error) errors.push(`${row.parameterName}: ${error}`);
-    else created += 1;
+  if (!isFirebaseConfigured()) return { created: 0, errors: ['Firebase is not configured.'] };
+  if (!changeReason || changeReason.trim().length < 5) return { created: 0, errors: ['Change reason (min 5 characters) is required.'] };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, { created: number; errors: string[] }>(getFirebaseFunctions(), 'bulkCreateAdminStabilityResults');
+    return (await fn({ rows, changeReason })).data;
+  } catch (e) {
+    return { created: 0, errors: [cfErrorMessage(e, 'Bulk create failed.')] };
   }
-  if (created) await logStabilityAudit('bulk stability result entry', 'bulk', actor, null, { count: created });
-  return { created, errors };
 }
 
 export async function fetchStabilityAuditTrail(recordId: string) {
@@ -779,29 +509,47 @@ export async function fetchStabilityAuditTrail(recordId: string) {
 }
 
 export async function logStabilityExport(actor: StabilityActor, count: number) {
-  await logStabilityAudit('export stability list', 'export', actor, null, { count });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminStabilityExport');
+    await fn({ count, format: 'CSV', changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logStabilityExport CF failed (non-blocking)', e);
+  }
 }
 
 export async function updateStabilityAttachments(
   id: string,
   attachments: StabilityAttachment[],
-  actor: StabilityActor,
+  _actor: StabilityActor,
   existing: StabilityResultRecord,
+  changeReason = 'Update stability attachments',
 ) {
   try {
-    const updated = await updateRecord(
-      STABILITY_RESULTS_COLLECTION,
-      id,
-      { attachments, updatedByName: actor.name },
-      actorCtx(actor),
-    );
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeResult(updated as unknown as Record<string, unknown>);
-    await logStabilityAudit('attachment upload/delete', id, actor, existing.attachments, attachments, result.stabilityMonitoringId);
-    return { result, error: null };
+    if (changeReason.trim().length < 5) return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(getFirebaseFunctions(), 'updateAdminStabilityAttachments');
+    const result = await fn({ id, attachments, changeReason, existing });
+    return { result: normalizeResult(result.data), error: null };
   } catch (e) {
     console.error('updateStabilityAttachments failed', e);
-    return { result: null, error: 'Failed to update attachments.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to update attachments.') };
+  }
+}
+
+export async function softDeleteStabilityResult(
+  id: string,
+  _actor: StabilityActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+): Promise<{ error: string | null }> {
+  if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  if (!changeReason || changeReason.trim().length < 5) return { error: 'Change reason (min 5 characters) is required.' };
+  if (options?.esignConfirmed !== true) return { error: 'Electronic signature confirmation required.' };
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminStabilityResult');
+    await fn({ id, changeReason, esignConfirmed: true });
+    return { error: null };
+  } catch (e) {
+    return { error: cfErrorMessage(e, 'Failed to archive stability result.') };
   }
 }
 

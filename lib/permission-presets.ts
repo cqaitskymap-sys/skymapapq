@@ -59,7 +59,7 @@ function setFullModule(
 function setQaModules(matrix: PermissionMatrixData) {
   const mods: (typeof ROLE_MATRIX_MODULES)[number][] = [
     'PQR', 'CPV', 'Deviation', 'OOS', 'CAPA', 'Change Control', 'Risk Management',
-    'Stability', 'Complaint', 'Recall', 'DMS', 'Training', 'Audit',
+    'Stability', 'Complaint', 'Recall', 'DMS', 'Audit',
   ];
   for (const mod of mods) {
     setModule(matrix, mod, [

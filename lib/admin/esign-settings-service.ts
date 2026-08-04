@@ -1,8 +1,9 @@
-import { writeAuditTrail, createAuditLog } from '@/lib/audit-trail';
 import {
-  getAdminRecords, createAdminRecord, updateAdminRecord,
-  checkUniqueField, logAuditEvent,
-} from './admin-service';
+  collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
+  type Unsubscribe,
+} from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import { ADMIN_COLLECTIONS } from './constants';
 import type { EsignSettings, EsignSettingFormData } from './schemas';
 
@@ -11,53 +12,53 @@ export interface EsignSettingAuditMeta {
   userName: string;
 }
 
-async function logEsignSettingAudit(
-  action: string,
-  recordId: string,
-  meta: EsignSettingAuditMeta,
-  oldValue: unknown,
-  newValue: unknown,
-) {
-  await logAuditEvent({
-    userId: meta.userId,
-    userName: meta.userName,
-    module: 'E-Signature Settings',
-    recordId,
-    action,
-    oldValue: typeof oldValue === 'string' ? oldValue : JSON.stringify(oldValue ?? ''),
-    newValue: typeof newValue === 'string' ? newValue : JSON.stringify(newValue ?? ''),
-    reason: '',
-    ipAddress: 'client',
-    device: typeof navigator !== 'undefined' ? navigator.userAgent : 'browser',
-    status: 'Success',
-  });
+function callableErrorMessage(error: unknown, fallback: string): string {
+  const err = error as { message?: string };
+  return (err.message || fallback)
+    .replace(/^Firebase:\s*/i, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim() || fallback;
+}
 
-  await writeAuditTrail({
-    collectionName: ADMIN_COLLECTIONS.esignSettings,
-    documentId: recordId,
-    action,
-    oldValue,
-    newValue,
-    userId: meta.userId,
-    userName: meta.userName,
-    moduleName: 'E-Signature Settings',
-  });
+function parseCsvList(value?: string): string[] {
+  if (!value?.trim()) return [];
+  return value.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
+}
 
-  await createAuditLog({
-    moduleName: 'Admin',
-    collectionName: ADMIN_COLLECTIONS.esignSettings,
-    recordId,
-    actionType: action.includes('ACTIVATE') ? 'Update' : action.includes('CREATE') ? 'Create' : 'Update',
-    actionDescription: action,
-    user: { id: meta.userId, name: meta.userName },
-    status: 'Success',
-    oldValue,
-    newValue,
-  });
+function normalizeToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function tokensMatch(a: string, b: string): boolean {
+  const na = normalizeToken(a);
+  const nb = normalizeToken(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const wa = new Set(na.split(' ').filter(Boolean));
+  const wb = nb.split(' ').filter(Boolean);
+  const overlap = wb.filter((w) => wa.has(w)).length;
+  return overlap >= Math.min(2, wb.length) && overlap / Math.max(wa.size, wb.length) >= 0.5;
+}
+
+export function settingMatchesModuleAction(
+  setting: EsignSettings,
+  moduleName: string,
+  actionType: string,
+): boolean {
+  const modules = [setting.moduleName, ...(setting.moduleAliases || [])];
+  const actions = [setting.actionType, ...(setting.actionAliases || [])];
+  return modules.some((m) => tokensMatch(m, moduleName))
+    && actions.some((a) => tokensMatch(a, actionType));
 }
 
 export function buildEsignSettingId(code: string): string {
   return `ESIGN-${code.toUpperCase().replace(/\s+/g, '-')}`;
+}
+
+function defaultStatementText(meaning?: string): string {
+  if (!meaning) return 'By signing electronically, I confirm this action is accurate and attributable to me.';
+  return `By signing electronically, I confirm: ${meaning}`;
 }
 
 export function normalizeEsignSetting(s: EsignSettings): EsignSettings {
@@ -65,6 +66,14 @@ export function normalizeEsignSetting(s: EsignSettings): EsignSettings {
   return {
     ...s,
     esignSettingId: s.esignSettingId || buildEsignSettingId(s.settingCode || 'SETTING'),
+    moduleAliases: Array.isArray(s.moduleAliases) ? s.moduleAliases : [],
+    actionAliases: Array.isArray(s.actionAliases) ? s.actionAliases : [],
+    allowedMeanings: Array.isArray(s.allowedMeanings) ? s.allowedMeanings : [],
+    allowedRoles: Array.isArray(s.allowedRoles) ? s.allowedRoles : [],
+    allowedDepartments: Array.isArray(s.allowedDepartments) ? s.allowedDepartments : [],
+    authenticationMethods: Array.isArray(s.authenticationMethods) && s.authenticationMethods.length
+      ? s.authenticationMethods
+      : ['Password Confirmation'],
     requirePasswordReAuthentication: s.requirePasswordReAuthentication ?? s.requirePasswordConfirmation ?? true,
     requirePasswordConfirmation: s.requirePasswordReAuthentication ?? s.requirePasswordConfirmation ?? true,
     requireCommentReason: s.requireCommentReason ?? s.requireReason ?? true,
@@ -83,38 +92,87 @@ export function normalizeEsignSetting(s: EsignSettings): EsignSettings {
   };
 }
 
-function defaultStatementText(meaning?: string): string {
-  if (!meaning) return 'By signing electronically, I confirm this action is accurate and attributable to me.';
-  return `By signing electronically, I confirm: ${meaning}`;
-}
-
 export function isEsignSettingActive(s: EsignSettings): boolean {
   return s.status === 'Active' && !s.isDeleted;
 }
 
 export async function fetchEsignSettings(): Promise<EsignSettings[]> {
+  if (!isFirebaseConfigured()) return [];
   try {
-    const records = await getAdminRecords<EsignSettings>(ADMIN_COLLECTIONS.esignSettings);
-    return records.filter((s) => !s.isDeleted).map(normalizeEsignSetting);
+    const snap = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.esignSettings),
+      orderBy('updatedAt', 'desc'),
+      limit(400),
+    ));
+    return snap.docs
+      .map((d) => normalizeEsignSetting({ id: d.id, ...d.data() } as EsignSettings))
+      .filter((s) => !s.isDeleted);
   } catch {
-    return [];
+    try {
+      const snap = await getDocs(collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.esignSettings));
+      return snap.docs
+        .map((d) => normalizeEsignSetting({ id: d.id, ...d.data() } as EsignSettings))
+        .filter((s) => !s.isDeleted)
+        .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    } catch {
+      return [];
+    }
   }
 }
 
+export function subscribeToEsignSettings(
+  onData: (rows: EsignSettings[]) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
+  if (!isFirebaseConfigured()) {
+    onData([]);
+    return () => undefined;
+  }
+  return onSnapshot(
+    query(collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.esignSettings), limit(400)),
+    (snapshot) => {
+      const rows = snapshot.docs
+        .map((d) => normalizeEsignSetting({ id: d.id, ...d.data() } as EsignSettings))
+        .filter((s) => !s.isDeleted)
+        .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+      onData(rows);
+    },
+    (error) => onError?.(new Error(error.message)),
+  );
+}
+
 export async function fetchEsignSettingById(id: string): Promise<EsignSettings | null> {
-  const all = await fetchEsignSettings();
-  return all.find((s) => s.id === id) ?? null;
+  if (!isFirebaseConfigured() || !id) return null;
+  try {
+    const snap = await getDoc(doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.esignSettings, id));
+    if (!snap.exists() || snap.data().isDeleted === true) return null;
+    return normalizeEsignSetting({ id: snap.id, ...snap.data() } as EsignSettings);
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchActiveEsignSetting(
   moduleName: string,
   actionType: string,
 ): Promise<EsignSettings | null> {
+  // Prefer server resolver (alias-aware) when available
+  try {
+    const fn = httpsCallable<
+      { moduleName: string; actionType: string },
+      { setting: (EsignSettings & { id?: string }) | null }
+    >(getFirebaseFunctions(), 'resolveAdminEsignSetting');
+    const result = await fn({ moduleName, actionType });
+    if (result.data?.setting) {
+      return normalizeEsignSetting(result.data.setting as EsignSettings);
+    }
+  } catch {
+    // fall through to client match
+  }
+
   const settings = await fetchEsignSettings();
   return settings.find((s) =>
-    isEsignSettingActive(s) &&
-    s.moduleName === moduleName &&
-    s.actionType === actionType,
+    isEsignSettingActive(s) && settingMatchesModuleAction(s, moduleName, actionType),
   ) ?? null;
 }
 
@@ -125,10 +183,10 @@ export async function hasDuplicateActiveEsignSetting(
 ): Promise<boolean> {
   const settings = await fetchEsignSettings();
   return settings.some((s) =>
-    isEsignSettingActive(s) &&
-    s.moduleName === moduleName &&
-    s.actionType === actionType &&
-    s.id !== excludeId,
+    isEsignSettingActive(s)
+    && s.moduleName === moduleName
+    && s.actionType === actionType
+    && s.id !== excludeId,
   );
 }
 
@@ -139,36 +197,35 @@ export function getEsignSettingsSummary(settings: EsignSettings[]) {
     inactive: settings.filter((s) => s.status === 'Inactive').length,
     passwordRequired: settings.filter((s) => s.requirePasswordReAuthentication).length,
     commentRequired: settings.filter((s) => s.requireCommentReason).length,
+    roleGated: settings.filter((s) => s.requireRoleVerification).length,
+    finalApproval: settings.filter((s) => s.requireFinalApprovalSignature).length,
   };
 }
 
-function formToPayload(data: EsignSettingFormData, meta: EsignSettingAuditMeta, status = 'Active') {
-  const esignSettingId = buildEsignSettingId(data.settingCode);
-  const statement = data.signatureStatementText || defaultStatementText(data.signatureMeaning);
+function formToCallablePayload(data: EsignSettingFormData, changeReason: string) {
   return {
-    esignSettingId,
     settingCode: data.settingCode,
     moduleName: data.moduleName,
     actionType: data.actionType,
+    moduleAliases: parseCsvList(data.moduleAliases),
+    actionAliases: parseCsvList(data.actionAliases),
     signatureMeaning: data.signatureMeaning,
     requirePasswordReAuthentication: data.requirePasswordReAuthentication,
-    requirePasswordConfirmation: data.requirePasswordReAuthentication,
     requireCommentReason: data.requireCommentReason,
-    requireReason: data.requireCommentReason,
     requireRoleVerification: data.requireRoleVerification,
     requireDepartmentVerification: data.requireDepartmentVerification,
     requireActiveSession: data.requireActiveSession,
     sessionTimeoutMinutes: data.sessionTimeoutMinutes,
-    sessionTimeout: data.sessionTimeoutMinutes,
     maxFailedEsignAttempts: data.maxFailedEsignAttempts,
     lockAccountAfterFailedAttempts: data.lockAccountAfterFailedAttempts,
     allowDelegatedSignature: data.allowDelegatedSignature,
     requireFinalApprovalSignature: data.requireFinalApprovalSignature,
     showSignatureStatement: data.showSignatureStatement,
-    signatureStatementText: statement,
+    signatureStatementText: data.signatureStatementText,
+    allowedRoles: parseCsvList(data.allowedRoles),
+    allowedDepartments: parseCsvList(data.allowedDepartments),
     remarks: data.remarks,
-    status,
-    updatedBy: meta.userId,
+    changeReason: changeReason || data.changeReason || 'E-signature policy change',
   };
 }
 
@@ -177,57 +234,37 @@ export async function createEsignSetting(
   meta: EsignSettingAuditMeta,
 ): Promise<{ setting: EsignSettings | null; error: string | null }> {
   try {
-    const unique = await checkUniqueField(ADMIN_COLLECTIONS.esignSettings, 'settingCode', data.settingCode);
-    if (!unique) return { setting: null, error: 'Setting code already exists' };
-
-    if (await hasDuplicateActiveEsignSetting(data.moduleName, data.actionType)) {
-      return { setting: null, error: 'An active setting already exists for this module and action' };
+    const reason = data.changeReason || `Created by ${meta.userName}`;
+    if (reason.trim().length < 5) {
+      return { setting: null, error: 'Change reason is required (min 5 characters)' };
     }
-
-    const payload = { ...formToPayload(data, meta), createdBy: meta.userId };
-    const created = await createAdminRecord(
-      ADMIN_COLLECTIONS.esignSettings,
-      payload as Omit<EsignSettings, 'id'>,
-      { userId: meta.userId, userName: meta.userName, module: 'E-Signature Settings', action: 'CREATE_ESIGN_SETTING' },
-    );
-
-    await logEsignSettingAudit('CREATE_ESIGN_SETTING', created.id || payload.esignSettingId, meta, null, payload);
-    return { setting: normalizeEsignSetting(created as EsignSettings), error: null };
+    const fn = httpsCallable(getFirebaseFunctions(), 'createAdminEsignSetting');
+    const result = await fn(formToCallablePayload(data, reason));
+    const id = (result.data as { id?: string })?.id;
+    const setting = id ? await fetchEsignSettingById(id) : null;
+    return { setting, error: null };
   } catch (e) {
-    return { setting: null, error: (e as Error).message };
+    return { setting: null, error: callableErrorMessage(e, 'Unable to create e-signature setting') };
   }
 }
 
 export async function updateEsignSetting(
   id: string,
   data: EsignSettingFormData,
-  existing: EsignSettings,
+  _existing: EsignSettings,
   meta: EsignSettingAuditMeta,
 ): Promise<{ setting: EsignSettings | null; error: string | null }> {
   try {
-    if (data.settingCode !== existing.settingCode) {
-      const unique = await checkUniqueField(ADMIN_COLLECTIONS.esignSettings, 'settingCode', data.settingCode, id);
-      if (!unique) return { setting: null, error: 'Setting code already exists' };
+    const reason = data.changeReason || `Updated by ${meta.userName}`;
+    if (reason.trim().length < 5) {
+      return { setting: null, error: 'Change reason is required (min 5 characters)' };
     }
-
-    if (existing.status === 'Active' && await hasDuplicateActiveEsignSetting(data.moduleName, data.actionType, id)) {
-      return { setting: null, error: 'An active setting already exists for this module and action' };
-    }
-
-    const updates = formToPayload(data, meta, existing.status);
-    delete (updates as { createdBy?: string }).createdBy;
-
-    const updated = await updateAdminRecord(ADMIN_COLLECTIONS.esignSettings, id, updates, {
-      userId: meta.userId,
-      userName: meta.userName,
-      module: 'E-Signature Settings',
-      oldValue: JSON.stringify(existing),
-    });
-
-    await logEsignSettingAudit('EDIT_ESIGN_SETTING', id, meta, existing, updates);
-    return { setting: normalizeEsignSetting(updated as EsignSettings), error: null };
+    const fn = httpsCallable(getFirebaseFunctions(), 'updateAdminEsignSetting');
+    await fn({ id, ...formToCallablePayload(data, reason) });
+    const setting = await fetchEsignSettingById(id);
+    return { setting, error: null };
   } catch (e) {
-    return { setting: null, error: (e as Error).message };
+    return { setting: null, error: callableErrorMessage(e, 'Unable to update e-signature setting') };
   }
 }
 
@@ -236,35 +273,43 @@ export async function setEsignSettingStatus(
   setting: EsignSettings,
   status: 'Active' | 'Inactive',
   meta: EsignSettingAuditMeta,
+  changeReason = '',
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    if (status === 'Active' && await hasDuplicateActiveEsignSetting(setting.moduleName, setting.actionType, id)) {
-      return { success: false, error: 'Another active setting exists for this module and action' };
-    }
-
-    await updateAdminRecord(ADMIN_COLLECTIONS.esignSettings, id, { status }, {
-      userId: meta.userId,
-      userName: meta.userName,
-      module: 'E-Signature Settings',
-      oldValue: JSON.stringify(setting),
-    });
-
-    const action = status === 'Active' ? 'ACTIVATE_ESIGN_SETTING' : 'DEACTIVATE_ESIGN_SETTING';
-    await logEsignSettingAudit(action, id, meta, setting.status, status);
+    const reason = changeReason || `${status === 'Active' ? 'Activated' : 'Deactivated'} by ${meta.userName}`;
+    const fn = httpsCallable(getFirebaseFunctions(), 'setAdminEsignSettingStatus');
+    await fn({ id, status, changeReason: reason });
     return { success: true };
   } catch (e) {
-    return { success: false, error: (e as Error).message };
+    return { success: false, error: callableErrorMessage(e, 'Unable to update status') };
+  }
+}
+
+export async function softDeleteEsignSetting(
+  id: string,
+  meta: EsignSettingAuditMeta,
+  changeReason = '',
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const reason = changeReason || `Soft-deleted by ${meta.userName}`;
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminEsignSetting');
+    await fn({ id, changeReason: reason });
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: callableErrorMessage(e, 'Unable to delete setting') };
   }
 }
 
 export function exportEsignSettingsCsv(settings: EsignSettings[]): string {
   const headers = [
-    'Setting Code', 'Module', 'Action', 'Signature Meaning', 'Password Required',
-    'Comment Required', 'Role Verification', 'Session Timeout', 'Max Failed Attempts',
-    'Lock After Failures', 'Status',
+    'Setting Code', 'Module', 'Action', 'Module Aliases', 'Action Aliases', 'Signature Meaning',
+    'Password Required', 'Comment Required', 'Role Verification', 'Session Timeout',
+    'Max Failed Attempts', 'Lock After Failures', 'Status',
   ];
   const rows = settings.map((s) => [
-    s.settingCode, s.moduleName, s.actionType, s.signatureMeaning,
+    s.settingCode, s.moduleName, s.actionType,
+    (s.moduleAliases || []).join('|'), (s.actionAliases || []).join('|'),
+    s.signatureMeaning,
     s.requirePasswordReAuthentication ? 'Yes' : 'No',
     s.requireCommentReason ? 'Yes' : 'No',
     s.requireRoleVerification ? 'Yes' : 'No',
@@ -273,134 +318,58 @@ export function exportEsignSettingsCsv(settings: EsignSettings[]): string {
     s.lockAccountAfterFailedAttempts ? 'Yes' : 'No',
     s.status,
   ].map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','));
-  return [headers.join(','), ...rows].join('\n');
+  return `\uFEFF${[headers.join(','), ...rows].join('\n')}`;
 }
 
 export async function logEsignSettingsExport(meta: EsignSettingAuditMeta, count: number): Promise<void> {
-  await logEsignSettingAudit('EXPORT_ESIGN_SETTINGS', 'export', meta, null, { count });
-  await createAuditLog({
-    moduleName: 'Admin',
-    collectionName: ADMIN_COLLECTIONS.esignSettings,
-    recordId: 'export',
-    actionType: 'Export',
-    actionDescription: `Exported ${count} e-signature settings`,
-    user: { id: meta.userId, name: meta.userName },
-    status: 'Success',
-  });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminEsignSettingsExport');
+    await fn({ format: 'Excel', count, userName: meta.userName });
+  } catch (error) {
+    console.error('ESIGN_SETTINGS_FAILURE: logEsignSettingsExport', error);
+  }
 }
-
-const DEFAULT_ESIGN_SETTINGS: Array<EsignSettingFormData & { settingCode: string }> = [
-  {
-    settingCode: 'PQR-APPROVE',
-    moduleName: 'PQR',
-    actionType: 'Approved By',
-    signatureMeaning: 'I approve this record',
-    requirePasswordReAuthentication: true,
-    requireCommentReason: true,
-    requireRoleVerification: true,
-    requireDepartmentVerification: false,
-    requireActiveSession: true,
-    sessionTimeoutMinutes: 15,
-    maxFailedEsignAttempts: 3,
-    lockAccountAfterFailedAttempts: true,
-    allowDelegatedSignature: false,
-    requireFinalApprovalSignature: true,
-    showSignatureStatement: true,
-    signatureStatementText: '',
-    remarks: 'Default PQR approval e-signature',
-  },
-  {
-    settingCode: 'DEV-APPROVE',
-    moduleName: 'Deviation',
-    actionType: 'Approved By',
-    signatureMeaning: 'I approve this record',
-    requirePasswordReAuthentication: true,
-    requireCommentReason: true,
-    requireRoleVerification: true,
-    requireDepartmentVerification: false,
-    requireActiveSession: true,
-    sessionTimeoutMinutes: 15,
-    maxFailedEsignAttempts: 3,
-    lockAccountAfterFailedAttempts: true,
-    allowDelegatedSignature: false,
-    requireFinalApprovalSignature: false,
-    showSignatureStatement: true,
-    signatureStatementText: '',
-    remarks: '',
-  },
-  {
-    settingCode: 'OOS-CLOSE',
-    moduleName: 'OOS',
-    actionType: 'Closed By',
-    signatureMeaning: 'I close this record',
-    requirePasswordReAuthentication: true,
-    requireCommentReason: true,
-    requireRoleVerification: true,
-    requireDepartmentVerification: false,
-    requireActiveSession: true,
-    sessionTimeoutMinutes: 15,
-    maxFailedEsignAttempts: 3,
-    lockAccountAfterFailedAttempts: true,
-    allowDelegatedSignature: false,
-    requireFinalApprovalSignature: false,
-    showSignatureStatement: true,
-    signatureStatementText: '',
-    remarks: '',
-  },
-  {
-    settingCode: 'CAPA-APPROVE',
-    moduleName: 'CAPA',
-    actionType: 'Approved By',
-    signatureMeaning: 'I approve this record',
-    requirePasswordReAuthentication: true,
-    requireCommentReason: true,
-    requireRoleVerification: true,
-    requireDepartmentVerification: false,
-    requireActiveSession: true,
-    sessionTimeoutMinutes: 15,
-    maxFailedEsignAttempts: 3,
-    lockAccountAfterFailedAttempts: true,
-    allowDelegatedSignature: false,
-    requireFinalApprovalSignature: false,
-    showSignatureStatement: true,
-    signatureStatementText: '',
-    remarks: '',
-  },
-  {
-    settingCode: 'EBMR-RELEASE',
-    moduleName: 'eBMR',
-    actionType: 'Batch Released By',
-    signatureMeaning: 'I release this batch',
-    requirePasswordReAuthentication: true,
-    requireCommentReason: true,
-    requireRoleVerification: true,
-    requireDepartmentVerification: true,
-    requireActiveSession: true,
-    sessionTimeoutMinutes: 10,
-    maxFailedEsignAttempts: 3,
-    lockAccountAfterFailedAttempts: true,
-    allowDelegatedSignature: false,
-    requireFinalApprovalSignature: true,
-    showSignatureStatement: true,
-    signatureStatementText: '',
-    remarks: '',
-  },
-];
 
 export async function seedDefaultEsignSettings(
   meta: EsignSettingAuditMeta,
 ): Promise<{ created: number; skipped: number }> {
-  let created = 0;
-  let skipped = 0;
-  for (const def of DEFAULT_ESIGN_SETTINGS) {
-    const exists = await checkUniqueField(ADMIN_COLLECTIONS.esignSettings, 'settingCode', def.settingCode);
-    if (!exists) {
-      skipped += 1;
-      continue;
-    }
-    const result = await createEsignSetting(def, meta);
-    if (result.setting) created += 1;
-    else skipped += 1;
+  try {
+    const fn = httpsCallable<
+      { changeReason: string },
+      { created: number; skipped: number }
+    >(getFirebaseFunctions(), 'seedAdminEsignSettings');
+    const result = await fn({ changeReason: `Seeded by ${meta.userName}` });
+    return { created: result.data.created || 0, skipped: result.data.skipped || 0 };
+  } catch (e) {
+    console.error('seedDefaultEsignSettings failed', e);
+    return { created: 0, skipped: 0 };
   }
-  return { created, skipped };
+}
+
+/** Used by form defaults */
+export function emptyEsignSettingForm(): EsignSettingFormData {
+  return {
+    settingCode: '',
+    moduleName: 'CAPA',
+    actionType: 'Approved By',
+    moduleAliases: '',
+    actionAliases: '',
+    signatureMeaning: 'I approve this record',
+    requirePasswordReAuthentication: true,
+    requireCommentReason: true,
+    requireRoleVerification: true,
+    requireDepartmentVerification: false,
+    requireActiveSession: true,
+    sessionTimeoutMinutes: 15,
+    maxFailedEsignAttempts: 3,
+    lockAccountAfterFailedAttempts: true,
+    allowDelegatedSignature: false,
+    requireFinalApprovalSignature: false,
+    showSignatureStatement: true,
+    signatureStatementText: '',
+    allowedRoles: '',
+    allowedDepartments: '',
+    remarks: '',
+    changeReason: '',
+  };
 }

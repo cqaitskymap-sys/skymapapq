@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Eye, Loader2, RefreshCw, Send } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/auth-context';
@@ -20,7 +21,7 @@ import {
   logPqrApprovalView,
   submitPqrForApproval,
 } from '@/lib/pqr-approval-service';
-import type { PqrOption } from '@/lib/pqr-batch-review-records';
+import { PQR_SECTION_FLOW, pqrSectionHref, type PqrOption } from '@/lib/pqr-batch-review-records';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ResponsiveDataTable } from '@/components/cpv/product-master/responsive-data-table';
 import { KpiCard } from '@/components/cpv/cpv-ui';
@@ -43,6 +44,9 @@ export function PqrApprovalPage() {
   const { user, profile } = useAuth();
   const role = profile?.role;
   const canSubmit = canSubmitPqrApproval(role);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const pqrIdParam = searchParams.get('pqrId') || '';
 
   const [approvals, setApprovals] = useState<PqrApprovalRecord[]>([]);
   const [history, setHistory] = useState<PqrApprovalHistoryEntry[]>([]);
@@ -65,6 +69,12 @@ export function PqrApprovalPage() {
     email: profile?.email || user?.email || '',
   }), [user?.uid, user?.email, profile?.full_name, profile?.email, role]);
 
+  useEffect(() => {
+    if (pqrIdParam) {
+      router.replace(`/pqr/${encodeURIComponent(pqrIdParam)}/approval`);
+    }
+  }, [pqrIdParam, router]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -79,10 +89,10 @@ export function PqrApprovalPage() {
       setHistory(hist);
       setPqrs(opts);
       setCounts(computeDashboardCounts(all, hist, actor.id, role));
-      setSubmitPqrId((currentId) => currentId || opts[0]?.id || '');
+      setSubmitPqrId((currentId) => currentId || pqrIdParam || opts[0]?.id || '');
     } catch { setError('Failed to load approval data.'); }
     finally { setLoading(false); }
-  }, [actor.id, role]);
+  }, [actor.id, role, pqrIdParam]);
 
   useEffect(() => { void load(); void logPqrApprovalView(actor); }, [load, actor]);
 
@@ -157,6 +167,14 @@ export function PqrApprovalPage() {
     await load();
   };
 
+  if (pqrIdParam) {
+    return (
+      <PqrApprovalAccessGuard>
+        <div className="p-4 sm:p-6"><LoadingSkeleton rows={2} /></div>
+      </PqrApprovalAccessGuard>
+    );
+  }
+
   if (loading) return <PqrApprovalAccessGuard><div className="p-4 sm:p-6"><LoadingSkeleton rows={3} /></div></PqrApprovalAccessGuard>;
   if (error) return <PqrApprovalAccessGuard><div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={() => void load()} /></div></PqrApprovalAccessGuard>;
 
@@ -177,6 +195,18 @@ export function PqrApprovalPage() {
             </Button>
           )}
         />
+
+        <div className="flex flex-wrap gap-2 text-sm">
+          {PQR_SECTION_FLOW.filter((s) => !['dashboard', 'create'].includes(s.key)).map((s) => (
+            <Link
+              key={s.key}
+              href={pqrSectionHref(s.href, submitPqrId || undefined)}
+              className={`rounded-md border px-2.5 py-1 ${s.key === 'approval' ? 'bg-blue-600 text-white border-blue-600' : 'hover:bg-slate-50'}`}
+            >
+              {s.label}
+            </Link>
+          ))}
+        </div>
 
         {counts && (
           <div className="grid gap-3 grid-cols-2 md:grid-cols-4 xl:grid-cols-8">
@@ -204,6 +234,11 @@ export function PqrApprovalPage() {
               {busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Send className="h-4 w-4 mr-1" />}
               Submit for Review
             </Button>
+            {submitPqrId && (
+              <Button variant="outline" asChild>
+                <Link href={pqrSectionHref('/pqr/summary', submitPqrId)}>← Summary</Link>
+              </Button>
+            )}
           </CardContent></Card>
         )}
 

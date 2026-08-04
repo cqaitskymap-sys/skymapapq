@@ -1,14 +1,10 @@
 import { NextResponse } from 'next/server';
 import { runScheduledArchiveJobs } from '@/lib/archive-management-service';
+import { assertCronAuthorized } from '@/lib/cron-auth';
 
 export async function POST(request: Request) {
-  const secret = process.env.ARCHIVE_CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get('authorization');
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-  }
+  const denied = assertCronAuthorized(request, 'ARCHIVE_CRON_SECRET');
+  if (denied) return denied;
   try {
     const result = await runScheduledArchiveJobs();
     return NextResponse.json({ ok: true, ...result, ranAt: new Date().toISOString() });

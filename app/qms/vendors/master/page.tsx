@@ -25,12 +25,20 @@ export default function VendorMasterPage() {
   const { vendors, loading, error, refresh } = useVendors(filters);
   const actor = useVendorActor();
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (!nextOpen && typeof document !== 'undefined') {
+      const active = document.activeElement as HTMLElement | null;
+      active?.blur();
+    }
+    setOpen(nextOpen);
+  };
+
   const handleCreate = async (data: VendorCreateInput) => {
     setSaving(true);
     try {
       await createVendor(data, actor);
       toast.success('Vendor created');
-      setOpen(false);
+      handleOpenChange(false);
       refresh();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Create failed');
@@ -75,10 +83,10 @@ export default function VendorMasterPage() {
             </TableBody></Table>
           </CardContent></Card>
       )}
-      <Sheet open={open} onOpenChange={setOpen}>
+      <Sheet open={open} onOpenChange={handleOpenChange}>
         <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
           <SheetHeader><SheetTitle>Create Vendor</SheetTitle></SheetHeader>
-          <div className="mt-6"><VendorForm onSubmit={handleCreate} onCancel={() => setOpen(false)} saving={saving} submitLabel="Create Vendor" /></div>
+          <div className="mt-6"><VendorForm onSubmit={handleCreate} onCancel={() => handleOpenChange(false)} saving={saving} submitLabel="Create Vendor" /></div>
         </SheetContent>
       </Sheet>
     </div>

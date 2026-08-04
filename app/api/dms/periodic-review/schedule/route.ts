@@ -1,18 +1,14 @@
 import { NextResponse } from 'next/server';
 import { runScheduledPeriodicReviewJobs } from '@/lib/periodic-review-service';
+import { assertCronAuthorized } from '@/lib/cron-auth';
 
 /**
  * Cron endpoint for periodic review scheduler (task generation, reminders, escalation).
  * Set PERIODIC_REVIEW_CRON_SECRET in env and pass as Authorization: Bearer <secret>
  */
 export async function POST(request: Request) {
-  const secret = process.env.PERIODIC_REVIEW_CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get('authorization');
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-  }
+  const denied = assertCronAuthorized(request, 'PERIODIC_REVIEW_CRON_SECRET');
+  if (denied) return denied;
 
   try {
     const result = await runScheduledPeriodicReviewJobs();

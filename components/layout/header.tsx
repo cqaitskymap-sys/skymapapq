@@ -20,7 +20,7 @@ import { formatBreadcrumbLabel } from '@/lib/breadcrumb-labels';
 
 function getBreadcrumbs(pathname: string) {
   const parts = pathname.split('/').filter(Boolean);
-  const crumbs = [{ label: 'Home', href: '/dashboard' }];
+  const crumbs = [{ label: 'Home', href: '/launcher' }];
   let path = '';
   for (const part of parts) {
     path += `/${part}`;

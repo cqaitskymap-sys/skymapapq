@@ -6,6 +6,7 @@ import {
 } from '@/lib/cpv';
 import { listCpvRecords, loadIntegrationSnapshot } from '@/lib/cpv-service';
 import { runCpvAiAnalytics, type AiAnalyticsReport, type AiAnalyticsFilters } from '@/lib/cpv-ai-analytics';
+import { enrichAiClient } from '@/lib/ai/client';
 
 export function useCpvAiAnalytics(filters: AiAnalyticsFilters = {}) {
   const { product } = filters;
@@ -34,7 +35,7 @@ export function useCpvAiAnalytics(filters: AiAnalyticsFilters = {}) {
         equipment = [];
       }
 
-      setReport(runCpvAiAnalytics({
+      const base = runCpvAiAnalytics({
         cpp,
         cqa,
         yields,
@@ -43,7 +44,67 @@ export function useCpvAiAnalytics(filters: AiAnalyticsFilters = {}) {
         deviations: integrations.deviations,
         risks,
         filters: stableFilters,
-      }));
+      });
+
+      try {
+        const enriched = await enrichAiClient({
+          task: 'recommendations',
+          context: {
+            product: product || 'all',
+            riskScore: base.riskScore,
+            healthScore: base.healthScore,
+            detections: base.detections.slice(0, 10),
+            managementSummary: base.managementSummary,
+          },
+          fallback: {
+            recommendations: base.recommendations.map((r) => ({
+              finding: r.title,
+              recommendation: r.action,
+              priority: r.priority,
+              riskLevel: r.priority,
+              rationale: r.rationale,
+            })),
+          },
+        });
+        const aiRecs = Array.isArray(enriched.data.recommendations) ? enriched.data.recommendations : [];
+        if (aiRecs.length) {
+          base.recommendations = base.recommendations.map((rec, index) => {
+            const row = (aiRecs[index] && typeof aiRecs[index] === 'object'
+              ? aiRecs[index]
+              : {}) as Record<string, unknown>;
+            return {
+              ...rec,
+              title: String(row.finding || rec.title),
+              action: String(row.recommendation || rec.action),
+              rationale: String(row.rationale || rec.rationale),
+            };
+          });
+        }
+
+        const summary = await enrichAiClient({
+          task: 'management_summary',
+          context: {
+            product: product || 'all',
+            riskScore: base.riskScore,
+            healthScore: base.healthScore,
+            detections: base.detections.slice(0, 8),
+          },
+          fallback: {
+            summary: base.managementSummary,
+            bullets: base.summaryBullets,
+          },
+        });
+        if (typeof summary.data.summary === 'string' && summary.data.summary.trim()) {
+          base.managementSummary = summary.data.summary.trim();
+          base.summaryBullets = Array.isArray(summary.data.bullets)
+            ? summary.data.bullets.map(String)
+            : base.summaryBullets;
+        }
+      } catch {
+        // Keep heuristic report if OpenRouter is unavailable.
+      }
+
+      setReport(base);
     } catch {
       setReport(null);
     } finally {

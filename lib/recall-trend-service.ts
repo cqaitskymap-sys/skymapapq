@@ -17,6 +17,7 @@ import {
 } from '@/lib/recall-trend-records';
 import { listRecalls } from '@/lib/recall-service';
 import { RECALL_COLLECTIONS, type RecallClosure, type RecallTrendRecord } from '@/lib/recall-types';
+import { polishTrendDrafts } from '@/lib/ai/client';
 
 export type { RecallTrendActor, RecallTrendFilterInput, RecallTrendSaveForm };
 
@@ -80,7 +81,24 @@ export async function generateRecallTrend(filters: RecallTrendFilterInput) {
     await notify('Recall Recovery Trend Alert', analysis.alerts.find((a) => /recovery/i.test(a)) || 'Recovery trend decreasing', 'trend', ['qa', 'regulatory_affairs']);
   }
 
-  return analysis;
+  const polished = await polishTrendDrafts({
+    module: 'Recall',
+    recommendation_draft: analysis.recommendation_draft,
+    conclusion_draft: analysis.conclusion_draft,
+    context: {
+      metrics: analysis.metrics,
+      alerts: analysis.alerts,
+      trend_status: analysis.trend_status,
+      risk_level: analysis.risk_level,
+      filters,
+    },
+  });
+
+  return {
+    ...analysis,
+    recommendation_draft: polished.recommendation_draft,
+    conclusion_draft: polished.conclusion_draft || analysis.conclusion_draft,
+  };
 }
 
 export async function listSavedRecallTrends(max = 100): Promise<RecallTrendRecord[]> {

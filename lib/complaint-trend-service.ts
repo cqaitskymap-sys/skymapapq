@@ -13,6 +13,7 @@ import {
 } from '@/lib/complaint-trend-records';
 import { COMPLAINT_COLLECTIONS, type ComplaintTrendRecord } from '@/lib/complaint-types';
 import { listComplaints } from '@/lib/complaint-service';
+import { polishTrendDrafts } from '@/lib/ai/client';
 
 export type { ComplaintTrendActor, ComplaintTrendFilterInput, ComplaintTrendSaveForm };
 
@@ -75,7 +76,27 @@ async function notifyRole(title: string, message: string, recordId: string, role
 
 export async function generateComplaintTrend(filters: ComplaintTrendFilterInput) {
   const all = await listComplaints();
-  return computeComplaintTrendAnalysis(all, filters);
+  const analysis = computeComplaintTrendAnalysis(all, filters);
+  const polished = await polishTrendDrafts({
+    module: 'Complaint',
+    recommendation_draft: analysis.recommendation_draft,
+    conclusion_draft: analysis.conclusion_draft,
+    management_summary_draft: analysis.management_summary_draft,
+    context: {
+      metrics: analysis.metrics,
+      alerts: analysis.alerts,
+      trend_status: analysis.trend_status,
+      risk_level: analysis.risk_level,
+      filters,
+    },
+  });
+  return {
+    ...analysis,
+    recommendation_draft: polished.recommendation_draft,
+    conclusion_draft: polished.conclusion_draft || analysis.conclusion_draft,
+    management_summary_draft:
+      polished.management_summary_draft || analysis.management_summary_draft,
+  };
 }
 
 export async function listSavedComplaintTrends(max = 100): Promise<ComplaintTrendRecord[]> {

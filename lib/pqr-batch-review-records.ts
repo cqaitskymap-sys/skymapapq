@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeRole } from '@/lib/permissions';
 
 export const PQR_BATCH_REVIEW_MODULE = 'PQR Batch Review';
 
@@ -12,6 +13,9 @@ export const PQR_BATCH_REVIEW_COLLECTIONS = {
   deviations: 'deviations',
   oosRecords: 'oos_records',
   capaRecords: 'capa_records',
+  changeControls: 'change_controls',
+  complaints: 'complaints',
+  yieldMonitoring: 'yield_monitoring',
 } as const;
 
 export const BATCH_REVIEW_STATUSES = [
@@ -36,6 +40,9 @@ export interface PqrOption {
   dosageForm: string;
   reviewPeriodFrom: string;
   reviewPeriodTo: string;
+  reviewYear?: number;
+  site?: string;
+  status?: string;
 }
 
 export interface PqrBatchReviewRecord {
@@ -72,6 +79,11 @@ export interface PqrBatchReviewRecord {
   linkedDeviationCount: number;
   linkedOosCount: number;
   linkedCapaCount: number;
+  linkedComplaintCount?: number;
+  linkedChangeControlCount?: number;
+  theoreticalYield?: number | null;
+  actualYield?: number | null;
+  yieldPct?: number | null;
   remarks: string;
   sourceType?: 'manual' | 'batch_master' | 'cpv_batch';
   sourceId?: string;
@@ -93,6 +105,10 @@ export interface PqrBatchReviewSummary {
   reprocessedBatches: number;
   releasePct: number;
   rejectionPct: number;
+  totalDeviations: number;
+  totalOos: number;
+  totalCapa: number;
+  avgYieldPct: number | null;
 }
 
 export interface PqrBatchReviewCharts {
@@ -110,10 +126,31 @@ export interface PqrBatchReviewFilters {
   releaseStatus?: string;
   manufacturedFor?: string;
   customer?: string;
+  search?: string;
   mfgDateFrom?: string;
   mfgDateTo?: string;
   expDateFrom?: string;
   expDateTo?: string;
+}
+
+/** Modern PQR section navigation with optional pqrId context. */
+export const PQR_SECTION_FLOW = [
+  { key: 'dashboard', label: 'PQR Dashboard', href: '/pqr/dashboard' },
+  { key: 'create', label: 'Create Annual PQR', href: '/pqr/create' },
+  { key: 'batches', label: 'Batch Review', href: '/pqr/batches' },
+  { key: 'materials', label: 'Material Review', href: '/pqr/materials' },
+  { key: 'packaging', label: 'Packaging Review', href: '/pqr/packaging' },
+  { key: 'equipment', label: 'Equipment Review', href: '/pqr/equipment-review' },
+  { key: 'utility', label: 'Utility & Environmental Review', href: '/pqr/utility-review' },
+  { key: 'stability', label: 'Stability Review', href: '/pqr/stability' },
+  { key: 'summary', label: 'Summary & Conclusion', href: '/pqr/summary' },
+  { key: 'approval', label: 'PQR Approval', href: '/pqr/approval' },
+] as const;
+
+export function pqrSectionHref(href: string, pqrId?: string): string {
+  if (!pqrId || href === '/pqr/dashboard' || href === '/pqr/create') return href;
+  const sep = href.includes('?') ? '&' : '?';
+  return `${href}${sep}pqrId=${encodeURIComponent(pqrId)}`;
 }
 
 export const batchReviewFormSchema = z.object({
@@ -142,8 +179,14 @@ export const batchReviewFormSchema = z.object({
   holdReason: z.string().default(''),
   reworkRequired: z.boolean().default(false),
   reprocessRequired: z.boolean().default(false),
+  theoreticalYield: z.coerce.number().nonnegative().optional().nullable(),
+  actualYield: z.coerce.number().nonnegative().optional().nullable(),
   remarks: z.string().default(''),
-}).refine((d) => d.expiryDate > d.manufacturingDate, {
+}).refine((d) => {
+  const mfg = d.manufacturingDate.length === 7 ? `${d.manufacturingDate}-01` : d.manufacturingDate;
+  const exp = d.expiryDate.length === 7 ? `${d.expiryDate}-01` : d.expiryDate;
+  return exp > mfg;
+}, {
   message: 'Expiry date must be after manufacturing date',
   path: ['expiryDate'],
 }).refine((d) => d.batchStatus !== 'Rejected' || d.rejectionReason.trim().length > 0, {
@@ -152,38 +195,55 @@ export const batchReviewFormSchema = z.object({
 }).refine((d) => d.batchStatus !== 'Hold' || d.holdReason.trim().length > 0, {
   message: 'Hold reason is required for hold batches',
   path: ['holdReason'],
-});
+}).refine((d) => {
+  if (d.theoreticalYield == null || d.actualYield == null) return true;
+  if (d.theoreticalYield <= 0) return true;
+  return true;
+}, { message: 'Invalid yield values', path: ['actualYield'] });
 
 export type BatchReviewFormData = z.infer<typeof batchReviewFormSchema>;
 
+const VIEW_ROLES = new Set([
+  'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive',
+  'qc_manager', 'qc_executive',
+  'production_manager', 'production_executive',
+  'warehouse_manager', 'warehouse_executive',
+  'auditor', 'viewer',
+]);
+
+const MANAGE_ROLES = new Set([
+  'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive',
+]);
+
+const ADD_ROLES = new Set([
+  'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive',
+  'production_manager', 'production_executive',
+]);
+
+const EXPORT_ROLES = new Set([
+  'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive', 'auditor',
+]);
+
 export function canViewBatchReview(role?: string): boolean {
-  return [
-    'super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'qa_executive',
-    'qc', 'qc_manager', 'qc_executive',
-    'production', 'production_manager', 'production_executive',
-    'warehouse', 'warehouse_manager', 'warehouse_executive',
-    'auditor', 'viewer',
-  ].includes(role || '');
+  return VIEW_ROLES.has(normalizeRole(role));
 }
 
 export function canManageBatchReview(role?: string): boolean {
-  return ['super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'qa_executive'].includes(role || '');
+  return MANAGE_ROLES.has(normalizeRole(role));
 }
 
 export function canAddBatchReview(role?: string): boolean {
-  return [
-    'super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'qa_executive',
-    'production', 'production_manager', 'production_executive',
-  ].includes(role || '');
+  return ADD_ROLES.has(normalizeRole(role));
 }
 
 export function canExportBatchReview(role?: string): boolean {
-  return ['super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'auditor'].includes(role || '');
+  return EXPORT_ROLES.has(normalizeRole(role));
 }
 
 export function isBatchReviewViewOnly(role?: string): boolean {
-  return ['auditor', 'viewer', 'qc', 'qc_manager', 'qc_executive',
-    'warehouse', 'warehouse_manager', 'warehouse_executive'].includes(role || '');
+  const r = normalizeRole(role);
+  return ['auditor', 'viewer', 'qc_manager', 'qc_executive',
+    'warehouse_manager', 'warehouse_executive'].includes(r);
 }
 
 export function batchStatusColor(status: string): string {
@@ -205,20 +265,38 @@ export function releaseStatusColor(status: string): string {
   return 'bg-slate-50 text-slate-600 border-slate-200';
 }
 
+function strMatch(val: string, token: string): boolean {
+  return String(val || '').toLowerCase().includes(token);
+}
+
+export function isReleasedBatch(r: PqrBatchReviewRecord): boolean {
+  return (strMatch(r.releaseStatus, 'release') && !strMatch(r.releaseStatus, 'reject'))
+    || (strMatch(r.batchStatus, 'release') && !strMatch(r.batchStatus, 'reject'));
+}
+
+export function isRejectedBatch(r: PqrBatchReviewRecord): boolean {
+  return strMatch(r.batchStatus, 'reject') || strMatch(r.releaseStatus, 'reject');
+}
+
+export function computeYieldPct(theoretical?: number | null, actual?: number | null): number | null {
+  if (theoretical == null || actual == null) return null;
+  if (!Number.isFinite(theoretical) || !Number.isFinite(actual) || theoretical <= 0) return null;
+  return Math.round((actual / theoretical) * 1000) / 10;
+}
+
 export function computeBatchSummary(records: PqrBatchReviewRecord[]): PqrBatchReviewSummary {
   const active = records.filter((r) => !r.isDeleted);
   const total = active.length;
-  const released = active.filter((r) =>
-    strMatch(r.batchStatus, 'released') || strMatch(r.releaseStatus, 'released'),
-  ).length;
-  const rejected = active.filter((r) =>
-    strMatch(r.batchStatus, 'rejected') || strMatch(r.releaseStatus, 'rejected'),
-  ).length;
+  const released = active.filter(isReleasedBatch).length;
+  const rejected = active.filter(isRejectedBatch).length;
   const hold = active.filter((r) =>
     strMatch(r.batchStatus, 'hold') || strMatch(r.releaseStatus, 'hold'),
   ).length;
   const reworked = active.filter((r) => strMatch(r.batchStatus, 'rework') || r.reworkRequired).length;
   const reprocessed = active.filter((r) => strMatch(r.batchStatus, 'reprocess') || r.reprocessRequired).length;
+  const yieldVals = active
+    .map((r) => (r.yieldPct != null ? Number(r.yieldPct) : computeYieldPct(r.theoreticalYield, r.actualYield)))
+    .filter((v): v is number => v != null && Number.isFinite(v) && v > 0);
 
   return {
     totalBatches: total,
@@ -229,11 +307,13 @@ export function computeBatchSummary(records: PqrBatchReviewRecord[]): PqrBatchRe
     reprocessedBatches: reprocessed,
     releasePct: total ? Math.round((released / total) * 1000) / 10 : 0,
     rejectionPct: total ? Math.round((rejected / total) * 1000) / 10 : 0,
+    totalDeviations: active.reduce((s, r) => s + (r.linkedDeviationCount || 0), 0),
+    totalOos: active.reduce((s, r) => s + (r.linkedOosCount || 0), 0),
+    totalCapa: active.reduce((s, r) => s + (r.linkedCapaCount || 0), 0),
+    avgYieldPct: yieldVals.length
+      ? Math.round((yieldVals.reduce((a, b) => a + b, 0) / yieldVals.length) * 10) / 10
+      : null,
   };
-}
-
-function strMatch(val: string, token: string): boolean {
-  return String(val || '').toLowerCase().includes(token);
 }
 
 export function generateBatchNarrative(summary: PqrBatchReviewSummary): string {
@@ -255,6 +335,12 @@ export function generateBatchNarrative(summary: PqrBatchReviewSummary): string {
     if (summary.reworkedBatches > 0) parts.push(`${summary.reworkedBatches} batch(es) underwent rework.`);
     if (summary.reprocessedBatches > 0) parts.push(`${summary.reprocessedBatches} batch(es) were reprocessed.`);
   }
+  if (summary.totalDeviations > 0 || summary.totalOos > 0 || summary.totalCapa > 0) {
+    parts.push(`Linked quality events: ${summary.totalDeviations} deviation(s), ${summary.totalOos} OOS, ${summary.totalCapa} CAPA.`);
+  }
+  if (summary.avgYieldPct != null) {
+    parts.push(`Average batch yield was ${summary.avgYieldPct}%.`);
+  }
   parts.push(`Total ${summary.totalBatches} batches manufactured with ${summary.releasePct}% release rate and ${summary.rejectionPct}% rejection rate.`);
   return parts.join(' ');
 }
@@ -268,14 +354,14 @@ export function buildBatchCharts(records: PqrBatchReviewRecord[]): PqrBatchRevie
   const mfgForMap = new Map<string, number>();
 
   active.forEach((r) => {
-    statusMap.set(r.batchStatus, (statusMap.get(r.batchStatus) || 0) + 1);
-    const month = r.manufacturingDate?.slice(0, 7) || 'Unknown';
+    statusMap.set(r.batchStatus || 'Unknown', (statusMap.get(r.batchStatus || 'Unknown') || 0) + 1);
+    const month = (r.manufacturingDate || '').slice(0, 7) || 'Unknown';
     monthMap.set(month, (monthMap.get(month) || 0) + 1);
     const rm = releaseMap.get(month) || { released: 0, rejected: 0 };
-    if (strMatch(r.releaseStatus, 'release') && !strMatch(r.releaseStatus, 'reject')) rm.released += 1;
-    if (strMatch(r.releaseStatus, 'reject') || strMatch(r.batchStatus, 'reject')) rm.rejected += 1;
+    if (isReleasedBatch(r)) rm.released += 1;
+    if (isRejectedBatch(r)) rm.rejected += 1;
     releaseMap.set(month, rm);
-    productMap.set(r.product, (productMap.get(r.product) || 0) + 1);
+    productMap.set(r.product || 'Unknown', (productMap.get(r.product || 'Unknown') || 0) + 1);
     const mf = r.manufacturedFor || r.customerName || 'Internal';
     mfgForMap.set(mf, (mfgForMap.get(mf) || 0) + 1);
   });
@@ -294,6 +380,99 @@ export function buildBatchCharts(records: PqrBatchReviewRecord[]): PqrBatchRevie
     productTrend: Array.from(productMap.entries()).map(([product, count]) => ({ product, count })),
     manufacturedForTrend: Array.from(mfgForMap.entries()).slice(0, 8).map(([name, count]) => ({ name, count })),
   };
+}
+
+/** Normalize incomplete create stubs / legacy rows into a usable record. */
+export function normalizeBatchReviewRecord(raw: Record<string, unknown>): PqrBatchReviewRecord {
+  const product = String(raw.product || raw.productName || raw.product_name || '');
+  const batchStatusRaw = String(raw.batchStatus || raw.status || 'Manufactured');
+  const releaseRaw = String(raw.releaseStatus || raw.release_status || 'Pending');
+  const batchStatus = batchStatusRaw.toLowerCase() === 'pending' ? 'Manufactured' : batchStatusRaw;
+  const theoretical = raw.theoreticalYield != null ? Number(raw.theoreticalYield) : null;
+  const actual = raw.actualYield != null ? Number(raw.actualYield) : null;
+  let yieldPct = raw.yieldPct != null ? Number(raw.yieldPct) : null;
+  if ((yieldPct == null || !Number.isFinite(yieldPct)) && theoretical && theoretical > 0 && actual != null) {
+    yieldPct = computeYieldPct(theoretical, actual);
+  }
+  return {
+    id: String(raw.id || ''),
+    batchReviewId: String(raw.batchReviewId || `PBR-${raw.id || 'X'}`),
+    pqrId: String(raw.pqrId || raw.pqr_id || ''),
+    pqrNumber: String(raw.pqrNumber || raw.pqr_number || ''),
+    product,
+    productCode: String(raw.productCode || raw.product_code || ''),
+    genericName: String(raw.genericName || ''),
+    strength: String(raw.strength || ''),
+    dosageForm: String(raw.dosageForm || ''),
+    reviewPeriodFrom: String(raw.reviewPeriodFrom || ''),
+    reviewPeriodTo: String(raw.reviewPeriodTo || ''),
+    batchNumber: String(raw.batchNumber || raw.batch_number || ''),
+    semiFinishedBatchNumber: String(raw.semiFinishedBatchNumber || ''),
+    finishedProductBatchNumber: String(raw.finishedProductBatchNumber || ''),
+    packingBatchNumber: String(raw.packingBatchNumber || ''),
+    manufacturingDate: String(raw.manufacturingDate || raw.manufacturing_date || '').slice(0, 10),
+    expiryDate: String(raw.expiryDate || raw.expiry_date || '').slice(0, 10),
+    batchSize: Number(raw.batchSize ?? raw.batch_size) || 0,
+    batchSizeUnit: String(raw.batchSizeUnit || 'Vials'),
+    manufacturedFor: String(raw.manufacturedFor || ''),
+    customerName: String(raw.customerName || ''),
+    market: String(raw.market || ''),
+    batchStatus,
+    releaseStatus: releaseRaw || 'Pending',
+    releaseDate: String(raw.releaseDate || '').slice(0, 10),
+    qaReleasedBy: String(raw.qaReleasedBy || ''),
+    rejectionReason: String(raw.rejectionReason || ''),
+    holdReason: String(raw.holdReason || ''),
+    reworkRequired: Boolean(raw.reworkRequired),
+    reprocessRequired: Boolean(raw.reprocessRequired),
+    linkedDeviationCount: Number(raw.linkedDeviationCount) || 0,
+    linkedOosCount: Number(raw.linkedOosCount) || 0,
+    linkedCapaCount: Number(raw.linkedCapaCount) || 0,
+    linkedComplaintCount: Number(raw.linkedComplaintCount) || 0,
+    linkedChangeControlCount: Number(raw.linkedChangeControlCount) || 0,
+    theoreticalYield: theoretical != null && Number.isFinite(theoretical) ? theoretical : null,
+    actualYield: actual != null && Number.isFinite(actual) ? actual : null,
+    yieldPct: yieldPct != null && Number.isFinite(yieldPct) ? yieldPct : null,
+    remarks: String(raw.remarks || ''),
+    sourceType: (raw.sourceType as PqrBatchReviewRecord['sourceType']) || 'manual',
+    sourceId: String(raw.sourceId || raw.batchId || ''),
+    createdAt: String(raw.createdAt || ''),
+    updatedAt: String(raw.updatedAt || ''),
+    createdBy: String(raw.createdBy || ''),
+    updatedBy: String(raw.updatedBy || ''),
+    createdByName: String(raw.createdByName || ''),
+    updatedByName: String(raw.updatedByName || ''),
+    isDeleted: Boolean(raw.isDeleted),
+  };
+}
+
+export function filterBatchReviewRecords(
+  records: PqrBatchReviewRecord[],
+  filters: PqrBatchReviewFilters,
+): PqrBatchReviewRecord[] {
+  const search = (filters.search || '').trim().toLowerCase();
+  return records.filter((r) => {
+    if (r.isDeleted) return false;
+    if (filters.batchStatus && filters.batchStatus !== 'all' && r.batchStatus !== filters.batchStatus) return false;
+    if (filters.releaseStatus && filters.releaseStatus !== 'all' && r.releaseStatus !== filters.releaseStatus) return false;
+    if (filters.manufacturedFor && !strMatch(r.manufacturedFor, filters.manufacturedFor.toLowerCase())
+      && !strMatch(r.customerName, filters.manufacturedFor.toLowerCase())) return false;
+    if (filters.product && !strMatch(r.product, filters.product.toLowerCase())
+      && !strMatch(r.productCode, filters.product.toLowerCase())) return false;
+    if (filters.mfgDateFrom && r.manufacturingDate && r.manufacturingDate < filters.mfgDateFrom) return false;
+    if (filters.mfgDateTo && r.manufacturingDate && r.manufacturingDate > filters.mfgDateTo) return false;
+    if (filters.expDateFrom && r.expiryDate && r.expiryDate < filters.expDateFrom) return false;
+    if (filters.expDateTo && r.expiryDate && r.expiryDate > filters.expDateTo) return false;
+    if (search) {
+      const hay = [
+        r.batchNumber, r.product, r.productCode, r.manufacturedFor, r.customerName,
+        r.remarks, r.batchStatus, r.releaseStatus, r.semiFinishedBatchNumber,
+        r.finishedProductBatchNumber,
+      ].join(' ').toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
 }
 
 export const emptyCharts = (): PqrBatchReviewCharts => ({

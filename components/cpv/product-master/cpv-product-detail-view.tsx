@@ -157,7 +157,10 @@ export function CpvProductDetailView({ id }: { id: string }) {
     setLinkType(type);
     setLinkParamId('');
     const params = await fetchActiveParametersByType(type);
-    setAvailableParams(params.map((p) => ({
+    const linked = type === 'CPP' ? (product?.linkedCppParameterIds || []) : (product?.linkedCqaParameterIds || []);
+    setAvailableParams(params
+      .filter((p) => p.id && !linked.includes(p.id))
+      .map((p) => ({
       id: p.id || '',
       parameterCode: p.parameterCode,
       parameterName: p.parameterName,
@@ -253,12 +256,47 @@ export function CpvProductDetailView({ id }: { id: string }) {
         <StatusBadge status={product.cpvStatus} />
         <span className="text-sm text-muted-foreground">
           Review: {product.cpvReviewFrequency} · Due: {product.nextReviewDueDate || '—'}
+          {product.version ? ` · v${product.version}` : ''}
+          {product.revision ? ` / Rev ${product.revision}` : ''}
         </span>
+      </div>
+
+      <div className="no-print flex flex-wrap gap-1.5">
+        {[
+          { href: `/cpv/batch-registration?product=${encodeURIComponent(product.productCode)}`, label: 'Batch Master' },
+          { href: `/cpv/cpp?product=${encodeURIComponent(product.productCode)}`, label: 'CPP' },
+          { href: `/cpv/cqa?product=${encodeURIComponent(product.productCode)}`, label: 'CQA' },
+          { href: `/cpv/raw-material-monitoring?product=${encodeURIComponent(product.productCode)}`, label: 'Raw Material' },
+          { href: `/cpv/packing-material-monitoring?product=${encodeURIComponent(product.productCode)}`, label: 'Packing Material' },
+          { href: `/cpv/utility-monitoring?product=${encodeURIComponent(product.productCode)}`, label: 'Utility Monitoring' },
+          { href: `/cpv/environmental-monitoring?product=${encodeURIComponent(product.productCode)}`, label: 'Environmental Monitoring' },
+          { href: `/cpv/yield-monitoring?product=${encodeURIComponent(product.productCode)}`, label: 'Yield Monitoring' },
+          { href: `/cpv/stability-monitoring?product=${encodeURIComponent(product.productCode)}`, label: 'Stability Monitoring' },
+          { href: '/cpv/trend-analysis', label: 'Trend Analysis' },
+          { href: '/cpv/risk-assessment', label: 'Risk' },
+          { href: '/cpv/reports-analytics', label: 'Reports' },
+          { href: '/cpv/ai-analytics', label: 'Analytics' },
+          { href: '/admin/audit-trail', label: 'Audit Trail' },
+          { href: '/qms/documents', label: 'Documents' },
+          { href: '/qms/capa', label: 'CAPA' },
+          { href: '/qms/deviation', label: 'Deviation' },
+          { href: '/qms/change-control', label: 'Change Control' },
+        ].map((l) => (
+          <Link
+            key={l.href}
+            href={l.href}
+            className="rounded-md border px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900"
+          >
+            {l.label}
+          </Link>
+        ))}
       </div>
 
       <Tabs defaultValue="overview">
         <TabsList className="flex h-auto flex-wrap">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="manufacturing">Manufacturing</TabsTrigger>
+          <TabsTrigger value="specifications">Specifications</TabsTrigger>
           <TabsTrigger value="cpp">Linked CPP Parameters</TabsTrigger>
           <TabsTrigger value="cqa">Linked CQA Parameters</TabsTrigger>
           <TabsTrigger value="batches">Batches</TabsTrigger>
@@ -274,24 +312,81 @@ export function CpvProductDetailView({ id }: { id: string }) {
               {[
                 ['Generic Name', product.genericName],
                 ['Brand Name', product.brandName],
+                ['Category', product.productCategory],
+                ['Family', product.productFamily],
                 ['Strength', product.strength],
                 ['Dosage Form', product.dosageForm],
                 ['Route', product.routeOfAdministration],
                 ['Pack Size', product.packSize],
+                ['Pack Type', product.packType],
                 ['Market', product.market],
+                ['Manufacturing Site', product.manufacturingSite],
+                ['Business Unit', product.businessUnit],
+                ['Department', product.department],
+                ['Product Owner', product.productOwner],
+                ['Lifecycle', product.lifecycleStatus],
+                ['Development Stage', product.developmentStage],
+                ['Validation Status', product.validationStatus],
+                ['Market Status', product.marketStatus],
+                ['Version', product.version],
+                ['Revision', product.revision],
+                ['Effective Date', product.effectiveDate],
+                ['Review Date', product.reviewDate],
+                ['Expiry Date', product.expiryDate],
                 ['Shelf Life', product.shelfLife],
                 ['Storage', product.storageCondition],
-                ['Batch Size', product.standardBatchSize],
-                ['Mfg License', product.manufacturingLicenseNumber],
-                ['MFR', product.mfrNumber],
-                ['BMR', product.bmrNumber],
-                ['BPR', product.bprNumber],
-                ['Specification', product.specificationNumber],
-                ['STP', product.stpNumber],
                 ['CPV Start', product.cpvStartDate],
                 ['CPV Owner', product.cpvOwner],
                 ['QA Reviewer', product.qaReviewer],
+                ['Description', product.description],
                 ['Remarks', product.remarks],
+              ].map(([label, val]) => (
+                <div key={label}>
+                  <p className="text-xs font-medium text-muted-foreground">{label}</p>
+                  <p className="mt-0.5">{val || '—'}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="manufacturing" className="mt-4">
+          <Card>
+            <CardHeader><CardTitle>Manufacturing Details</CardTitle></CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 text-sm">
+              {[
+                ['Manufacturing Process', product.manufacturingProcess],
+                ['Production Line', product.productionLine],
+                ['Manufacturing Area', product.manufacturingArea],
+                ['Packaging Process', product.packagingProcess],
+                ['Batch Size', product.standardBatchSize],
+                ['Mfg License', product.manufacturingLicenseNumber],
+                ['MFR', product.mfrNumber],
+                ['BMR / MBR', product.bmrNumber],
+                ['BPR', product.bprNumber],
+              ].map(([label, val]) => (
+                <div key={label}>
+                  <p className="text-xs font-medium text-muted-foreground">{label}</p>
+                  <p className="mt-0.5">{val || '—'}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="specifications" className="mt-4">
+          <Card>
+            <CardHeader><CardTitle>Product Specifications</CardTitle></CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 text-sm">
+              {[
+                ['Specification Number', product.specificationNumber],
+                ['Specification Version', product.specificationVersion],
+                ['LSL', product.lowerSpecificationLimit],
+                ['USL', product.upperSpecificationLimit],
+                ['Target', product.targetValue],
+                ['STP', product.stpNumber],
+                ['Sampling Plan', product.samplingPlan],
+                ['Testing Frequency', product.testingFrequency],
               ].map(([label, val]) => (
                 <div key={label}>
                   <p className="text-xs font-medium text-muted-foreground">{label}</p>
@@ -342,7 +437,13 @@ export function CpvProductDetailView({ id }: { id: string }) {
                 <TableBody>
                   {batches.map((b, i) => (
                     <TableRow key={String(b.id || i)}>
-                      <TableCell>{String(b.batchNumber || b.batch_number || b.batchNo || '—')}</TableCell>
+                      <TableCell>
+                        {b.id ? (
+                          <Link href={`/cpv/batch-registration/${b.id}`} className="text-blue-600 hover:underline">
+                            {String(b.batchNumber || b.batch_number || b.batchNo || '—')}
+                          </Link>
+                        ) : String(b.batchNumber || b.batch_number || b.batchNo || '—')}
+                      </TableCell>
                       <TableCell>{String(b.manufacturingDate || b.manufacturing_date || '—')}</TableCell>
                       <TableCell><StatusBadge status={String(b.status || '—')} /></TableCell>
                       <TableCell>{String(b.market || '—')}</TableCell>
@@ -368,7 +469,13 @@ export function CpvProductDetailView({ id }: { id: string }) {
                 <TableBody>
                   {reviews.map((r, i) => (
                     <TableRow key={String(r.id || i)}>
-                      <TableCell>{String(r.reviewNo || r.review_no || r.id || '—')}</TableCell>
+                      <TableCell>
+                        {r.id ? (
+                          <Link href={`/cpv/annual-review/${r.id}`} className="text-blue-600 hover:underline">
+                            {String(r.reviewNo || r.review_no || r.id || '—')}
+                          </Link>
+                        ) : String(r.reviewNo || r.review_no || r.id || '—')}
+                      </TableCell>
                       <TableCell>{String(r.reviewPeriod || r.review_period || r.period || '—')}</TableCell>
                       <TableCell><StatusBadge status={String(r.status || '—')} /></TableCell>
                       <TableCell>{String(r.dueDate || r.due_date || '—')}</TableCell>

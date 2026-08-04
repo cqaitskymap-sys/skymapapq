@@ -15,6 +15,7 @@ import {
 } from '@/lib/complaint-reports-records';
 import { COMPLAINT_COLLECTIONS, type ComplaintReportRecord } from '@/lib/complaint-types';
 import { listComplaints } from '@/lib/complaint-service';
+import { polishQmsReportTexts } from '@/lib/ai/client';
 
 export type { ComplaintReportActor, ComplaintReportFilterInput, ComplaintReportFormData };
 
@@ -126,9 +127,28 @@ export async function generateComplaintReport(
     recall_required: form.recall_required,
   };
   const analytics = await previewComplaintReport(filters);
+  const polished = await polishQmsReportTexts({
+    module: 'Complaint Reports',
+    summary: analytics.summary,
+    recommendations: analytics.capa_summary,
+    management_summary: analytics.management_summary,
+    context: {
+      reportType: form.report_type,
+      metrics: analytics.metrics,
+      investigation_summary: analytics.investigation_summary,
+      recall_summary: analytics.recall_summary,
+      filters,
+    },
+  });
+  const enrichedAnalytics = {
+    ...analytics,
+    summary: polished.summary,
+    capa_summary: polished.recommendations || analytics.capa_summary,
+    management_summary: polished.management_summary || analytics.management_summary,
+  };
   const year = new Date(form.review_period_to).getFullYear();
   const reportNumber = generateComplaintReportNumber(year, existingCount);
-  const payload = mapComplaintReportToRecord(form, analytics, actor, reportNumber);
+  const payload = mapComplaintReportToRecord(form, enrichedAnalytics, actor, reportNumber);
   try {
     const ref = await addDoc(collection(getFirebaseFirestore(), COMPLAINT_COLLECTIONS.reports), payload);
     const record = { id: ref.id, ...payload };

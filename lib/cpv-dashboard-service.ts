@@ -1,5 +1,5 @@
 import { collection, getDocs, limit, orderBy, query } from 'firebase/firestore';
-import { createAuditLog } from '@/lib/audit-trail';
+import { createAuditLog, shouldSkipRemoteAuditInLocalDev } from '@/lib/audit-trail';
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS, type CppRecord, type CqaRecord, type RiskRecord } from '@/lib/cpv';
@@ -73,6 +73,16 @@ export interface CpvDashboardRawData {
   holdTimeRecords: Record<string, unknown>[];
   trendAnalysisRecords: Record<string, unknown>[];
   controlChartRecords: Record<string, unknown>[];
+  rawMaterialRecords: Record<string, unknown>[];
+  packingMaterialRecords: Record<string, unknown>[];
+  utilityRecords: Record<string, unknown>[];
+  environmentalRecords: Record<string, unknown>[];
+  yieldRecords: Record<string, unknown>[];
+  openCapaCount: number;
+  openDeviationCount: number;
+  openChangeControlCount: number;
+  truncated?: boolean;
+  fetchedAt?: string;
   error?: string;
 }
 
@@ -114,12 +124,13 @@ async function loadFromAlternatives(
   names: readonly string[],
   max = 500,
 ): Promise<Record<string, unknown>[]> {
-  const merged: Record<string, unknown>[] = [];
+  // Prefer canonical collection; only fall back to legacy if primary is empty.
+  // Merging both caused double-counting when both schemas were populated.
   for (const name of names) {
     const rows = await safeQueryCollection(name, max);
-    merged.push(...rows);
+    if (rows.length > 0) return rows;
   }
-  return merged;
+  return [];
 }
 
 function normalizeCpp(raw: Record<string, unknown>): CppRecord {
@@ -225,11 +236,20 @@ function toAlertRow(
 }
 
 export async function fetchCpvDashboardData(): Promise<CpvDashboardRawData> {
+  const empty: CpvDashboardRawData = {
+    products: [], batches: [], cppParameters: [], cqaParameters: [],
+    cpp: [], cqa: [], risks: [], cpvReviews: [], processCapability: [],
+    alerts: [], auditTrail: [], notifications: [], stabilityResults: [], stabilityStudies: [],
+    holdTimeRecords: [], trendAnalysisRecords: [], controlChartRecords: [],
+    rawMaterialRecords: [], packingMaterialRecords: [], utilityRecords: [],
+    environmentalRecords: [], yieldRecords: [],
+    openCapaCount: 0, openDeviationCount: 0, openChangeControlCount: 0,
+    fetchedAt: new Date().toISOString(),
+  };
+
   if (!isFirebaseConfigured()) {
     return {
-      products: [], batches: [], cppParameters: [], cqaParameters: [],
-      cpp: [], cqa: [], risks: [], cpvReviews: [], processCapability: [],
-      alerts: [], auditTrail: [], notifications: [], stabilityResults: [], stabilityStudies: [], holdTimeRecords: [], trendAnalysisRecords: [], controlChartRecords: [],
+      ...empty,
       error: 'Firebase is not configured. Add credentials to .env.local.',
     };
   }
@@ -256,6 +276,14 @@ export async function fetchCpvDashboardData(): Promise<CpvDashboardRawData> {
       holdTimeRaw,
       trendAnalysisRaw,
       controlChartsRaw,
+      rawMaterialRaw,
+      packingMaterialRaw,
+      utilityRaw,
+      environmentalRaw,
+      yieldRaw,
+      capaRaw,
+      deviationRaw,
+      changeControlRaw,
     ] = await Promise.all([
       safeQueryCollection(CPV_DASHBOARD_COLLECTIONS.products, 200),
       safeQueryCollection(CPV_DASHBOARD_COLLECTIONS.batches, 500),
@@ -277,34 +305,41 @@ export async function fetchCpvDashboardData(): Promise<CpvDashboardRawData> {
       loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.holdTimeMonitoring, 300),
       loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.trendAnalysis, 300),
       loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.controlCharts, 300),
+      loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.rawMaterialMonitoring, 300),
+      loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.packingMaterialMonitoring, 300),
+      loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.utilityMonitoring, 300),
+      loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.environmentalMonitoring, 300),
+      loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.yieldMonitoring, 300),
+      loadFromAlternatives(['capa', 'capa_records'], 200),
+      safeQueryCollection('deviations', 200),
+      loadFromAlternatives(['change_controls', 'change_control'], 200),
     ]);
 
-    const cppMap = new Map<string, CppRecord>();
-    [...cppRaw.map(normalizeCpp), ...legacyCpp].forEach((r) => {
-      const key = r.id || `${r.productName}|${r.batchNo}|${r.parameterName}|${r.createdAt}`;
-      if (!cppMap.has(key)) cppMap.set(key, r);
-    });
+    // Prefer canonical result collections; use legacy list only when canonical empty.
+    const cpp = (cppRaw.length ? cppRaw.map(normalizeCpp) : legacyCpp);
+    const cqa = (cqaRaw.length ? cqaRaw.map(normalizeCqa) : legacyCqa);
+    const risks = (riskRaw.length ? riskRaw.map(normalizeRisk) : legacyRisks);
 
-    const cqaMap = new Map<string, CqaRecord>();
-    [...cqaRaw.map(normalizeCqa), ...legacyCqa].forEach((r) => {
-      const key = r.id || `${r.productName}|${r.batchNo}|${r.testParameter}|${r.createdAt}`;
-      if (!cqaMap.has(key)) cqaMap.set(key, r);
-    });
+    const truncated = [
+      cppRaw, cqaRaw, riskRaw, capabilityRaw, stabilityResultsRaw, holdTimeRaw,
+      trendAnalysisRaw, controlChartsRaw, rawMaterialRaw, packingMaterialRaw,
+      utilityRaw, environmentalRaw, yieldRaw, batches,
+    ].some((rows) => rows.length >= 500);
 
-    const riskMap = new Map<string, RiskRecord>();
-    [...riskRaw.map(normalizeRisk), ...legacyRisks].forEach((r) => {
-      const key = r.id || `${r.productName}|${r.riskDescription}|${r.createdAt}`;
-      if (!riskMap.has(key)) riskMap.set(key, r);
-    });
+    const isOpenStatus = (status: string) => {
+      const s = status.toLowerCase();
+      return s.includes('open') || s.includes('pending') || s.includes('in progress')
+        || s.includes('investigation') || s.includes('implementation') || s === 'draft';
+    };
 
     return {
       products,
       batches,
       cppParameters,
       cqaParameters,
-      cpp: Array.from(cppMap.values()),
-      cqa: Array.from(cqaMap.values()),
-      risks: Array.from(riskMap.values()),
+      cpp,
+      cqa,
+      risks,
       cpvReviews: reviewRaw.map(normalizeReview),
       processCapability: capabilityRaw,
       alerts: alertsRaw,
@@ -315,12 +350,20 @@ export async function fetchCpvDashboardData(): Promise<CpvDashboardRawData> {
       holdTimeRecords: holdTimeRaw,
       trendAnalysisRecords: trendAnalysisRaw,
       controlChartRecords: controlChartsRaw,
+      rawMaterialRecords: rawMaterialRaw,
+      packingMaterialRecords: packingMaterialRaw,
+      utilityRecords: utilityRaw,
+      environmentalRecords: environmentalRaw,
+      yieldRecords: yieldRaw,
+      openCapaCount: capaRaw.filter((r) => isOpenStatus(str(r.status))).length,
+      openDeviationCount: deviationRaw.filter((r) => isOpenStatus(str(r.status))).length,
+      openChangeControlCount: changeControlRaw.filter((r) => isOpenStatus(str(r.status))).length,
+      truncated,
+      fetchedAt: new Date().toISOString(),
     };
   } catch (e) {
     return {
-      products: [], batches: [], cppParameters: [], cqaParameters: [],
-      cpp: [], cqa: [], risks: [], cpvReviews: [], processCapability: [],
-      alerts: [], auditTrail: [], notifications: [], stabilityResults: [], stabilityStudies: [], holdTimeRecords: [], trendAnalysisRecords: [], controlChartRecords: [],
+      ...empty,
       error: (e as Error).message,
     };
   }
@@ -364,20 +407,25 @@ export function averageCpkFromCapability(
   capability: Record<string, unknown>[],
   cpp: CppRecord[],
   cqa: CqaRecord[],
-): { averageCpk: number; averagePpk: number } {
+): { averageCp: number; averageCpk: number; averagePpk: number } {
   const cpkValues = capability
     .map((r) => num(r.cpk ?? r.Cpk))
     .filter((v) => v > 0);
   if (cpkValues.length) {
+    const cpValues = capability.map((r) => num(r.cp ?? r.Cp)).filter((v) => v > 0);
     const ppkValues = capability.map((r) => num(r.ppk ?? r.Ppk)).filter((v) => v > 0);
     return {
+      averageCp: cpValues.length
+        ? cpValues.reduce((s, v) => s + v, 0) / cpValues.length
+        : 0,
       averageCpk: cpkValues.reduce((s, v) => s + v, 0) / cpkValues.length,
       averagePpk: ppkValues.length
         ? ppkValues.reduce((s, v) => s + v, 0) / ppkValues.length
         : 0,
     };
   }
-  return computeCapabilityAverages(cpp, cqa);
+  const fallback = computeCapabilityAverages(cpp, cqa);
+  return { averageCp: 0, ...fallback };
 }
 
 export function uniqueBatchNumbers(cpp: CppRecord[], cqa: CqaRecord[]): string[] {
@@ -388,7 +436,7 @@ export function uniqueBatchNumbers(cpp: CppRecord[], cqa: CqaRecord[]): string[]
 }
 
 export async function logCpvDashboardAudit(
-  actionType: 'Refresh' | 'Export',
+  actionType: 'Refresh' | 'Export' | 'Filter' | 'View' | 'Acknowledge',
   user: { id?: string; name?: string },
   detail?: string,
 ): Promise<void> {
@@ -397,9 +445,52 @@ export async function logCpvDashboardAudit(
     collectionName: 'cpv_dashboard',
     recordId: 'dashboard',
     actionType,
-    actionDescription: `CPV Dashboard ${actionType}`,
+    actionDescription: `CPV Dashboard ${actionType}${detail ? ` — ${detail}` : ''}`,
     reason: detail || '',
     user: { id: user.id || 'system', name: user.name || 'User' },
     status: 'Success',
   });
+
+  // Best-effort dual audit via Cloud Function (immutable server trail when deployed)
+  if (shouldSkipRemoteAuditInLocalDev()) return;
+  try {
+    const { httpsCallable } = await import('firebase/functions');
+    const { getFirebaseFunctions, isFirebaseConfigured } = await import('@/lib/firebase');
+    if (!isFirebaseConfigured()) return;
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminCpvDashboardAudit');
+    await fn({
+      actionType,
+      description: `CPV Dashboard ${actionType}${detail ? ` — ${detail}` : ''}`,
+      changeReason: detail || actionType,
+    });
+  } catch {
+    // non-blocking when CF not deployed
+  }
+}
+
+export function monitoringStatusStats(rows: Record<string, unknown>[]) {
+  const total = rows.length;
+  const oos = rows.filter((r) => ['OOS', 'Failed', 'Critical', 'Exceeded'].includes(String(r.status || ''))).length;
+  const oot = rows.filter((r) => ['OOT', 'Warning', 'Alert'].includes(String(r.status || ''))).length;
+  const complies = rows.filter((r) => ['Complies', 'Pass', 'Compliant', 'Within Limit', 'OK'].includes(String(r.status || ''))).length;
+  return { total, oos, oot, complies };
+}
+
+export function averageYieldPercent(rows: Record<string, unknown>[]): number {
+  const values = rows
+    .map((r) => Number(r.yieldPercent ?? r.yield_percent ?? r.actualYield ?? r.actual_yield))
+    .filter((v) => Number.isFinite(v) && v > 0);
+  if (!values.length) return 0;
+  return Math.round((values.reduce((s, v) => s + v, 0) / values.length) * 100) / 100;
+}
+
+export function batchStatusBreakdown(batches: Record<string, unknown>[]) {
+  const norm = (s: string) => s.toLowerCase();
+  return {
+    total: batches.length,
+    approved: batches.filter((b) => ['approved', 'released', 'closed'].includes(norm(String(b.status || b.batchStatus || '')))).length,
+    rejected: batches.filter((b) => ['rejected', 'failed', 'cancelled'].includes(norm(String(b.status || b.batchStatus || '')))).length,
+    running: batches.filter((b) => ['in progress', 'running', 'manufacturing', 'active'].includes(norm(String(b.status || b.batchStatus || '')))).length,
+    onHold: batches.filter((b) => ['on hold', 'hold', 'quarantine'].includes(norm(String(b.status || b.batchStatus || '')))).length,
+  };
 }

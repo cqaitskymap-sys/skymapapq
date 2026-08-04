@@ -40,7 +40,7 @@ import {
   isOverdue,
   type RiskAssessmentRecord,
 } from '@/lib/cpv-risk-assessment-records';
-import { TMS_DEPARTMENTS } from '@/lib/training-types';
+import { DMS_DEPARTMENTS } from '@/lib/dms-types';
 
 export const RISK_REPORTS_COLLECTION = 'risk_reports';
 
@@ -194,7 +194,7 @@ export const riskReportFormSchema = z.object({
 export type RiskReportFormData = z.infer<typeof riskReportFormSchema>;
 
 export const RISK_REPORT_FILTER_OPTIONS = {
-  departments: ['All', ...TMS_DEPARTMENTS],
+  departments: ['All', ...DMS_DEPARTMENTS],
   categories: ['All', ...RISK_CATEGORIES],
   levels: ['All', ...RISK_LEVELS],
   statuses: ['All', ...RISK_STATUSES],

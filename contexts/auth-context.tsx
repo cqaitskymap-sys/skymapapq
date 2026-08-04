@@ -37,9 +37,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const { getUserProfile } = await import('@/lib/auth');
       const data = await getUserProfile(userId);
-      if (data) setProfile(data);
+      setProfile(data ?? null);
     } catch (error) {
       console.error('Error fetching profile:', error);
+      setProfile(null);
     }
   };
 
@@ -53,7 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const safetyTimer = window.setTimeout(() => {
       if (!cancelled) setLoading(false);
-    }, 4000);
+    }, 8000);
 
     void (async () => {
       try {
@@ -67,15 +68,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         const { subscribeToAuthState } = await import('@/lib/auth');
         unsubscribe = subscribeToAuthState((currentUser) => {
-          setUser(currentUser ?? null);
-          if (currentUser) {
-            void syncAuthSessionCookie(currentUser).catch(() => clearAuthSessionCookies());
-            void fetchProfile(currentUser.uid);
-          } else {
-            clearAuthSessionCookies();
-            setProfile(null);
-          }
-          setLoading(false);
+          void (async () => {
+            setUser(currentUser ?? null);
+            if (currentUser) {
+              void syncAuthSessionCookie(currentUser).catch(() => clearAuthSessionCookies());
+              await fetchProfile(currentUser.uid);
+            } else {
+              clearAuthSessionCookies();
+              setProfile(null);
+            }
+            if (!cancelled) setLoading(false);
+          })();
         });
       } catch (error) {
         console.error('Firebase auth init failed:', error);

@@ -2,10 +2,8 @@ import {
   collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import {
-  getFirebaseApp, getFirebaseFirestore, isFirebaseConfigured,
-} from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseApp, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import { getAdminRecords } from './admin-service';
 import {
   ADMIN_COLLECTIONS, DESIGNATION_LEVEL_APPROVAL_MAP, SYSTEM_DESIGNATION_CODES,
@@ -262,7 +260,7 @@ export async function createDesignation(
 ): Promise<{ designation: Designation | null; error: string | null }> {
   try {
     const createFn = httpsCallable<Record<string, unknown>, Designation>(
-      getFunctions(getFirebaseApp()),
+      getFirebaseFunctions(),
       'createAdminDesignation',
     );
     const response = await createFn({ ...data, reason: data.changeReason });
@@ -282,7 +280,7 @@ export async function updateDesignation(
     const updateFn = httpsCallable<
       Record<string, unknown>,
       { designation: Designation; cascadeCount: number }
-    >(getFunctions(getFirebaseApp()), 'updateAdminDesignation');
+    >(getFirebaseFunctions(), 'updateAdminDesignation');
     const response = await updateFn({
       designationDocId: id,
       updates: data,
@@ -312,7 +310,7 @@ export async function setDesignationStatus(
     const setStatusFn = httpsCallable<
       Record<string, unknown>,
       { success: boolean; linkedUsers: number }
-    >(getFunctions(getFirebaseApp()), 'setAdminDesignationStatus');
+    >(getFirebaseFunctions(), 'setAdminDesignationStatus');
     const response = await setStatusFn({ designationDocId: id, status, reason });
     return { success: true, linkedUsers: response.data.linkedUsers };
   } catch (error) {
@@ -330,7 +328,7 @@ export async function deleteDesignation(
   if (!check.allowed) return { success: false, error: check.reason };
 
   try {
-    const deleteFn = httpsCallable(getFunctions(getFirebaseApp()), 'softDeleteAdminDesignation');
+    const deleteFn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminDesignation');
     await deleteFn({ designationDocId: id, reason });
     return { success: true };
   } catch (error) {
@@ -343,7 +341,7 @@ export async function restoreDesignation(
   reason: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const restoreFn = httpsCallable(getFunctions(getFirebaseApp()), 'restoreAdminDesignation');
+    const restoreFn = httpsCallable(getFirebaseFunctions(), 'restoreAdminDesignation');
     await restoreFn({ designationDocId: id, reason });
     return { success: true };
   } catch (error) {
@@ -360,7 +358,7 @@ export async function bulkUpdateDesignations(
     const bulkFn = httpsCallable<
       Record<string, unknown>,
       { successCount: number }
-    >(getFunctions(getFirebaseApp()), 'bulkUpdateAdminDesignations');
+    >(getFirebaseFunctions(), 'bulkUpdateAdminDesignations');
     const response = await bulkFn({ designationDocIds: designationIds, action, reason });
     return { successCount: response.data.successCount };
   } catch (error) {
@@ -376,7 +374,7 @@ export async function importDesignations(
     const importFn = httpsCallable<
       Record<string, unknown>,
       { successCount: number; errorCount: number; errors: string[] }
-    >(getFunctions(getFirebaseApp()), 'importAdminDesignations');
+    >(getFirebaseFunctions(), 'importAdminDesignations');
     const response = await importFn({ rows: rows.slice(0, 100), reason });
     return response.data;
   } catch (error) {
@@ -440,7 +438,7 @@ export function exportDesignationsCsv(designations: Designation[]): string {
 
 export async function logDesignationExport(_meta: DesignationAuditMeta, count: number) {
   try {
-    const exportFn = httpsCallable(getFunctions(getFirebaseApp()), 'logAdminDesignationExport');
+    const exportFn = httpsCallable(getFirebaseFunctions(), 'logAdminDesignationExport');
     await exportFn({ count, reason: 'Designation list export' });
   } catch (error) {
     console.error('logDesignationExport failed:', error);

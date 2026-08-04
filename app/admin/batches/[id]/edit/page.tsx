@@ -43,17 +43,34 @@ function EditBatchContent({ id }: { id: string }) {
       setInitial({
         productCode: b.productCode,
         batchNumber: b.batchNumber,
+        batchCode: b.batchCode || '',
         productName: b.productName || '',
+        productVersion: b.productVersion || '',
+        productCategory: b.productCategory || '',
         genericName: b.genericName || '',
         strength: b.strength || '',
         dosageForm: b.dosageForm || '',
         market: b.market || '',
+        manufacturingOrder: b.manufacturingOrder || '',
         batchSize: Number(b.batchSize) || 0,
         batchSizeUnit: (b.batchSizeUnit || b.unit || 'Vials') as BatchFormData['batchSizeUnit'],
+        plannedQuantity: b.plannedQuantity ? Number(b.plannedQuantity) : undefined,
+        actualQuantity: b.actualQuantity ? Number(b.actualQuantity) : undefined,
         manufacturingDate: b.manufacturingDate || '',
+        packagingDate: b.packagingDate || '',
         expiryDate: b.expiryDate || '',
+        retestDate: b.retestDate || '',
+        shelfLife: b.shelfLife || '',
+        batchPrefix: b.batchPrefix || '',
         manufacturingSite: b.manufacturingSite || '',
+        businessUnit: b.businessUnit || '',
+        department: b.department || '',
+        warehouse: b.warehouse || '',
+        storageLocation: b.storageLocation || '',
         manufacturingLine: b.manufacturingLine || b.lineNumber || '',
+        equipment: b.equipment || '',
+        processVersion: b.processVersion || '',
+        recipeVersion: b.recipeVersion || '',
         shift: b.shift || '',
         mfrNumber: b.mfrNumber || '',
         bmrNumber: b.bmrNumber || '',
@@ -62,6 +79,8 @@ function EditBatchContent({ id }: { id: string }) {
         customerName: b.customerName || '',
         batchStatus: (b.batchStatus as BatchFormData['batchStatus']) || 'Planned',
         releaseStatus: (b.releaseStatus as BatchFormData['releaseStatus']) || 'Pending',
+        qcStatus: (b.qcStatus as BatchFormData['qcStatus']) || 'Pending',
+        qaStatus: (b.qaStatus as BatchFormData['qaStatus']) || 'Pending',
         releaseDate: b.releaseDate || '',
         qaReleasedBy: b.qaReleasedBy || '',
         semiFinishedBatchNumber: b.semiFinishedBatchNumber || '',
@@ -69,6 +88,7 @@ function EditBatchContent({ id }: { id: string }) {
         packingBatchNumber: b.packingBatchNumber || '',
         statusChangeReason: b.statusChangeReason || '',
         remarks: b.remarks || '',
+        changeReason: '',
         qaOverride: false,
       });
       setLoading(false);
@@ -90,6 +110,10 @@ function EditBatchContent({ id }: { id: string }) {
   }
 
   const confirmSave = async (data: BatchFormData) => {
+    if (data.changeReason.trim().length < 5) {
+      toast.error('Change reason is required (min 5 characters)');
+      return;
+    }
     setSubmitting(true);
     const result = await updateBatch(id, data, existing, {
       userId: user?.uid || 'system',

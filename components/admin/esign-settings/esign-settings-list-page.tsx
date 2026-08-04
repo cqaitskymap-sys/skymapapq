@@ -33,10 +33,9 @@ import type { EsignSettings } from '@/lib/admin/schemas';
 import {
   fetchEsignSettings, getEsignSettingsSummary, setEsignSettingStatus,
   exportEsignSettingsCsv, logEsignSettingsExport, seedDefaultEsignSettings,
+  softDeleteEsignSetting, subscribeToEsignSettings,
 } from '@/lib/admin/esign-settings-service';
 import { fetchEsignRecords, getEsignRecordsSummary } from '@/lib/admin/esign-service';
-import { deleteAdminRecord } from '@/lib/admin/admin-service';
-import { ADMIN_COLLECTIONS } from '@/lib/admin/constants';
 
 const PAGE_SIZE = 10;
 
@@ -78,7 +77,19 @@ export function EsignSettingsListPage() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    setLoading(true);
+    const unsub = subscribeToEsignSettings(
+      (list) => {
+        setSettings(list);
+        setError(null);
+        setLoading(false);
+      },
+      () => { void load(); },
+    );
+    void fetchEsignRecords().then((records) => setRecordStats(getEsignRecordsSummary(records))).catch(() => undefined);
+    return () => unsub();
+  }, [load]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -136,23 +147,14 @@ export function EsignSettingsListPage() {
 
   const runDelete = async () => {
     if (!deleteConfirm?.id) return;
-    try {
-      const ok = await deleteAdminRecord(ADMIN_COLLECTIONS.esignSettings, deleteConfirm.id, {
-        userId: auditMeta.userId,
-        userName: auditMeta.userName,
-        module: 'E-Signature Settings',
-      });
-      if (ok) {
-        toast.success('E-sign setting deleted');
-        load();
-      } else {
-        toast.error('Delete failed');
-      }
-    } catch {
-      toast.error('Delete failed');
-    } finally {
-      setDeleteConfirm(null);
+    const result = await softDeleteEsignSetting(deleteConfirm.id, auditMeta, 'Soft-deleted via Admin UI');
+    if (result.success) {
+      toast.success('E-sign setting deleted');
+      load();
+    } else {
+      toast.error(result.error || 'Delete failed');
     }
+    setDeleteConfirm(null);
   };
 
   if (loading) return <div><PageHeader title="E-Signature Settings" basePath="/admin" /><LoadingSkeleton rows={2} /></div>;
@@ -166,6 +168,12 @@ export function EsignSettingsListPage() {
         basePath="/admin"
         actions={
           <div className="flex gap-2 flex-wrap">
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/admin/esign-settings/history">Signature History</Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/admin/audit-trail">Audit Trail</Link>
+            </Button>
             <Button variant="outline" size="sm" onClick={handleExport}>
               <Download className="h-4 w-4 mr-1" />Export
             </Button>

@@ -2,10 +2,8 @@ import {
   collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import {
-  getFirebaseApp, getFirebaseFirestore, isFirebaseConfigured,
-} from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseApp, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import { getAdminRecords, checkUniqueField } from './admin-service';
 import { ADMIN_COLLECTIONS, SYSTEM_ROLE_IDS } from './constants';
 import {
@@ -216,7 +214,7 @@ export async function createRole(
     if (!idUnique) return { role: null, error: 'Role ID already exists' };
 
     const createRoleFn = httpsCallable<Record<string, unknown>, AdminRole>(
-      getFunctions(getFirebaseApp()),
+      getFirebaseFunctions(),
       'createAdminRole',
     );
     const response = await createRoleFn({
@@ -256,7 +254,7 @@ export async function updateRole(
         reason: string;
       },
       { role: AdminRole; affectedUsers: number }
-    >(getFunctions(getFirebaseApp()), 'updateAdminRole');
+    >(getFirebaseFunctions(), 'updateAdminRole');
 
     const permissions = enforceSuperAdminMatrix(existing.roleId, data.permissions);
     const response = await updateRoleFn({
@@ -305,7 +303,7 @@ export async function setRoleStatus(
 
   try {
     const setStatusFn = httpsCallable(
-      getFunctions(getFirebaseApp()),
+      getFirebaseFunctions(),
       'setAdminRoleStatus',
     );
     await setStatusFn({
@@ -329,7 +327,7 @@ export async function softDeleteRole(
   if (!check.allowed) return { success: false, error: check.reason };
 
   try {
-    const deleteFn = httpsCallable(getFunctions(getFirebaseApp()), 'softDeleteAdminRole');
+    const deleteFn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminRole');
     await deleteFn({ roleDocId: id, reason });
     return { success: true };
   } catch (error) {
@@ -346,7 +344,7 @@ export async function restoreRole(
     return { success: false, error: 'Only administrators can restore roles' };
   }
   try {
-    const restoreFn = httpsCallable(getFunctions(getFirebaseApp()), 'restoreAdminRole');
+    const restoreFn = httpsCallable(getFirebaseFunctions(), 'restoreAdminRole');
     await restoreFn({ roleDocId: id, reason });
     return { success: true };
   } catch (error) {
@@ -367,7 +365,7 @@ export async function cloneRole(
     const cloneFn = httpsCallable<
       Record<string, unknown>,
       AdminRole
-    >(getFunctions(getFirebaseApp()), 'cloneAdminRole');
+    >(getFirebaseFunctions(), 'cloneAdminRole');
     const response = await cloneFn({
       sourceRoleDocId: sourceId,
       newRoleId,
@@ -390,7 +388,7 @@ export async function bulkUpdateRoleStatus(
     const bulkFn = httpsCallable<
       Record<string, unknown>,
       { successCount: number }
-    >(getFunctions(getFirebaseApp()), 'bulkUpdateAdminRoles');
+    >(getFirebaseFunctions(), 'bulkUpdateAdminRoles');
     const response = await bulkFn({
       roleDocIds: roleIds,
       action: status === 'Active' ? 'activate' : 'deactivate',

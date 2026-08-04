@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Archive, Download, Send } from 'lucide-react';
 import { toast } from 'sonner';
@@ -28,9 +29,13 @@ import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
 
 export function AnnualReviewDetailView({ id }: { id: string }) {
   const router = useRouter();
@@ -45,6 +50,11 @@ export function AnnualReviewDetailView({ id }: { id: string }) {
   const [conclusion, setConclusion] = useState('');
   const [recommendations, setRecommendations] = useState('');
   const [executiveSummary, setExecutiveSummary] = useState('');
+  const [changeReason, setChangeReason] = useState('');
+  const [esignOpen, setEsignOpen] = useState(false);
+  const [esignAction, setEsignAction] = useState<'approve' | 'archive'>('approve');
+  const [signatureText, setSignatureText] = useState('');
+  const [esignReason, setEsignReason] = useState('');
 
   const actor = { id: user?.uid || 'system', name: profile?.full_name || 'System', role: profile?.role || '' };
 
@@ -90,29 +100,65 @@ export function AnnualReviewDetailView({ id }: { id: string }) {
             )}
             {canEdit && !['Approved', 'Archived'].includes(record.reviewStatus) && (
               <Button size="sm" onClick={async () => {
-                const { error } = await submitCpvReviewForApproval(record.id, actor, { ...record, executiveSummary });
+                const reason = changeReason.trim() || 'Submitted for management approval';
+                if (reason.length < 5) return toast.error('Change reason must be at least 5 characters');
+                const { error } = await submitCpvReviewForApproval(record.id, actor, { ...record, executiveSummary }, { changeReason: reason });
                 if (error) return toast.error(error);
                 toast.success('Submitted for review');
                 await load();
               }}><Send className="h-4 w-4 mr-1" />Submit</Button>
             )}
+            {canApprove && record.reviewStatus === 'Under Review' && (
+              <Button size="sm" onClick={() => { setEsignAction('approve'); setSignatureText(actor.name); setEsignReason(''); setEsignOpen(true); }}>
+                Approve
+              </Button>
+            )}
             {canApprove && record.reviewStatus === 'Approved' && (
-              <Button size="sm" variant="outline" onClick={async () => {
-                await archiveCpvReview(record.id, actor, record);
-                toast.success('Archived');
-                await load();
-              }}><Archive className="h-4 w-4 mr-1" />Archive</Button>
+              <Button size="sm" variant="outline" onClick={() => { setEsignAction('archive'); setSignatureText(actor.name); setEsignReason('Archived after approval'); setEsignOpen(true); }}>
+                <Archive className="h-4 w-4 mr-1" />Archive
+              </Button>
             )}
           </>
         )}
       />
 
-      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
+      <div className="no-print flex flex-wrap gap-1.5">
+        {[
+          { href: '/cpv/cpp', label: 'CPP' },
+          { href: '/cpv/cqa', label: 'CQA' },
+          { href: '/cpv/process-capability', label: 'Capability' },
+          { href: '/cpv/trend-analysis', label: 'Trend' },
+          { href: '/cpv/statistical-process-control', label: 'SPC' },
+          { href: '/cpv/risk-assessment', label: 'Risk' },
+          { href: '/qms/deviation', label: 'Deviation' },
+          { href: '/qms/capa', label: 'CAPA' },
+          { href: '/admin/audit-trail', label: 'Audit Trail' },
+        ].map((link) => (
+          <Link key={link.label} href={link.href} className="rounded-md border px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900">
+            {link.label}
+          </Link>
+        ))}
+      </div>
+
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
         <KpiCard label="Status" value={reviewStatusLabel(record.reviewStatus)} tone="blue" />
         <KpiCard label="Process" value={record.overallProcessStatus} />
         <KpiCard label="Risk" value={record.overallRiskLevel} tone={record.overallRiskLevel === 'Low' ? 'green' : 'red'} />
         <KpiCard label="Avg Cpk" value={record.averageCpk.toFixed(2)} />
+        <KpiCard label="Health" value={`${record.processHealthScore}%`} tone="blue" />
+        <KpiCard label="Confidence" value={`${record.confidenceScore}%`} />
       </div>
+
+      {record.aiInsights && (
+        <Card>
+          <CardHeader><CardTitle className="text-sm">AI Insights</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p>{record.aiInsights.aiExecutiveSummary}</p>
+            <p className="text-muted-foreground">{record.aiInsights.aiRiskPrediction}</p>
+            <p>{record.aiInsights.aiPreventiveRecommendations}</p>
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="report">
         <TabsList>
@@ -128,19 +174,27 @@ export function AnnualReviewDetailView({ id }: { id: string }) {
         </TabsContent>
 
         <TabsContent value="sections" className="space-y-3">
-          <div><Label>Executive Summary</Label><Textarea className="mt-1" rows={3} value={executiveSummary} onChange={(e) => setExecutiveSummary(e.target.value)} disabled={!canEdit} /></div>
-          <div><Label>Conclusion</Label><Textarea className="mt-1" rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} disabled={!canEdit} /></div>
-          <div><Label>Recommendations</Label><Textarea className="mt-1" rows={3} value={recommendations} onChange={(e) => setRecommendations(e.target.value)} disabled={!canEdit} /></div>
-          {canEdit && (
+          <div><Label>Executive Summary</Label><Textarea className="mt-1" rows={3} value={executiveSummary} onChange={(e) => setExecutiveSummary(e.target.value)} disabled={!canEdit || record.isLocked} /></div>
+          <div><Label>Conclusion</Label><Textarea className="mt-1" rows={3} value={conclusion} onChange={(e) => setConclusion(e.target.value)} disabled={!canEdit || record.isLocked} /></div>
+          <div><Label>Recommendations</Label><Textarea className="mt-1" rows={3} value={recommendations} onChange={(e) => setRecommendations(e.target.value)} disabled={!canEdit || record.isLocked} /></div>
+          <div><Label>Change Reason *</Label><Textarea className="mt-1" rows={2} value={changeReason} onChange={(e) => setChangeReason(e.target.value)} disabled={!canEdit || record.isLocked} /></div>
+          {canEdit && !record.isLocked && (
             <Button onClick={async () => {
-              const { error } = await updateCpvReview(record.id, { executiveSummary, conclusion, recommendations }, actor, record);
+              if (changeReason.trim().length < 5) return toast.error('Change reason must be at least 5 characters');
+              const { error } = await updateCpvReview(
+                record.id,
+                { executiveSummary, conclusion, recommendations, changeReason: changeReason.trim() },
+                actor,
+                record,
+                { changeReason: changeReason.trim() },
+              );
               if (error) return toast.error(error);
               toast.success('Saved');
               await load();
             }}>Save Sections</Button>
           )}
           {(record.sections || []).slice(0, 6).map((section, i) => (
-            <ReportSectionEditor key={section.sectionKey} section={section} disabled={!canEdit}
+            <ReportSectionEditor key={section.sectionKey} section={section} disabled={!canEdit || record.isLocked}
               onChange={(content) => {
                 const sections = [...(record.sections || [])];
                 sections[i] = { ...sections[i], content };
@@ -174,12 +228,13 @@ export function AnnualReviewDetailView({ id }: { id: string }) {
           <Card><CardContent className="pt-6">
             {audit.length ? (
               <Table>
-                <TableHeader><TableRow><TableHead>Action</TableHead><TableHead>User</TableHead><TableHead>When</TableHead></TableRow></TableHeader>
+                <TableHeader><TableRow><TableHead>Action</TableHead><TableHead>User</TableHead><TableHead>Reason</TableHead><TableHead>When</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {audit.map((row) => (
                     <TableRow key={String(row.id)}>
                       <TableCell>{String(row.action || row.actionType || '')}</TableCell>
                       <TableCell>{String(row.userName || row.userId || '')}</TableCell>
+                      <TableCell>{String(row.reason || '')}</TableCell>
                       <TableCell>{String(row.createdAt || row.timestamp || '')}</TableCell>
                     </TableRow>
                   ))}
@@ -189,6 +244,38 @@ export function AnnualReviewDetailView({ id }: { id: string }) {
           </CardContent></Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={esignOpen} onOpenChange={setEsignOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>E-Signature — {esignAction === 'approve' ? 'Approve' : 'Archive'}</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div><Label>Full Name *</Label><Input className="mt-1" value={signatureText} onChange={(e) => setSignatureText(e.target.value)} /></div>
+            <div><Label>Reason *</Label><Textarea className="mt-1" rows={2} value={esignReason} onChange={(e) => setEsignReason(e.target.value)} /></div>
+            <Button className="w-full" onClick={async () => {
+              if (!signatureText.trim() || esignReason.trim().length < 5) {
+                return toast.error('Signature and reason (min 5 chars) required');
+              }
+              if (esignAction === 'approve') {
+                const { error } = await approveCpvReview(record.id, actor, { ...record, conclusion }, {
+                  signatureText: signatureText.trim(),
+                  meaning: 'approve',
+                  reason: esignReason.trim(),
+                });
+                if (error) return toast.error(error);
+                toast.success('Approved');
+              } else {
+                const { error } = await archiveCpvReview(record.id, actor, record, { changeReason: esignReason.trim() });
+                if (error) return toast.error(error);
+                toast.success('Archived');
+              }
+              setEsignOpen(false);
+              await load();
+            }}>
+              Confirm Electronic Signature
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

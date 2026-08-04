@@ -1,13 +1,14 @@
-import { writeAuditTrail } from '@/lib/audit-trail';
 import {
-  getAdminRecords, createAdminRecord, updateAdminRecord,
-  checkUniqueField, logAuditEvent,
-} from './admin-service';
-import {
-  ADMIN_COLLECTIONS,
-} from './constants';
+  collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
+  type Unsubscribe,
+} from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseApp, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import { CQA_PARAMETER_STAGE_MAP } from '@/lib/cpv-cqa-monitoring';
 import { CPP_MONITORING_HIERARCHY } from '@/lib/cpv-cpp-monitoring';
+import {
+  ADMIN_COLLECTIONS, PARAMETER_GROUPS, PARAMETER_CATEGORIES,
+} from './constants';
 import type { Parameter, ParameterFormData } from './schemas';
 
 export interface ParameterAuditMeta {
@@ -112,37 +113,12 @@ const CPP_PARAMETER_NAME_ALIASES: Record<string, string> = {
   [normalizeName('Filling hr')]: 'Filling Hr',
 };
 
-async function logParameterAudit(
-  action: string,
-  recordId: string,
-  meta: ParameterAuditMeta,
-  oldValue: unknown,
-  newValue: unknown,
-) {
-  await logAuditEvent({
-    userId: meta.userId,
-    userName: meta.userName,
-    module: 'Parameter Master',
-    recordId,
-    action,
-    oldValue: typeof oldValue === 'string' ? oldValue : JSON.stringify(oldValue ?? ''),
-    newValue: typeof newValue === 'string' ? newValue : JSON.stringify(newValue ?? ''),
-    reason: '',
-    ipAddress: 'client',
-    device: typeof navigator !== 'undefined' ? navigator.userAgent : 'browser',
-    status: 'Success',
-  });
-
-  await writeAuditTrail({
-    collectionName: ADMIN_COLLECTIONS.parameters,
-    documentId: recordId,
-    action,
-    oldValue,
-    newValue,
-    userId: meta.userId,
-    userName: meta.userName,
-    moduleName: 'Parameter Master',
-  });
+function callableErrorMessage(error: unknown, fallback: string): string {
+  const err = error as { message?: string };
+  return (err.message || fallback)
+    .replace(/^Firebase:\s*/i, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim() || fallback;
 }
 
 export function buildParameterId(code: string): string {
@@ -165,7 +141,17 @@ export function normalizeParameter(p: Parameter): Parameter {
     target,
     productLink,
     product: productLink,
+    parameterGroup: p.parameterGroup || 'General',
+    moduleName: p.moduleName || 'General',
+    dataType: p.dataType || 'Numeric',
+    calculationType: p.calculationType || 'Manual',
+    isDeleted: Boolean(p.isDeleted),
+    isArchived: p.isArchived ?? false,
   };
+}
+
+function mapParameterDoc(snapshot: { id: string; data: () => Record<string, unknown> }): Parameter {
+  return normalizeParameter({ id: snapshot.id, ...snapshot.data() } as Parameter);
 }
 
 export function evaluateParameterResult(param: Parameter, observedValue: number): ParameterEvaluation {
@@ -202,285 +188,393 @@ export function evaluateParameterResult(param: Parameter, observedValue: number)
   return { status, triggers };
 }
 
-export async function fetchParameters(): Promise<Parameter[]> {
+export async function fetchParameters(includeDeleted = false): Promise<Parameter[]> {
+  if (!isFirebaseConfigured()) return [];
   try {
-    const records = await getAdminRecords<Parameter>(ADMIN_COLLECTIONS.parameters);
-    return records.filter((p) => !p.isDeleted).map(normalizeParameter);
-  } catch {
-    return [];
+    const snapshot = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.parameters),
+      orderBy('createdAt', 'desc'),
+    ));
+    return snapshot.docs
+      .map((document) => mapParameterDoc(document))
+      .filter((param) => includeDeleted || !param.isDeleted);
+  } catch (error) {
+    console.error('fetchParameters failed:', error);
+    throw new Error('Unable to load parameters. Check your connection and permissions.');
   }
 }
 
-export async function fetchParameterById(id: string): Promise<Parameter | null> {
-  const params = await fetchParameters();
-  return params.find((p) => p.id === id) ?? null;
+export function subscribeToParameters(
+  includeDeleted: boolean,
+  onData: (parameters: Parameter[]) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
+  if (!isFirebaseConfigured()) {
+    onData([]);
+    return () => undefined;
+  }
+  const parametersQuery = query(
+    collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.parameters),
+    orderBy('createdAt', 'desc'),
+  );
+  return onSnapshot(
+    parametersQuery,
+    (snapshot) => {
+      const parameters = snapshot.docs
+        .map((document) => mapParameterDoc(document))
+        .filter((param) => includeDeleted || !param.isDeleted);
+      onData(parameters);
+    },
+    (error) => {
+      console.error('subscribeToParameters failed:', error);
+      onError?.(new Error(error.message || 'Unable to subscribe to parameters'));
+    },
+  );
+}
+
+export async function fetchParameterById(id: string, includeDeleted = false): Promise<Parameter | null> {
+  if (!isFirebaseConfigured() || !id) return null;
+  try {
+    const snapshot = await getDoc(doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.parameters, id));
+    if (!snapshot.exists()) return null;
+    const param = mapParameterDoc(snapshot);
+    if (param.isDeleted && !includeDeleted) return null;
+    return param;
+  } catch (error) {
+    console.error('fetchParameterById failed:', error);
+    throw new Error('Unable to load parameter details.');
+  }
 }
 
 export function getParameterSummaryCounts(params: Parameter[]) {
-  const byType = (type: string) => params.filter((p) => p.parameterType === type).length;
+  const active = params.filter((p) => !p.isDeleted);
+  const byType = (type: string) => active.filter((p) => p.parameterType === type).length;
   return {
-    total: params.length,
+    total: active.length,
     cpp: byType('CPP'),
     cqa: byType('CQA'),
     ipc: byType('IPC'),
     utility: byType('Utility Parameter'),
     environmental: byType('Environmental Parameter'),
-    active: params.filter((p) => p.status === 'Active').length,
-    inactive: params.filter((p) => p.status === 'Inactive').length,
-    critical: params.filter((p) => p.criticality === 'Critical').length,
+    active: active.filter((p) => p.status === 'Active').length,
+    inactive: active.filter((p) => p.status === 'Inactive').length,
+    critical: active.filter((p) => p.criticality === 'Critical').length,
+    archived: active.filter((p) => p.isArchived).length,
   };
 }
 
-function formToPayload(data: ParameterFormData, meta: ParameterAuditMeta, status = 'Active') {
-  const parameterId = buildParameterId(data.parameterCode);
-  return {
-    parameterId,
-    parameterCode: data.parameterCode,
-    parameterName: data.parameterName,
-    parameterType: data.parameterType,
-    parameterCategory: data.parameterCategory,
-    productLink: data.productLink,
-    product: data.productLink,
-    processStage: data.processStage,
-    department: data.department,
-    testMethodStp: data.testMethodStp,
-    specificationNo: data.specificationNo,
-    targetValue: data.targetValue,
-    target: data.targetValue,
-    lowerLimit: data.lowerLimit,
-    lsl: data.lowerLimit,
-    upperLimit: data.upperLimit,
-    usl: data.upperLimit,
-    alertLimitLow: data.alertLimitLow,
-    alertLimitHigh: data.alertLimitHigh,
-    actionLimitLow: data.actionLimitLow,
-    actionLimitHigh: data.actionLimitHigh,
-    unit: data.unit,
-    resultType: data.resultType,
-    frequency: data.frequency,
-    criticality: data.criticality,
-    ootApplicable: data.ootApplicable,
-    oosApplicable: data.oosApplicable,
-    autoDeviationRequired: data.autoDeviationRequired,
-    autoCapaRequired: data.autoCapaRequired,
-    remarks: data.remarks,
-    status,
-    updatedBy: meta.userId,
-  };
+export function buildParameterCategoryGroups(parameters: Parameter[]) {
+  const map = new Map<string, Map<string, Parameter[]>>();
+  parameters.filter((p) => !p.isDeleted).forEach((param) => {
+    const category = param.parameterCategory || 'Uncategorized';
+    const group = param.parameterGroup || 'General';
+    if (!map.has(category)) map.set(category, new Map());
+    const groupMap = map.get(category)!;
+    const list = groupMap.get(group) || [];
+    list.push(param);
+    groupMap.set(group, list);
+  });
+  return Array.from(map.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([category, groupMap]) => ({
+      category,
+      groups: Array.from(groupMap.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([parameterGroup, items]) => ({
+          parameterGroup,
+          parameters: items.sort((a, b) => a.parameterName.localeCompare(b.parameterName)),
+        })),
+    }));
+}
+
+export function canDeleteParameterRecord(param: Parameter): { allowed: boolean; reason?: string } {
+  if (param.isDeleted) return { allowed: false, reason: 'Parameter is already deleted.' };
+  if (param.status === 'Active' && param.criticality === 'Critical') {
+    return { allowed: false, reason: 'Deactivate critical parameters before deleting.' };
+  }
+  return { allowed: true };
 }
 
 export async function createParameter(
   data: ParameterFormData,
-  meta: ParameterAuditMeta,
+  _meta: ParameterAuditMeta,
 ): Promise<{ parameter: Parameter | null; error: string | null }> {
   try {
-    const unique = await checkUniqueField(ADMIN_COLLECTIONS.parameters, 'parameterCode', data.parameterCode);
-    if (!unique) return { parameter: null, error: 'Parameter code already exists' };
-
-    const payload = {
-      ...formToPayload(data, meta),
-      createdBy: meta.userId,
-    };
-
-    const created = await createAdminRecord(ADMIN_COLLECTIONS.parameters, payload as Omit<Parameter, 'id'>, {
-      userId: meta.userId, userName: meta.userName, module: 'Parameter Master', action: 'CREATE_PARAMETER',
+    const createFn = httpsCallable<Record<string, unknown>, Parameter>(
+      getFirebaseFunctions(),
+      'createAdminParameter',
+    );
+    const response = await createFn({
+      ...data,
+      reason: data.changeReason || 'Initial parameter registration',
     });
-
-    await logParameterAudit('CREATE_PARAMETER', created.id || payload.parameterId, meta, null, payload);
-    return { parameter: normalizeParameter(created as Parameter), error: null };
-  } catch (e) {
-    return { parameter: null, error: (e as Error).message };
+    return { parameter: normalizeParameter(response.data), error: null };
+  } catch (error) {
+    return { parameter: null, error: callableErrorMessage(error, 'Unable to create parameter') };
   }
 }
 
 export async function updateParameter(
   id: string,
   data: ParameterFormData,
-  existing: Parameter,
-  meta: ParameterAuditMeta,
+  _existing: Parameter,
+  _meta: ParameterAuditMeta,
 ): Promise<{ parameter: Parameter | null; error: string | null }> {
   try {
-    if (data.parameterCode !== existing.parameterCode) {
-      const unique = await checkUniqueField(ADMIN_COLLECTIONS.parameters, 'parameterCode', data.parameterCode, id);
-      if (!unique) return { parameter: null, error: 'Parameter code already exists' };
-    }
-
-    const updates = formToPayload(data, meta, existing.status);
-    delete (updates as { createdBy?: string }).createdBy;
-
-    const updated = await updateAdminRecord(ADMIN_COLLECTIONS.parameters, id, updates, {
-      userId: meta.userId, userName: meta.userName, module: 'Parameter Master',
-      oldValue: JSON.stringify(existing),
+    const updateFn = httpsCallable<
+      Record<string, unknown>,
+      { parameter: Parameter }
+    >(getFirebaseFunctions(), 'updateAdminParameter');
+    const response = await updateFn({
+      parameterDocId: id,
+      updates: data,
+      reason: data.changeReason,
     });
-
-    if (existing.criticality !== data.criticality) {
-      await logParameterAudit('CRITICALITY_CHANGE', id, meta, existing.criticality, data.criticality);
-    }
-    if (existing.productLink !== data.productLink) {
-      await logParameterAudit('PRODUCT_LINK_CHANGE', id, meta, existing.productLink, data.productLink);
-    }
-    if (
-      existing.lowerLimit !== data.lowerLimit || existing.upperLimit !== data.upperLimit ||
-      existing.alertLimitLow !== data.alertLimitLow || existing.alertLimitHigh !== data.alertLimitHigh
-    ) {
-      await logParameterAudit('LIMIT_CHANGE', id, meta, {
-        lower: existing.lowerLimit, upper: existing.upperLimit,
-        alertLow: existing.alertLimitLow, alertHigh: existing.alertLimitHigh,
-      }, {
-        lower: data.lowerLimit, upper: data.upperLimit,
-        alertLow: data.alertLimitLow, alertHigh: data.alertLimitHigh,
-      });
-    }
-    await logParameterAudit('EDIT_PARAMETER', id, meta, existing, updates);
-    return { parameter: normalizeParameter(updated as Parameter), error: null };
-  } catch (e) {
-    return { parameter: null, error: (e as Error).message };
+    return { parameter: normalizeParameter(response.data.parameter), error: null };
+  } catch (error) {
+    return { parameter: null, error: callableErrorMessage(error, 'Unable to update parameter') };
   }
 }
 
 export async function setParameterStatus(
   id: string,
-  param: Parameter,
+  _param: Parameter,
   status: 'Active' | 'Inactive',
-  meta: ParameterAuditMeta,
+  _meta: ParameterAuditMeta,
+  reason: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    await updateAdminRecord(ADMIN_COLLECTIONS.parameters, id, { status }, {
-      userId: meta.userId, userName: meta.userName, module: 'Parameter Master',
-      oldValue: JSON.stringify(param),
-    });
-    const action = status === 'Active' ? 'ACTIVATE_PARAMETER' : 'DEACTIVATE_PARAMETER';
-    await logParameterAudit(action, id, meta, param.status, status);
+    const fn = httpsCallable(getFirebaseFunctions(), 'setAdminParameterStatus');
+    await fn({ parameterDocId: id, parameterStatus: status, reason });
     return { success: true };
-  } catch (e) {
-    return { success: false, error: (e as Error).message };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to update parameter status') };
+  }
+}
+
+export async function archiveParameter(
+  id: string,
+  reason: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'archiveAdminParameter');
+    await fn({ parameterDocId: id, reason });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to archive parameter') };
   }
 }
 
 export async function deleteParameter(
   id: string,
   param: Parameter,
-  meta: ParameterAuditMeta,
+  reason: string,
+): Promise<{ success: boolean; error?: string }> {
+  const check = canDeleteParameterRecord(param);
+  if (!check.allowed) return { success: false, error: check.reason };
+  try {
+    const deleteFn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminParameter');
+    await deleteFn({ parameterDocId: id, reason });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to delete parameter') };
+  }
+}
+
+export async function restoreParameter(
+  id: string,
+  reason: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    await updateAdminRecord(ADMIN_COLLECTIONS.parameters, id, {
-      isDeleted: true,
-      status: 'Inactive',
-    }, {
-      userId: meta.userId,
-      userName: meta.userName,
-      module: 'Parameter Master',
-      oldValue: JSON.stringify(param),
-    });
-    await logParameterAudit('DELETE_PARAMETER', id, meta, param, { isDeleted: true, status: 'Inactive' });
+    const restoreFn = httpsCallable(getFirebaseFunctions(), 'restoreAdminParameter');
+    await restoreFn({ parameterDocId: id, reason });
     return { success: true };
-  } catch (e) {
-    return { success: false, error: (e as Error).message };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to restore parameter') };
+  }
+}
+
+export async function bulkUpdateParameters(
+  parameterIds: string[],
+  action: 'activate' | 'deactivate' | 'archive',
+  reason: string,
+): Promise<{ successCount: number; error?: string }> {
+  try {
+    const bulkFn = httpsCallable<
+      Record<string, unknown>,
+      { successCount: number }
+    >(getFirebaseFunctions(), 'bulkUpdateAdminParameters');
+    const response = await bulkFn({ parameterDocIds: parameterIds, action, reason });
+    return { successCount: response.data.successCount };
+  } catch (error) {
+    return { successCount: 0, error: callableErrorMessage(error, 'Bulk update failed') };
+  }
+}
+
+export async function bulkDeleteParameters(
+  parameterIds: string[],
+  reason: string,
+): Promise<{ successCount: number; errors: string[]; error?: string }> {
+  try {
+    const bulkFn = httpsCallable<
+      Record<string, unknown>,
+      { successCount: number; errors: string[] }
+    >(getFirebaseFunctions(), 'bulkSoftDeleteAdminParameters');
+    const response = await bulkFn({ parameterDocIds: parameterIds, reason });
+    return response.data;
+  } catch (error) {
+    return { successCount: 0, errors: [], error: callableErrorMessage(error, 'Bulk delete failed') };
   }
 }
 
 export async function fetchParameterAuditTrail(recordId: string) {
+  if (!isFirebaseConfigured() || !recordId) return [];
   try {
-    const [trail, logs] = await Promise.all([
-      getAdminRecords<Record<string, unknown>>(ADMIN_COLLECTIONS.auditTrail).catch(() => []),
-      getAdminRecords<Record<string, unknown>>(ADMIN_COLLECTIONS.auditLogs).catch(() => []),
+    const firestore = getFirebaseFirestore();
+    const [trailSnap, logsSnap] = await Promise.all([
+      getDocs(query(
+        collection(firestore, ADMIN_COLLECTIONS.auditTrail),
+        where('documentId', '==', recordId),
+        orderBy('timestamp', 'desc'),
+        limit(30),
+      )).catch(() => ({ docs: [] })),
+      getDocs(query(
+        collection(firestore, ADMIN_COLLECTIONS.auditLogs),
+        where('recordId', '==', recordId),
+        orderBy('dateTime', 'desc'),
+        limit(30),
+      )).catch(() => ({ docs: [] })),
     ]);
-    return [...trail, ...logs]
-      .filter((l) => l.documentId === recordId || l.recordId === recordId)
+    return [...trailSnap.docs, ...logsSnap.docs]
+      .map((document): Record<string, unknown> & { id: string } => {
+        const data = document.data() as Record<string, unknown>;
+        return { id: document.id, ...data };
+      })
       .sort((a, b) => String(b.timestamp ?? b.dateTime).localeCompare(String(a.timestamp ?? a.dateTime)))
       .slice(0, 30);
-  } catch {
+  } catch (error) {
+    console.error('fetchParameterAuditTrail failed:', error);
     return [];
   }
 }
 
+export async function countLinkedParameterUsage(parameterId: string, parameterCode: string): Promise<number> {
+  if (!isFirebaseConfigured()) return 0;
+  const firestore = getFirebaseFirestore();
+  const collections: Array<{ name: string; field: string; value: string }> = [
+    { name: 'cpp_results', field: 'parameterCode', value: parameterCode },
+    { name: 'cqa_results', field: 'parameterCode', value: parameterCode },
+    { name: 'cpv_cpp', field: 'parameterCode', value: parameterCode },
+    { name: 'cpv_cqa', field: 'parameterCode', value: parameterCode },
+  ];
+  let total = 0;
+  for (const link of collections) {
+    try {
+      const snap = await getDocs(query(
+        collection(firestore, link.name),
+        where(link.field, '==', link.value),
+        limit(5),
+      ));
+      total += snap.docs.filter((doc) => doc.data().isDeleted !== true).length;
+    } catch {
+      // skip
+    }
+  }
+  if (parameterId) {
+    try {
+      const snap = await getDocs(query(
+        collection(firestore, 'cpp_results'),
+        where('parameterId', '==', parameterId),
+        limit(5),
+      ));
+      total += snap.docs.length;
+    } catch {
+      // skip
+    }
+  }
+  return total;
+}
+
 export function exportParametersCsv(params: Parameter[]): string {
   const headers = [
-    'Parameter Code', 'Parameter Name', 'Type', 'Category', 'Product',
-    'Stage', 'Lower Limit', 'Upper Limit', 'Unit', 'Result Type', 'Criticality', 'Status',
+    'Parameter Code', 'Parameter Name', 'Short Name', 'Type', 'Category', 'Group', 'Module',
+    'Product', 'Stage', 'Lower Limit', 'Upper Limit', 'Alert Low', 'Alert High',
+    'Action Low', 'Action High', 'Critical Limit', 'Unit', 'Data Type', 'Result Type',
+    'Criticality', 'Status',
   ];
   const rows = params.map((p) => [
-    p.parameterCode, p.parameterName, p.parameterType, p.parameterCategory,
-    p.productLink, p.processStage, p.lowerLimit, p.upperLimit, p.unit,
-    p.resultType, p.criticality, p.status,
+    p.parameterCode, p.parameterName, p.shortName, p.parameterType, p.parameterCategory,
+    p.parameterGroup, p.moduleName, p.productLink, p.processStage,
+    p.lowerLimit, p.upperLimit, p.alertLimitLow, p.alertLimitHigh,
+    p.actionLimitLow, p.actionLimitHigh, p.criticalLimit,
+    p.unit, p.dataType, p.resultType, p.criticality, p.status,
   ]);
   return [headers.join(','), ...rows.map((row) =>
     row.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','),
   )].join('\n');
 }
 
-export async function logParameterExport(meta: ParameterAuditMeta, count: number) {
-  await logParameterAudit('EXPORT_PARAMETER_LIST', 'export', meta, null, { count });
+export async function logParameterExport(meta: ParameterAuditMeta, count: number, reason = 'Parameter list export') {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminParameterExport');
+    await fn({ count, reason, userId: meta.userId });
+  } catch (error) {
+    console.error('logParameterExport failed:', error);
+  }
+}
+
+function rowToImportParameter(cols: string[], headers: string[]): Record<string, string> | null {
+  const idx = (name: string) => headers.findIndex((h) => h.includes(name));
+  const code = cols[idx('parameter code')] || cols[idx('code')] || '';
+  const name = cols[idx('parameter name')] || cols[idx('name')] || '';
+  if (!code || !name) return null;
+  return {
+    parameterCode: code,
+    parameterName: name,
+    parameterType: cols[idx('type')] || 'CPP',
+    parameterCategory: cols[idx('category')] || 'Manufacturing',
+    productLink: cols[idx('product')] || '',
+    department: cols[idx('department')] || '',
+    testMethodStp: cols[idx('stp')] || cols[idx('test method')] || '',
+    specificationNo: cols[idx('specification')] || '',
+    targetValue: cols[idx('target')] || '',
+    lowerLimit: cols[idx('lower')] || '0',
+    upperLimit: cols[idx('upper')] || '1',
+    unit: cols[idx('unit')] || 'units',
+    remarks: 'Imported',
+  };
 }
 
 export async function importParametersFromFile(
   file: File,
   meta: ParameterAuditMeta,
+  reason = 'CSV parameter import',
 ): Promise<{ imported: number; errors: string[] }> {
   const text = await file.text();
   const lines = text.trim().split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) return { imported: 0, errors: ['No data rows found'] };
 
   const headers = lines[0].split(',').map((h) => h.replace(/^"|"$/g, '').trim().toLowerCase());
-  const idx = (name: string) => headers.findIndex((h) => h.includes(name));
-  const cppDefaults = getCppMasterDefaults();
-  const cppNameSet = new Set(cppDefaults.map((d) => normalizeName(d.name)));
-
-  let imported = 0;
-  const errors: string[] = [];
-
+  const rows: Record<string, string>[] = [];
   for (const line of lines.slice(1)) {
-    const cols = line.match(/("([^"]|"")*"|[^,]*)/g)?.map((c) => c.replace(/^"|"$/g, '').replace(/""/g, '"').trim()) || [];
-    const code = cols[idx('parameter code')] || cols[idx('code')] || '';
-    const name = cols[idx('parameter name')] || cols[idx('name')] || '';
-    if (!code || !name) {
-      errors.push(`Row missing code/name: ${line.slice(0, 40)}`);
-      continue;
-    }
-
-    const normalizedInputName = normalizeName(name);
-    const canonicalName = CPP_PARAMETER_NAME_ALIASES[normalizedInputName] || name;
-    const typeRaw = cols[idx('type')] || 'CPP';
-    const parameterType = (cppNameSet.has(normalizeName(canonicalName)) ? 'CPP'
-      : DEFAULT_CQA_PARAMETER_MASTER.includes(name as typeof DEFAULT_CQA_PARAMETER_MASTER[number]) ? 'CQA'
-      : DEFAULT_UTILITY_PARAMETER_MASTER.includes(name as typeof DEFAULT_UTILITY_PARAMETER_MASTER[number]) ? 'Utility Parameter'
-      : typeRaw) as ParameterFormData['parameterType'];
-
-    const data: ParameterFormData = {
-      parameterCode: code,
-      parameterName: canonicalName,
-      parameterType,
-      parameterCategory: 'Manufacturing',
-      productLink: cols[idx('product')] || '',
-      processStage: 'Mixing',
-      department: cols[idx('department')] || '',
-      testMethodStp: cols[idx('stp')] || cols[idx('test method')] || '',
-      specificationNo: cols[idx('specification')] || '',
-      targetValue: cols[idx('target')] || '',
-      lowerLimit: cols[idx('lower')] || '',
-      upperLimit: cols[idx('upper')] || '',
-      alertLimitLow: '',
-      alertLimitHigh: '',
-      actionLimitLow: '',
-      actionLimitHigh: '',
-      unit: cols[idx('unit')] || (parameterType === 'CQA' ? '%' : ''),
-      resultType: 'Numeric',
-      frequency: 'Per Batch',
-      criticality: 'Major',
-      ootApplicable: false,
-      oosApplicable: parameterType === 'CQA',
-      autoDeviationRequired: parameterType === 'CPP',
-      autoCapaRequired: false,
-      remarks: 'Imported',
-    };
-
-    const result = await createParameter(data, meta);
-    if (result.error) errors.push(`${code}: ${result.error}`);
-    else imported += 1;
+    const cols = line.match(/("([^"]|"")*"|[^,]*)/g)?.map((c) =>
+      c.replace(/^"|"$/g, '').replace(/""/g, '"').trim(),
+    ) || [];
+    const row = rowToImportParameter(cols, headers);
+    if (row) rows.push(row);
   }
+  if (!rows.length) return { imported: 0, errors: ['No valid rows found'] };
 
-  if (imported) await logParameterAudit('IMPORT_PARAMETER', 'import', meta, null, { imported, errors: errors.length });
-  return { imported, errors };
+  try {
+    const importFn = httpsCallable<
+      Record<string, unknown>,
+      { imported: number; errors: string[] }
+    >(getFirebaseFunctions(), 'importAdminParameters');
+    const response = await importFn({ rows, reason, userId: meta.userId });
+    return response.data;
+  } catch (error) {
+    return { imported: 0, errors: [callableErrorMessage(error, 'Import failed')] };
+  }
 }
 
 function presetToForm(
@@ -493,47 +587,58 @@ function presetToForm(
   return {
     parameterCode: `${type === 'CPP' ? 'CPP' : type === 'CQA' ? 'CQA' : 'UTL'}_${code}`,
     parameterName: name,
+    shortName: name.slice(0, 20),
+    description: '',
     parameterType: type,
     parameterCategory: category,
+    parameterGroup: type === 'CPP' ? 'CPP Group' : type === 'CQA' ? 'CQA Group' : 'Utility Group',
+    moduleName: type === 'CPP' ? 'CPV' : type === 'CQA' ? 'Quality Control' : 'Environmental Monitoring',
+    subModule: '',
     productLink: '',
+    productCategory: '',
     processStage: stage,
     department: category === 'Utility' ? 'Engineering' : category === 'Quality Control' ? 'QC' : 'Production',
     testMethodStp: '',
     specificationNo: '',
     targetValue: '',
-    lowerLimit: '',
-    upperLimit: '',
+    lowerLimit: type === 'CQA' ? '0' : '0',
+    upperLimit: type === 'CQA' ? '100' : '1',
     alertLimitLow: '',
     alertLimitHigh: '',
     actionLimitLow: '',
     actionLimitHigh: '',
+    criticalLimit: '',
+    defaultValue: '',
+    precision: '',
+    formula: '',
+    dataType: 'Numeric',
+    calculationType: 'Manual',
     unit: type === 'CQA' ? '%' : type === 'Utility Parameter' ? 'varies' : '',
     resultType: type === 'CQA' && ['Description', 'Colour', 'Clarity', 'Identification', 'Sterility'].includes(name)
       ? 'Complies/Does Not Comply' : 'Numeric',
     frequency: type === 'Utility Parameter' ? 'Daily' : 'Per Batch',
-    criticality: ['Assay', 'Sterility', 'Bacterial Endotoxin', 'Fill Volume'].includes(name) ? 'Critical' : 'Major',
+    criticality: ['Assay', 'Sterility', 'Bacterial Endotoxin Test', 'Fill Volume'].includes(name) ? 'Critical' : 'Major',
+    mandatory: false,
+    displayOrder: undefined,
+    sequenceNumber: '',
+    applicableSite: '',
+    businessUnit: '',
     ootApplicable: type === 'CPP',
     oosApplicable: type === 'CQA' || type === 'IPC',
     autoDeviationRequired: type === 'CPP',
     autoCapaRequired: false,
     remarks: 'Default preset',
+    changeReason: 'Default parameter seed',
   };
 }
 
-export async function seedDefaultParameters(meta: ParameterAuditMeta): Promise<{ created: number; skipped: number }> {
-  const existing = await fetchParameters();
-  const codes = new Set(existing.map((p) => p.parameterCode));
-  let created = 0;
-  let skipped = 0;
-
+export async function seedDefaultParameters(
+  meta: ParameterAuditMeta,
+  reason = 'Seed default CPV parameters',
+): Promise<{ created: number; skipped: number }> {
   const cppDefaults = getCppMasterDefaults();
   const presets: ParameterFormData[] = [
-    ...cppDefaults.map((d) => presetToForm(
-      d.name,
-      'CPP',
-      'Manufacturing',
-      d.stage,
-    )),
+    ...cppDefaults.map((d) => presetToForm(d.name, 'CPP', 'Manufacturing', d.stage)),
     ...DEFAULT_CQA_PARAMETER_MASTER.map((n) => presetToForm(
       n,
       'CQA',
@@ -543,15 +648,17 @@ export async function seedDefaultParameters(meta: ParameterAuditMeta): Promise<{
     ...DEFAULT_UTILITY_PARAMETER_MASTER.map((n) => presetToForm(n, 'Utility Parameter', 'Utility', 'Utility Monitoring')),
   ];
 
-  for (const preset of presets) {
-    if (codes.has(preset.parameterCode)) {
-      skipped += 1;
-      continue;
-    }
-    const result = await createParameter(preset, meta);
-    if (result.parameter) created += 1;
-    else skipped += 1;
+  try {
+    const seedFn = httpsCallable<
+      Record<string, unknown>,
+      { created: number; skipped: number }
+    >(getFirebaseFunctions(), 'seedAdminDefaultParameters');
+    const response = await seedFn({ presets, reason, userId: meta.userId });
+    return response.data;
+  } catch (error) {
+    console.error('seedDefaultParameters failed:', error);
+    return { created: 0, skipped: presets.length };
   }
-
-  return { created, skipped };
 }
+
+export { PARAMETER_CATEGORIES, PARAMETER_GROUPS };

@@ -352,6 +352,15 @@ export const cppResultFormSchema = z.object({
   reviewedBy: z.string().trim().default(''),
   reviewDate: z.string().trim().default(''),
   remarks: z.string().trim().default(''),
+  equipmentId: z.string().trim().default(''),
+  equipmentName: z.string().trim().default(''),
+  machineId: z.string().trim().default(''),
+  sensorId: z.string().trim().default(''),
+  site: z.string().trim().default(''),
+  department: z.string().trim().default(''),
+  shift: z.string().trim().default(''),
+  productVersion: z.string().trim().default(''),
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => d.lowerLimit < d.upperLimit, {
   message: 'Upper limit must be greater than lower limit',
   path: ['upperLimit'],
@@ -362,7 +371,7 @@ export const cppResultFormSchema = z.object({
 
 export type CppResultFormData = z.infer<typeof cppResultFormSchema>;
 
-export interface CppResultRecord extends CppResultFormData, Record<string, unknown> {
+export interface CppResultRecord extends Omit<CppResultFormData, 'changeReason'>, Record<string, unknown> {
   id: string;
   cppResultId: string;
   status: string;
@@ -373,6 +382,8 @@ export interface CppResultRecord extends CppResultFormData, Record<string, unkno
   linkedCapaNumber: string;
   reviewStatus: typeof CPP_REVIEW_STATUSES[number];
   isLocked: boolean;
+  ucl?: number | null;
+  lcl?: number | null;
   createdAt: string;
   updatedAt: string;
   createdBy: string;
@@ -380,6 +391,7 @@ export interface CppResultRecord extends CppResultFormData, Record<string, unkno
   createdByName?: string;
   updatedByName?: string;
   isDeleted: boolean;
+  changeReason?: string;
 }
 
 export interface CppSummary {
@@ -403,10 +415,10 @@ export function evaluateCppStatus(
   lsl: number,
   usl: number,
   resultType: string,
-  alertLow?: number,
-  alertHigh?: number,
-  actionLow?: number,
-  actionHigh?: number,
+  alertLow?: number | null,
+  alertHigh?: number | null,
+  actionLow?: number | null,
+  actionHigh?: number | null,
 ): string {
   if (resultType === 'Pass/Fail') {
     const v = String(observed).toLowerCase();
@@ -419,10 +431,11 @@ export function evaluateCppStatus(
   const num = Number(observed);
   if (!Number.isFinite(num)) return 'OOT/OOL';
   if (num < lsl || num > usl) return 'OOT/OOL';
-  if (actionLow != null && !Number.isNaN(actionLow) && num < actionLow) return 'Action';
-  if (actionHigh != null && !Number.isNaN(actionHigh) && num > actionHigh) return 'Action';
-  if (alertLow != null && !Number.isNaN(alertLow) && num < alertLow) return 'Alert';
-  if (alertHigh != null && !Number.isNaN(alertHigh) && num > alertHigh) return 'Alert';
+  // Optional bands: only apply when explicitly provided (null/undefined = unset; 0 may be valid)
+  if (actionLow != null && Number.isFinite(actionLow) && num < actionLow) return 'Action';
+  if (actionHigh != null && Number.isFinite(actionHigh) && num > actionHigh) return 'Action';
+  if (alertLow != null && Number.isFinite(alertLow) && num < alertLow) return 'Alert';
+  if (alertHigh != null && Number.isFinite(alertHigh) && num > alertHigh) return 'Alert';
   return 'Complies';
 }
 

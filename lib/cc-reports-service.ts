@@ -23,6 +23,7 @@ import {
   type ChangeRiskAssessment,
 } from '@/lib/change-control-types';
 import { listAllRiskAssessments, listChanges } from '@/lib/change-control-service';
+import { polishQmsReportTexts } from '@/lib/ai/client';
 
 export type { CcReportActor, CcReportFilterInput, CcReportFormData };
 
@@ -173,9 +174,25 @@ export async function generateCcReport(
     owner: form.owner,
   };
   const analytics = await previewCcReport(filters);
+  const polished = await polishQmsReportTexts({
+    module: 'Change Control Reports',
+    summary: analytics.summary,
+    recommendations: analytics.recommendations,
+    management_summary: analytics.managementReview.narrative,
+    context: { reportType: form.report_type, metrics: analytics.metrics, filters },
+  });
+  const enrichedAnalytics = {
+    ...analytics,
+    summary: polished.summary,
+    recommendations: polished.recommendations,
+    managementReview: {
+      ...analytics.managementReview,
+      narrative: polished.management_summary || analytics.managementReview.narrative,
+    },
+  };
   const year = new Date(form.review_period_to).getFullYear();
   const reportNumber = generateCcReportNumber(year, existingCount);
-  const payload = mapCcReportToRecord(form, analytics, actor, reportNumber);
+  const payload = mapCcReportToRecord(form, enrichedAnalytics, actor, reportNumber);
   try {
     const ref = await addDoc(collection(getFirebaseFirestore(), CC_COLLECTIONS.reports), payload);
     const record = { id: ref.id, ...payload };

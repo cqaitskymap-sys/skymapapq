@@ -1,22 +1,23 @@
 import {
-  addDoc, collection, getDocs, limit, orderBy, query, where,
+  collection, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
+import { isCpvProductOperational } from '@/lib/cpv-product-master';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
-import { createAlert } from '@/lib/cpv-module-service';
 import { fetchCppResults } from '@/lib/cpv-cpp-monitoring-service';
 import { fetchCqaResults } from '@/lib/cpv-cqa-monitoring-service';
 import { fetchYieldRecords } from '@/lib/cpv-yield-monitoring-service';
 import { fetchStabilityResults } from '@/lib/cpv-stability-monitoring-service';
+import { fetchHoldTimeRecords } from '@/lib/cpv-hold-time-monitoring-service';
 import {
   PROCESS_CAPABILITY_COLLECTION,
   PROCESS_CAPABILITY_LEGACY,
-  PROCESS_CAPABILITY_MODULE,
   buildCapabilityId,
+  buildCapabilityCode,
   calculateProcessCapability,
   evaluateCapabilityRisk,
   dataSourceForType,
@@ -24,6 +25,7 @@ import {
   type ProcessCapabilityRecord,
   type CapabilityCalculationResult,
 } from '@/lib/cpv-process-capability';
+import { polishRecommendationText } from '@/lib/ai/client';
 
 export interface ProcessCapabilityActor {
   id: string;
@@ -40,41 +42,6 @@ export interface SourceDataPoint {
   target?: number;
 }
 
-function actorCtx(actor: ProcessCapabilityActor) {
-  return { moduleName: PROCESS_CAPABILITY_MODULE, actor: { id: actor.id, name: actor.name } as DocumentActor };
-}
-
-async function logCapabilityAudit(
-  actionType: string,
-  recordId: string,
-  actor: ProcessCapabilityActor,
-  oldVal?: unknown,
-  newVal?: unknown,
-  docNo?: string,
-) {
-  await createAuditLog({
-    moduleName: PROCESS_CAPABILITY_MODULE,
-    collectionName: PROCESS_CAPABILITY_COLLECTION,
-    recordId,
-    documentNumber: docNo,
-    actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-  await writeAuditTrail({
-    collectionName: PROCESS_CAPABILITY_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: PROCESS_CAPABILITY_MODULE,
-  });
-}
-
 function str(v: unknown, fb = ''): string {
   if (v === null || v === undefined) return fb;
   return String(v);
@@ -83,6 +50,20 @@ function str(v: unknown, fb = ''): string {
 function num(v: unknown, fb = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fb;
+}
+
+function optionalNum(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const message = String((e as { message?: string }).message || '');
+    if (message) return message.replace(/^Firebase:\s*/i, '').replace(/\s*\(.*\)$/, '').trim() || fallback;
+  }
+  return fallback;
 }
 
 function normalizeRecord(raw: Record<string, unknown>): ProcessCapabilityRecord {
@@ -95,9 +76,22 @@ function normalizeRecord(raw: Record<string, unknown>): ProcessCapabilityRecord 
   return {
     id: str(raw.id),
     capabilityId: str(raw.capabilityId || raw.capability_id, buildCapabilityId(productCode, parameterCode)),
+    capabilityCode: str(raw.capabilityCode, buildCapabilityCode(productCode, parameterCode)),
+    studyNumber: str(raw.studyNumber),
     cpvProductId: str(raw.cpvProductId || raw.cpv_product_id),
     productName: str(raw.productName || raw.product_name),
     productCode,
+    productVersion: str(raw.productVersion),
+    batchNumber: str(raw.batchNumber),
+    manufacturingOrder: str(raw.manufacturingOrder),
+    process: str(raw.process),
+    processStep: str(raw.processStep),
+    equipmentId: str(raw.equipmentId),
+    equipmentName: str(raw.equipmentName),
+    machine: str(raw.machine),
+    department: str(raw.department, 'Quality Control'),
+    productionLine: str(raw.productionLine),
+    site: str(raw.site),
     parameterType: (str(raw.parameterType || raw.parameter_type, 'CPP') as ProcessCapabilityRecord['parameterType']),
     parameterCode,
     parameterName: str(raw.parameterName || raw.parameter_name || raw.parameter),
@@ -108,23 +102,43 @@ function normalizeRecord(raw: Record<string, unknown>): ProcessCapabilityRecord 
     sampleCount: num(raw.sampleCount ?? raw.sample_count ?? raw.count),
     lowerSpecificationLimit: num(raw.lowerSpecificationLimit ?? raw.lower_specification_limit ?? raw.lsl),
     upperSpecificationLimit: num(raw.upperSpecificationLimit ?? raw.upper_specification_limit ?? raw.usl),
-    targetValue: num(raw.targetValue ?? raw.target_value ?? raw.target),
+    targetValue: optionalNum(raw.targetValue ?? raw.target_value ?? raw.target),
+    ucl: optionalNum(raw.ucl),
+    lcl: optionalNum(raw.lcl),
+    effectiveDate: str(raw.effectiveDate),
+    description: str(raw.description),
     mean: num(raw.mean),
     median: num(raw.median),
+    mode: raw.mode == null ? null : num(raw.mode),
     minimumValue: num(raw.minimumValue ?? raw.minimum_value ?? raw.min),
     maximumValue: num(raw.maximumValue ?? raw.maximum_value ?? raw.max),
     range: num(raw.range),
     variance: num(raw.variance),
     standardDeviation: num(raw.standardDeviation ?? raw.standard_deviation ?? raw.stdDev),
+    movingRangeBar: num(raw.movingRangeBar),
+    withinStandardDeviation: num(raw.withinStandardDeviation),
     cp: num(raw.cp),
     cpk: num(raw.cpk ?? raw.Cpk),
     cpu: num(raw.cpu),
     cpl: num(raw.cpl),
     pp: num(raw.pp),
     ppk: num(raw.ppk ?? raw.Ppk),
+    ppu: num(raw.ppu),
+    ppl: num(raw.ppl),
     sigmaLevel: num(raw.sigmaLevel ?? raw.sigma_level),
+    zScoreLsl: num(raw.zScoreLsl),
+    zScoreUsl: num(raw.zScoreUsl),
+    confidenceIntervalLow: num(raw.confidenceIntervalLow),
+    confidenceIntervalHigh: num(raw.confidenceIntervalHigh),
+    skewness: num(raw.skewness),
+    kurtosis: num(raw.kurtosis),
+    normalityPValue: raw.normalityPValue == null ? null : num(raw.normalityPValue),
+    outlierCount: num(raw.outlierCount),
+    processPerformanceIndex: num(raw.processPerformanceIndex),
     capabilityStatus,
     riskLevel: str(raw.riskLevel || raw.risk_level, 'Low'),
+    healthScore: num(raw.healthScore),
+    aiRecommendation: str(raw.aiRecommendation),
     conclusion: str(raw.conclusion),
     recommendation: str(raw.recommendation),
     reviewedBy: str(raw.reviewedBy || raw.reviewed_by),
@@ -135,8 +149,12 @@ function normalizeRecord(raw: Record<string, unknown>): ProcessCapabilityRecord 
       ? rawStatus
       : str(raw.workflowStatus || raw.workflow_status || raw.recordStatus, 'Calculated')) as ProcessCapabilityRecord['status'],
     remarks: str(raw.remarks),
+    changeReason: str(raw.changeReason || raw.change_reason),
     capaRecommended: Boolean(raw.capaRecommended || raw.capa_recommended),
+    deviationRequired: Boolean(raw.deviationRequired),
     linkedRiskId: str(raw.linkedRiskId || raw.linked_risk_id),
+    linkedDeviationNumber: str(raw.linkedDeviationNumber),
+    linkedCapaNumber: str(raw.linkedCapaNumber),
     isLocked: Boolean(raw.isLocked || raw.is_locked),
     sourcePreview: Array.isArray(raw.sourcePreview) ? raw.sourcePreview as number[] : [],
     createdAt: str(raw.createdAt || raw.created_at),
@@ -156,19 +174,14 @@ export async function fetchProcessCapabilityRecords(max = 500): Promise<ProcessC
     try {
       primary = await getRecords<ProcessCapabilityRecord>(
         PROCESS_CAPABILITY_COLLECTION,
-        [orderBy('reviewDate', 'desc'), limit(max)],
+        [orderBy('createdAt', 'desc'), limit(max)],
       );
     } catch {
-      try {
-        primary = await getRecords<ProcessCapabilityRecord>(
-          PROCESS_CAPABILITY_COLLECTION,
-          [orderBy('createdAt', 'desc'), limit(max)],
-        );
-      } catch {
-        primary = await getRecords<ProcessCapabilityRecord>(PROCESS_CAPABILITY_COLLECTION, [limit(max)]);
-      }
+      primary = await getRecords<ProcessCapabilityRecord>(PROCESS_CAPABILITY_COLLECTION, [limit(max)]);
     }
-    const normalized = primary.map((r) => normalizeRecord(r as unknown as Record<string, unknown>));
+    const normalized = primary
+      .map((r) => normalizeRecord(r as unknown as Record<string, unknown>))
+      .filter((r) => !r.isDeleted);
     if (normalized.length) {
       return normalized.sort((a, b) =>
         (b.reviewDate || b.reviewPeriodTo || b.createdAt).localeCompare(
@@ -178,10 +191,10 @@ export async function fetchProcessCapabilityRecords(max = 500): Promise<ProcessC
     }
     for (const legacy of PROCESS_CAPABILITY_LEGACY) {
       const rows = await listCpvRecords<Record<string, unknown>>(legacy, max);
-      if (rows.length) return rows.map((r) => normalizeRecord(r));
+      if (rows.length) return rows.map((r) => normalizeRecord(r)).filter((r) => !r.isDeleted);
     }
     const cpvLegacy = await listCpvRecords<Record<string, unknown>>(CPV_COLLECTIONS.capability, max);
-    return cpvLegacy.map((r) => normalizeRecord(r));
+    return cpvLegacy.map((r) => normalizeRecord(r)).filter((r) => !r.isDeleted);
   } catch (e) {
     console.error('fetchProcessCapabilityRecords failed', e);
     return [];
@@ -190,7 +203,9 @@ export async function fetchProcessCapabilityRecords(max = 500): Promise<ProcessC
 
 export async function fetchProcessCapabilityById(id: string): Promise<ProcessCapabilityRecord | null> {
   const record = await getRecord<ProcessCapabilityRecord>(PROCESS_CAPABILITY_COLLECTION, id);
-  if (record) return normalizeRecord(record as unknown as Record<string, unknown>);
+  if (record && !(record as ProcessCapabilityRecord).isDeleted) {
+    return normalizeRecord(record as unknown as Record<string, unknown>);
+  }
   const all = await fetchProcessCapabilityRecords();
   return all.find((r) => r.id === id) ?? null;
 }
@@ -221,20 +236,15 @@ export async function fetchCapabilitySourceData(
       const rows = await fetchCppResults(1000);
       rows.filter((r) => {
         const date = asDateString(r.observationDateTime, asDateString(r.manufacturingDate, r.createdAt));
-        return r.productName === productName
-          && r.parameterName === parameterName
-          && inPeriod(date, from, to);
+        return r.productName === productName && r.parameterName === parameterName && inPeriod(date, from, to);
       }).forEach((r) => {
         const v = Number(r.observedValue);
         if (Number.isFinite(v)) {
-          const date = asDateString(r.observationDateTime, asDateString(r.manufacturingDate, r.createdAt));
           points.push({
             batchNumber: r.batchNumber,
             value: v,
-            date,
-            lsl: r.lowerLimit,
-            usl: r.upperLimit,
-            target: r.targetValue,
+            date: asDateString(r.observationDateTime, asDateString(r.manufacturingDate, r.createdAt)),
+            lsl: r.lowerLimit, usl: r.upperLimit, target: r.targetValue,
           });
         }
       });
@@ -242,20 +252,13 @@ export async function fetchCapabilitySourceData(
       const rows = await fetchCqaResults(1000);
       rows.filter((r) => {
         const date = asDateString(r.testDate, r.createdAt);
-        return r.productName === productName
-          && r.parameterName === parameterName
-          && inPeriod(date, from, to);
+        return r.productName === productName && r.parameterName === parameterName && inPeriod(date, from, to);
       }).forEach((r) => {
         const v = Number(r.observedResult);
         if (Number.isFinite(v)) {
-          const date = asDateString(r.testDate, r.createdAt);
           points.push({
-            batchNumber: r.batchNumber,
-            value: v,
-            date,
-            lsl: r.lowerLimit,
-            usl: r.upperLimit,
-            target: r.targetValue,
+            batchNumber: r.batchNumber, value: v, date: asDateString(r.testDate, r.createdAt),
+            lsl: r.lowerLimit, usl: r.upperLimit, target: r.targetValue,
           });
         }
       });
@@ -267,36 +270,39 @@ export async function fetchCapabilitySourceData(
           && (r.yieldStage === parameterName || parameterName.includes('Yield'))
           && inPeriod(date, from, to);
       }).forEach((r) => {
-        const date = asDateString(r.manufacturingDate, r.createdAt);
         points.push({
-          batchNumber: r.batchNumber,
-          value: r.yieldPercentage,
-          date,
-          lsl: r.lowerLimit,
-          usl: r.upperLimit,
-          target: r.targetYield,
+          batchNumber: r.batchNumber, value: r.yieldPercentage,
+          date: asDateString(r.manufacturingDate, r.createdAt),
+          lsl: r.lowerLimit, usl: r.upperLimit, target: r.targetYield,
         });
       });
     } else if (dataSource === 'Stability Monitoring') {
       const rows = await fetchStabilityResults(1000);
       rows.filter((r) => {
         const date = asDateString(r.testDate, r.createdAt);
-        return r.productName === productName
-          && r.parameterName === parameterName
-          && inPeriod(date, from, to);
+        return r.productName === productName && r.parameterName === parameterName && inPeriod(date, from, to);
       }).forEach((r) => {
         const v = Number(r.observedResult);
         if (Number.isFinite(v)) {
-          const date = asDateString(r.testDate, r.createdAt);
           points.push({
-            batchNumber: r.batchNumber,
-            value: v,
-            date,
-            lsl: r.lowerLimit,
-            usl: r.upperLimit,
-            target: r.targetValue,
+            batchNumber: r.batchNumber, value: v, date: asDateString(r.testDate, r.createdAt),
+            lsl: r.lowerLimit, usl: r.upperLimit, target: r.targetValue,
           });
         }
+      });
+    } else if (dataSource === 'Hold Time Monitoring') {
+      const rows = await fetchHoldTimeRecords(1000);
+      rows.filter((r) => {
+        const date = asDateString(r.startDateTime, r.createdAt);
+        return r.productName === productName
+          && (r.holdStage === parameterName || r.processStage === parameterName)
+          && inPeriod(date, from, to);
+      }).forEach((r) => {
+        points.push({
+          batchNumber: r.batchNumber, value: r.actualHoldTime,
+          date: asDateString(r.startDateTime, r.createdAt),
+          lsl: 0, usl: r.allowedHoldTime, target: r.allowedHoldTime * 0.8,
+        });
       });
     }
   } catch (e) {
@@ -313,230 +319,244 @@ export function previewCapabilityCalculation(
   const usl = form.upperSpecificationLimit;
   const batches = sourceData.map((p) => p.batchNumber);
   const values = sourceData.map((p) => p.value);
-  const calc = calculateProcessCapability(values, lsl, usl, batches, form.parameterType, form.parameterName);
-  const riskLevel = evaluateCapabilityRisk(calc.capabilityStatus, form.parameterType, form.parameterName);
+  const calc = calculateProcessCapability(
+    values, lsl, usl, batches, form.parameterType, form.parameterName, form.targetValue,
+  );
+  const riskLevel = evaluateCapabilityRisk(calc.capabilityStatus, form.parameterType, form.parameterName, calc.cpk);
   return { ...calc, riskLevel, lsl, usl };
-}
-
-async function maybeCreateRiskAndAlert(
-  record: ProcessCapabilityRecord,
-  actor: ProcessCapabilityActor,
-): Promise<string> {
-  let riskId = '';
-  if (record.cpk < 1.33 && record.capabilityStatus !== 'Insufficient Data') {
-    try {
-      const { createRisk } = await import('@/lib/cpv-service');
-      const risk = await createRisk({
-        productName: record.productName,
-        batchNo: '',
-        factor: record.parameterName,
-        riskDescription: `Low capability Cpk ${record.cpk} for ${record.parameterName}`,
-        occurrence: record.cpk < 1.0 ? 4 : 3,
-        severity: record.riskLevel === 'Critical' ? 5 : 4,
-        detectability: 3,
-        mitigation: 'Review process capability and implement corrective actions.',
-        owner: actor.name,
-        dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      }, { id: actor.id, name: actor.name, role: actor.role || 'qa' }, 0);
-      if (risk) riskId = String((risk as { id?: string }).id || '');
-      await logCapabilityAudit('risk created', record.id, actor, null, riskId, record.capabilityId);
-    } catch { /* optional */ }
-  }
-  if (record.cpk < 1.0) {
-    try {
-      await createAlert({
-        alertType: 'Cpk Low',
-        severity: record.riskLevel === 'Critical' ? 'Critical' : 'High',
-        module: PROCESS_CAPABILITY_MODULE,
-        productName: record.productName,
-        batchNo: '',
-        parameterName: record.parameterName,
-        message: `Cpk ${record.cpk} below 1.00 for ${record.parameterName}`,
-        observedValue: record.cpk,
-        recordId: record.id,
-      }, { id: actor.id, name: actor.name, role: actor.role });
-      await logCapabilityAudit('CAPA recommended', record.id, actor, null, { cpk: record.cpk }, record.capabilityId);
-    } catch { /* optional */ }
-    if (!isFirebaseConfigured()) return riskId;
-    try {
-      await addDoc(collection(getFirebaseFirestore(), 'notifications'), {
-        title: 'Low Process Capability',
-        message: `${record.parameterName} Cpk ${record.cpk}`,
-        module: PROCESS_CAPABILITY_MODULE,
-        record_id: record.id,
-        target_roles: ['qa', 'cpv'],
-        read: false,
-        created_at: new Date().toISOString(),
-      });
-    } catch { /* optional */ }
-  }
-  return riskId;
 }
 
 export async function createProcessCapability(
   form: ProcessCapabilityFormData,
   sourceData: SourceDataPoint[],
-  actor: ProcessCapabilityActor,
+  _actor: ProcessCapabilityActor,
 ): Promise<{ result: ProcessCapabilityRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    const product = await fetchCpvProductById(form.cpvProductId);
-    if (product?.cpvStatus === 'Inactive') return { result: null, error: 'Inactive product — calculation not allowed.' };
-
-    const calc = previewCapabilityCalculation(form, sourceData);
-    if (calc.sampleCount < 5) return { result: null, error: 'At least 5 numeric values required for calculation.' };
-
-    const payload = {
-      ...form,
-      dataSource: form.dataSource || dataSourceForType(form.parameterType),
-      capabilityId: buildCapabilityId(form.productCode, form.parameterCode),
-      batchCount: calc.batchCount,
-      sampleCount: calc.sampleCount,
-      mean: calc.mean,
-      median: calc.median,
-      minimumValue: calc.minimumValue,
-      maximumValue: calc.maximumValue,
-      range: calc.range,
-      variance: calc.variance,
-      standardDeviation: calc.standardDeviation,
-      cp: calc.cp,
-      cpk: calc.cpk,
-      cpu: calc.cpu,
-      cpl: calc.cpl,
-      pp: calc.pp,
-      ppk: calc.ppk,
-      sigmaLevel: calc.sigmaLevel,
-      capabilityStatus: calc.capabilityStatus,
-      riskLevel: calc.riskLevel,
-      capaRecommended: calc.capaRecommended,
-      status: 'Calculated' as const,
-      isLocked: false,
-      linkedRiskId: '',
-      sourcePreview: calc.values.slice(0, 50),
-      reviewedBy: '',
-      reviewDate: '',
-      approvedBy: '',
-      approvalDate: '',
-      createdByName: actor.name,
-      updatedByName: actor.name,
-    };
-
-    const created = await createRecord(
-      PROCESS_CAPABILITY_COLLECTION,
-      payload as Omit<ProcessCapabilityRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
-    );
-    let result = normalizeRecord(created as unknown as Record<string, unknown>);
-
-    const riskId = await maybeCreateRiskAndAlert(result, actor);
-    if (riskId) {
-      const updated = await updateRecord(PROCESS_CAPABILITY_COLLECTION, result.id, { linkedRiskId: riskId }, actorCtx(actor));
-      if (updated) result = normalizeRecord(updated as unknown as Record<string, unknown>);
+    if (!form.changeReason || form.changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
     }
-
-    await logCapabilityAudit('create capability calculation', result.id, actor, null, result, result.capabilityId);
-    await logCapabilityAudit('statistics calculated', result.id, actor, null, calc, result.capabilityId);
-    return { result, error: null };
+    const product = await fetchCpvProductById(form.cpvProductId);
+    if (product && !isCpvProductOperational(product.cpvStatus)) {
+      return { result: null, error: 'Selected CPV product is not operational.' };
+    }
+    if (sourceData.length < 5) {
+      return { result: null, error: 'At least 5 numeric values required for calculation.' };
+    }
+    const preview = previewCapabilityCalculation(form, sourceData);
+    const aiRecommendation = await polishRecommendationText(preview.aiRecommendation, {
+      module: 'Process Capability',
+      parameterName: form.parameterName,
+      parameterType: form.parameterType,
+      cpk: preview.cpk,
+      ppk: preview.ppk,
+      status: preview.capabilityStatus,
+    });
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminProcessCapability',
+    );
+    const result = await fn({
+      ...form,
+      values: sourceData.map((p) => p.value),
+      batchNumbers: sourceData.map((p) => p.batchNumber),
+      changeReason: form.changeReason,
+      aiRecommendation,
+    });
+    return { result: normalizeRecord(result.data), error: null };
   } catch (e) {
     console.error('createProcessCapability failed', e);
-    return { result: null, error: 'Failed to save capability calculation.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to save capability calculation.') };
   }
 }
 
 export async function recalculateProcessCapability(
   id: string,
-  actor: ProcessCapabilityActor,
+  _actor: ProcessCapabilityActor,
   existing: ProcessCapabilityRecord,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean; changeReason?: string; sourceData?: SourceDataPoint[] },
 ): Promise<{ result: ProcessCapabilityRecord | null; error: string | null }> {
-  if (existing.isLocked && existing.status === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Approved record is locked. QA override required.' };
-  }
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    const sourceData = await fetchCapabilitySourceData(
-      existing.dataSource,
-      existing.productName,
-      existing.parameterName,
-      existing.reviewPeriodFrom,
-      existing.reviewPeriodTo,
+    const changeReason = options?.changeReason || existing.changeReason || '';
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (existing.isLocked && existing.status === 'Approved' && !qaOverride) {
+      return { result: null, error: 'Approved record is locked. QA override required.' };
+    }
+    if (qaOverride && options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    }
+    let sourceData = options?.sourceData;
+    if (!sourceData?.length) {
+      sourceData = await fetchCapabilitySourceData(
+        existing.dataSource, existing.productName, existing.parameterName,
+        existing.reviewPeriodFrom, existing.reviewPeriodTo,
+      );
+    }
+    if ((sourceData?.length || 0) < 5 && existing.sourcePreview.length < 5) {
+      return { result: null, error: 'Insufficient source data to recalculate.' };
+    }
+    const values = sourceData && sourceData.length >= 5
+      ? sourceData.map((p) => p.value)
+      : existing.sourcePreview;
+    const batches = sourceData && sourceData.length >= 5
+      ? sourceData.map((p) => p.batchNumber)
+      : values.map(() => existing.batchNumber || '');
+    const preview = previewCapabilityCalculation(
+      {
+        ...existing,
+        lowerSpecificationLimit: existing.lowerSpecificationLimit,
+        upperSpecificationLimit: existing.upperSpecificationLimit,
+        parameterType: existing.parameterType,
+        parameterName: existing.parameterName,
+        targetValue: existing.targetValue,
+        changeReason,
+      } as ProcessCapabilityFormData,
+      (sourceData && sourceData.length >= 5
+        ? sourceData
+        : values.map((value, i) => ({ batchNumber: batches[i] || '', value, date: '' }))),
     );
-    const form = existing as ProcessCapabilityFormData;
-    const calc = previewCapabilityCalculation(form, sourceData);
-    const updates = {
-      ...calc,
-      capabilityStatus: calc.capabilityStatus,
-      riskLevel: calc.riskLevel,
-      capaRecommended: calc.capaRecommended,
-      batchCount: calc.batchCount,
-      sampleCount: calc.sampleCount,
-      status: 'Calculated',
-      sourcePreview: calc.values.slice(0, 50),
-      updatedByName: actor.name,
-    };
-    const updated = await updateRecord(PROCESS_CAPABILITY_COLLECTION, id, updates as Partial<ProcessCapabilityRecord>, actorCtx(actor));
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-    await logCapabilityAudit(qaOverride ? 'QA override' : 'recalculate capability', id, actor, existing, result, result.capabilityId);
-    return { result, error: null };
+    const aiRecommendation = await polishRecommendationText(preview.aiRecommendation, {
+      module: 'Process Capability',
+      parameterName: existing.parameterName,
+      cpk: preview.cpk,
+      ppk: preview.ppk,
+      status: preview.capabilityStatus,
+    });
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'recalculateAdminProcessCapability',
+    );
+    const result = await fn({
+      ...existing,
+      id,
+      values,
+      batchNumbers: batches,
+      changeReason,
+      aiRecommendation,
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
+    });
+    return { result: normalizeRecord(result.data), error: null };
   } catch (e) {
     console.error('recalculateProcessCapability failed', e);
-    return { result: null, error: 'Recalculation failed.' };
+    return { result: null, error: cfErrorMessage(e, 'Recalculation failed.') };
   }
 }
 
-export async function reviewProcessCapability(id: string, actor: ProcessCapabilityActor, existing: ProcessCapabilityRecord) {
-  const updated = await updateRecord(PROCESS_CAPABILITY_COLLECTION, id, {
-    status: 'Under Review',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-  await logCapabilityAudit('review capability', id, actor, existing.status, 'Under Review', result.capabilityId);
-  return { result, error: null };
-}
-
-export async function approveProcessCapability(id: string, actor: ProcessCapabilityActor, existing: ProcessCapabilityRecord, qaOverride = false) {
-  if (existing.isLocked && existing.status === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Already approved.' };
+export async function reviewProcessCapability(
+  id: string,
+  _actor: ProcessCapabilityActor,
+  changeReason = 'Submitted for QA review',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'reviewAdminProcessCapability',
+    );
+    const result = await fn({ id, changeReason });
+    return { result: normalizeRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to submit review.') };
   }
-  const updated = await updateRecord(PROCESS_CAPABILITY_COLLECTION, id, {
-    status: 'Approved',
-    approvedBy: actor.name,
-    approvalDate: new Date().toISOString().split('T')[0],
-    isLocked: true,
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-  await logCapabilityAudit(qaOverride ? 'QA override' : 'approve capability', id, actor, existing.status, 'Approved', result.capabilityId);
-  return { result, error: null };
 }
 
-export async function rejectProcessCapability(id: string, actor: ProcessCapabilityActor, existing: ProcessCapabilityRecord) {
-  const updated = await updateRecord(PROCESS_CAPABILITY_COLLECTION, id, {
-    status: 'Rejected',
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-  await logCapabilityAudit('reject capability', id, actor, existing.status, 'Rejected', result.capabilityId);
-  return { result, error: null };
+export async function approveProcessCapability(
+  id: string,
+  _actor: ProcessCapabilityActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'approveAdminProcessCapability',
+    );
+    const result = await fn({ id, changeReason, esignConfirmed: true });
+    return { result: normalizeRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to approve.') };
+  }
+}
+
+export async function rejectProcessCapability(
+  id: string,
+  _actor: ProcessCapabilityActor,
+  changeReason = 'Rejected by QA',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'rejectAdminProcessCapability',
+    );
+    const result = await fn({ id, changeReason });
+    return { result: normalizeRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to reject.') };
+  }
+}
+
+export async function softDeleteProcessCapability(
+  id: string,
+  _actor: ProcessCapabilityActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+): Promise<{ error: string | null }> {
+  if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminProcessCapability');
+    await fn({ id, changeReason, esignConfirmed: true });
+    return { error: null };
+  } catch (e) {
+    return { error: cfErrorMessage(e, 'Failed to archive.') };
+  }
 }
 
 export async function fetchProcessCapabilityAuditTrail(recordId: string) {
   if (!isFirebaseConfigured()) return [];
   try {
-    const snap = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('documentId', '==', recordId), limit(50)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap = await getDocs(query(
+      collection(getFirebaseFirestore(), 'audit_trail'),
+      where('documentId', '==', recordId),
+      limit(50),
+    ));
+    if (!snap.empty) return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap2 = await getDocs(query(
+      collection(getFirebaseFirestore(), 'audit_trail'),
+      where('recordId', '==', recordId),
+      limit(50),
+    ));
+    return snap2.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch {
     return [];
   }
 }
 
 export async function logProcessCapabilityExport(actor: ProcessCapabilityActor, count: number) {
-  await logCapabilityAudit('export capability report', 'export', actor, null, { count });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminProcessCapabilityExport');
+    await fn({ count, format: 'CSV', changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logProcessCapabilityExport CF failed (non-blocking)', e);
+  }
 }
 
 export async function fetchParametersForProduct(
@@ -557,7 +577,12 @@ export async function fetchParametersForProduct(
     } else if (parameterType === 'Stability') {
       const rows = await fetchStabilityResults(500);
       rows.filter((r) => r.productName === productName).forEach((r) => names.add(r.parameterName));
+    } else if (parameterType === 'Hold Time') {
+      const rows = await fetchHoldTimeRecords(500);
+      rows.filter((r) => r.productName === productName).forEach((r) => names.add(r.holdStage));
     }
   } catch { /* optional */ }
   return Array.from(names).sort();
 }
+
+void dataSourceForType;

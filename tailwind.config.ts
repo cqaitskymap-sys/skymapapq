@@ -78,10 +78,25 @@ const config: Config = {
             height: '0',
           },
         },
+        'slow-zoom': {
+          '0%, 100%': { transform: 'scale(1)' },
+          '50%': { transform: 'scale(1.08)' },
+        },
+        'float-gentle': {
+          '0%, 100%': { transform: 'translateY(0px)' },
+          '50%': { transform: 'translateY(-12px)' },
+        },
+        'float-gentle-delayed': {
+          '0%, 100%': { transform: 'translateY(0px)' },
+          '50%': { transform: 'translateY(-8px)' },
+        },
       },
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
+        'slow-zoom': 'slow-zoom 25s ease-in-out infinite',
+        'float-gentle': 'float-gentle 6s ease-in-out infinite',
+        'float-gentle-delayed': 'float-gentle-delayed 7.5s ease-in-out infinite 1s',
       },
     },
   },

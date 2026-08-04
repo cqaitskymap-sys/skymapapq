@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Plus, Download, Eye, Pencil, Layers, Calendar } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import { Plus, Download, Eye, Pencil, Layers, Calendar, CheckCircle, FilterX, Printer, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -11,7 +12,7 @@ import {
 import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
 import {
-  summarizeStability, buildStabilityChartSeries,
+  summarizeStability, buildStabilityChartSeries, stabilityStudyFormSchema, stabilityResultFormSchema,
   STABILITY_STUDY_TYPES, STABILITY_STORAGE_CONDITIONS, STABILITY_PULLING_INTERVALS,
   STABILITY_RESULT_STATUSES,
   DEFAULT_STABILITY_PARAMETERS,
@@ -22,13 +23,13 @@ import {
   fetchStabilityStudies, fetchStabilitySchedules, fetchStabilityResults,
   fetchStabilityBatchesForProduct, createStabilityStudy, updateStabilityStudy,
   generateStabilitySchedule, updateSchedulePull, refreshScheduleStatuses,
-  createStabilityResult, updateStabilityResult, approveStabilityResult, reviewStabilityResult,
+  createStabilityResult, updateStabilityResult, approveStabilityResult, reviewStabilityResult, softDeleteStabilityResult,
   bulkCreateStabilityResults, logStabilityExport, stabilityParameterTrendData,
   buildStabilityComputedFields, defaultStabilityParameters,
 } from '@/lib/cpv-stability-monitoring-service';
 import { fetchActiveCpvProductsForBatch as fetchProducts } from '@/lib/cpv-batch-registration-service';
 import type { CpvProductRecord } from '@/lib/cpv-product-master';
-import { downloadCsv } from '@/lib/export-utils';
+import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ResponsiveDataTable } from '@/components/cpv/product-master/responsive-data-table';
 import { ParameterTrendChart } from '@/components/cpv/cpp-monitoring/parameter-trend-chart';
@@ -45,10 +46,11 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ElectronicSignatureDialog } from '@/components/electronic-signatures';
 import type { ColumnDef } from '@/components/admin/admin-data-table';
 
 const CHART_COLORS = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed'];
@@ -84,6 +86,9 @@ function ScheduleBadge({ status }: { status: string }) {
 
 export function StabilityMonitoringPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const productQuery = searchParams.get('product') || '';
+  const batchQuery = searchParams.get('batch') || '';
   const { user, profile } = useAuth();
   const role = profile?.role;
   const canCreateStudy = cpvPermissions.canCreateStability(role);
@@ -108,8 +113,13 @@ export function StabilityMonitoringPage() {
   const [editingStudy, setEditingStudy] = useState<StabilityStudyRecord | null>(null);
   const [editingResult, setEditingResult] = useState<StabilityResultRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [approveTarget, setApproveTarget] = useState<StabilityResultRecord | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<StabilityResultRecord | null>(null);
+  const [esignOpen, setEsignOpen] = useState(false);
+  const [esignAction, setEsignAction] = useState<'approve' | 'delete' | 'qa-override'>('approve');
+  const [actionReason, setActionReason] = useState('');
 
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(productQuery || batchQuery);
   const [studyTypeFilter, setStudyTypeFilter] = useState('all');
   const [conditionFilter, setConditionFilter] = useState('all');
   const [intervalFilter, setIntervalFilter] = useState('all');
@@ -138,6 +148,8 @@ export function StabilityMonitoringPage() {
 
   const [scheduleStudyId, setScheduleStudyId] = useState('');
   const [selectedIntervals, setSelectedIntervals] = useState<string[]>([]);
+  const [scheduleReason, setScheduleReason] = useState('');
+  const [pullReason, setPullReason] = useState('');
 
   const actor = useMemo(
     () => ({ id: user?.uid || 'system', name: profile?.full_name || 'System', role: role || '' }),
@@ -168,9 +180,16 @@ export function StabilityMonitoringPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => {
+    if (productQuery) setSearch(productQuery);
+    else if (batchQuery) setSearch(batchQuery);
+  }, [productQuery, batchQuery]);
+
   const filteredResults = useMemo(() => {
     const q = search.toLowerCase();
     return results.filter((r) => {
+      if (productQuery && r.productCode !== productQuery && r.productName !== productQuery) return false;
+      if (batchQuery && r.batchNumber !== batchQuery) return false;
       if (studyTypeFilter !== 'all' && r.studyType !== studyTypeFilter) return false;
       if (conditionFilter !== 'all' && r.storageCondition !== conditionFilter) return false;
       if (intervalFilter !== 'all' && r.pullingInterval !== intervalFilter) return false;
@@ -187,11 +206,45 @@ export function StabilityMonitoringPage() {
         || r.pullingInterval.toLowerCase().includes(q)
       );
     });
-  }, [results, search, studyTypeFilter, conditionFilter, intervalFilter, statusFilter, riskFilter, dateFrom, dateTo]);
+  }, [results, search, studyTypeFilter, conditionFilter, intervalFilter, statusFilter, riskFilter, dateFrom, dateTo, productQuery, batchQuery]);
+
+  const filteredStudies = useMemo(() => studies.filter((study) =>
+    (!productQuery || study.productCode === productQuery || study.productName === productQuery)
+    && (!batchQuery || study.batchNumber === batchQuery),
+  ), [studies, productQuery, batchQuery]);
+
+  const filteredSchedules = useMemo(() => schedules.filter((schedule) =>
+    (!batchQuery || schedule.batchNumber === batchQuery)
+    && (!productQuery || filteredStudies.some((study) => study.id === schedule.studyId)),
+  ), [schedules, filteredStudies, productQuery, batchQuery]);
+
+  const clearFilters = () => {
+    setSearch('');
+    setStudyTypeFilter('all');
+    setConditionFilter('all');
+    setIntervalFilter('all');
+    setStatusFilter('all');
+    setRiskFilter('all');
+    setDateFrom('');
+    setDateTo('');
+  };
 
   const summary = useMemo(() => summarizeStability(studies, schedules, results), [studies, schedules, results]);
   const charts = useMemo(() => buildStabilityChartSeries(filteredResults, schedules), [filteredResults, schedules]);
   const trendData = useMemo(() => stabilityParameterTrendData(filteredResults, trendParam), [filteredResults, trendParam]);
+  const crossLinks = useMemo(() => [
+    { href: productQuery ? `/cpv/product-master?search=${encodeURIComponent(productQuery)}` : '/cpv/product-master', label: 'Product' },
+    { href: batchQuery ? `/cpv/batch-registration?search=${encodeURIComponent(batchQuery)}` : '/cpv/batch-registration', label: 'Batch' },
+    { href: batchQuery ? `/cpv/cpp?batch=${encodeURIComponent(batchQuery)}` : productQuery ? `/cpv/cpp?product=${encodeURIComponent(productQuery)}` : '/cpv/cpp', label: 'CPP' },
+    { href: batchQuery ? `/cpv/cqa?batch=${encodeURIComponent(batchQuery)}` : productQuery ? `/cpv/cqa?product=${encodeURIComponent(productQuery)}` : '/cpv/cqa', label: 'CQA' },
+    { href: '/cpv/yield-monitoring', label: 'Yield' },
+    { href: '/cpv/environmental-monitoring', label: 'Environmental' },
+    { href: '/cpv/utility-monitoring', label: 'Utility' },
+    { href: '/qms/deviation', label: 'Deviation' }, { href: '/qms/capa', label: 'CAPA' },
+    { href: '/cpv/risk-assessment', label: 'Risk' }, { href: '/admin/audit-trail', label: 'Audit Trail' },
+    { href: '/cpv/reports-analytics', label: 'Reports' }, { href: '/cpv/statistical-process-control', label: 'SPC' },
+    { href: '/cpv/trend-analysis', label: 'Trends' },
+  ], [productQuery, batchQuery]);
 
   const onStudyProductChange = async (productId: string) => {
     setStudyProductId(productId);
@@ -219,12 +272,10 @@ export function StabilityMonitoringPage() {
   };
 
   const saveStudy = async () => {
-    if (!studyForm.cpvProductId || !studyForm.batchNumber || !studyForm.studyType || !studyForm.storageCondition) {
-      toast.error('Complete required study fields');
-      return;
-    }
+    const parsed = stabilityStudyFormSchema.safeParse(studyForm);
+    if (!parsed.success) { toast.error(parsed.error.issues[0]?.message || 'Validation failed'); return; }
     setSubmitting(true);
-    const data = studyForm as StabilityStudyFormData;
+    const data = parsed.data;
     if (editingStudy) {
       const { error: err } = await updateStabilityStudy(editingStudy.id, data, actor, editingStudy);
       if (err) toast.error(err);
@@ -257,14 +308,13 @@ export function StabilityMonitoringPage() {
   };
 
   const saveResult = async () => {
-    if (!resultForm.studyId || !resultForm.parameterCode || !resultForm.observedResult || !resultForm.testDate || !resultForm.analyst) {
-      toast.error('Complete required result fields');
-      return;
-    }
+    const parsed = stabilityResultFormSchema.safeParse(resultForm);
+    if (!parsed.success) { toast.error(parsed.error.issues[0]?.message || 'Validation failed'); return; }
+    const data = parsed.data;
+    const qaOverride = Boolean(editingResult?.isLocked && editingResult.reviewStatus === 'Approved' && canReview);
+    if (qaOverride) { setEsignAction('qa-override'); setEsignOpen(true); return; }
     setSubmitting(true);
-    const data = resultForm as StabilityResultFormData;
     if (editingResult) {
-      const qaOverride = editingResult.isLocked && editingResult.reviewStatus === 'Approved' && canReview;
       const { error: err } = await updateStabilityResult(editingResult.id, data, actor, editingResult, qaOverride);
       if (err) toast.error(err);
       else { toast.success('Result updated'); setResultFormOpen(false); await load(); }
@@ -274,6 +324,18 @@ export function StabilityMonitoringPage() {
       else { toast.success('Stability result saved'); setResultFormOpen(false); await load(); }
     }
     setSubmitting(false);
+  };
+
+  const applyQaOverride = async () => {
+    if (!editingResult) return;
+    const parsed = stabilityResultFormSchema.safeParse(resultForm);
+    if (!parsed.success) { toast.error(parsed.error.issues[0]?.message || 'Validation failed'); return; }
+    setSubmitting(true);
+    const { error: err } = await updateStabilityResult(editingResult.id, parsed.data, actor, editingResult, true, { esignConfirmed: true });
+    setSubmitting(false);
+    setEsignOpen(false);
+    if (err) toast.error(err);
+    else { toast.success('Result updated (QA override)'); setResultFormOpen(false); await load(); }
   };
 
   const openBulk = (studyId: string) => {
@@ -336,11 +398,14 @@ export function StabilityMonitoringPage() {
         reviewedBy: '',
         reviewDate: '',
         remarks: row.remarks,
+        chamberId: study.chamberId || '',
+        chamberName: study.chamberName || '',
+        changeReason: 'Bulk stability result entry',
       };
     });
     if (!rows.length) { toast.error('Enter at least one observed result'); return; }
     setSubmitting(true);
-    const { created, errors } = await bulkCreateStabilityResults(rows, actor);
+    const { created, errors } = await bulkCreateStabilityResults(rows, actor, 'Bulk stability result entry');
     setSubmitting(false);
     if (errors.length) toast.error(errors[0]);
     toast.success(`${created} stability results saved`);
@@ -350,11 +415,13 @@ export function StabilityMonitoringPage() {
 
   const generateSchedule = async () => {
     if (!scheduleStudyId) { toast.error('Select a study'); return; }
+    if (scheduleReason.trim().length < 5) { toast.error('Change reason must be at least 5 characters'); return; }
     setSubmitting(true);
     const { schedules: created, error: err } = await generateStabilitySchedule(
       scheduleStudyId,
       selectedIntervals,
       actor,
+      scheduleReason,
     );
     setSubmitting(false);
     if (err) toast.error(err);
@@ -366,7 +433,8 @@ export function StabilityMonitoringPage() {
   };
 
   const markPulled = async (scheduleId: string, date: string) => {
-    const { error: err } = await updateSchedulePull(scheduleId, date, actor);
+    if (pullReason.trim().length < 5) { toast.error('Change reason must be at least 5 characters'); return; }
+    const { error: err } = await updateSchedulePull(scheduleId, date, actor, pullReason);
     if (err) toast.error(err);
     else { toast.success('Sample pull updated'); await load(); }
   };
@@ -409,6 +477,20 @@ export function StabilityMonitoringPage() {
               <Pencil className="h-4 w-4" />
             </Button>
           )}
+          {canReview && r.reviewStatus === 'Draft' && (
+            <Button variant="ghost" size="icon" onClick={async () => {
+              const { error: err } = await reviewStabilityResult(r.id, actor, 'Submitted for QA review');
+              if (err) toast.error(err); else { toast.success('Submitted for review'); await load(); }
+            }}><CheckCircle className="h-4 w-4" /></Button>
+          )}
+          {canReview && (r.reviewStatus === 'Under Review' || r.reviewStatus === 'Draft') && (
+            <Button variant="outline" size="sm" onClick={() => { setApproveTarget(r); setActionReason(''); setEsignAction('approve'); }}>Approve</Button>
+          )}
+          {canReview && r.reviewStatus !== 'Approved' && !r.isDeleted && (
+            <Button variant="ghost" size="icon" onClick={() => { setDeleteTarget(r); setActionReason(''); setEsignAction('delete'); }}>
+              <Trash2 className="h-4 w-4 text-red-600" />
+            </Button>
+          )}
         </div>
       ),
     },
@@ -441,6 +523,7 @@ export function StabilityMonitoringPage() {
             <Button variant="ghost" size="sm" onClick={() => {
               setScheduleStudyId(s.id);
               setSelectedIntervals([]);
+              setScheduleReason('');
               setScheduleOpen(true);
             }}>
               <Calendar className="h-4 w-4 mr-1" />Schedule
@@ -465,8 +548,7 @@ export function StabilityMonitoringPage() {
         title="Stability Monitoring"
         description="Monitor stability schedules, sample pulling, results and trends for CPV products"
         trail={[
-          { label: 'Dashboard', href: '/dashboard' },
-          { label: 'Continued Process Verification', href: '/cpv/dashboard' },
+          { label: 'CPV Dashboard', href: '/cpv/dashboard' },
           { label: 'Stability Monitoring' },
         ]}
         actions={
@@ -481,10 +563,11 @@ export function StabilityMonitoringPage() {
                 <Download className="h-4 w-4" />Export
               </Button>
             )}
+            <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => printPage()}><Printer className="h-4 w-4" />Print</Button>
             {canCreateStudy && (
               <Button size="sm" className="gap-2" onClick={() => {
                 setEditingStudy(null);
-                setStudyForm({ studyStartDate: new Date().toISOString().split('T')[0], studyType: 'Long Term', storageCondition: '25°C / 60% RH' });
+                setStudyForm({ studyStartDate: new Date().toISOString().split('T')[0], studyType: 'Long Term', storageCondition: '25°C / 60% RH', changeReason: '' });
                 setStudyFormOpen(true);
               }}>
                 <Plus className="h-4 w-4" />New Study
@@ -506,6 +589,14 @@ export function StabilityMonitoringPage() {
           </>
         }
       />
+
+      <div className="no-print flex flex-wrap gap-1.5">
+        {crossLinks.map((link) => (
+          <Link key={link.href + link.label} href={link.href} className="rounded-md border px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900">
+            {link.label}
+          </Link>
+        ))}
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
         <KpiCard label="Total Studies" value={summary.totalStudies} />
@@ -571,6 +662,7 @@ export function StabilityMonitoringPage() {
               </Select>
               <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} aria-label="From date" />
               <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} aria-label="To date" />
+              <Button variant="outline" size="sm" className="gap-1" onClick={clearFilters}><FilterX className="h-3.5 w-3.5" />Clear</Button>
             </div>
           </div>
         </CardHeader>
@@ -581,13 +673,17 @@ export function StabilityMonitoringPage() {
               : <EmptyState title="No stability results" message="Create a study and enter results to begin monitoring." />
           )}
           {viewTab === 'studies' && (
-            studies.length
-              ? <ResponsiveDataTable columns={studyColumns} data={studies} pageSize={10} mobileTitleKey="stabilityStudyNumber" mobileSubtitleKey="batchNumber" />
+            filteredStudies.length
+              ? <ResponsiveDataTable columns={studyColumns} data={filteredStudies} pageSize={10} mobileTitleKey="stabilityStudyNumber" mobileSubtitleKey="batchNumber" />
               : <EmptyState title="No stability studies" message="Create a stability study to generate schedules." />
           )}
           {viewTab === 'schedules' && (
-            schedules.length ? (
+            filteredSchedules.length ? (
               <div className="overflow-x-auto">
+                <div className="mb-3 max-w-md">
+                  <Label>Sample Pull Change Reason *</Label>
+                  <Input className="mt-1" value={pullReason} onChange={(e) => setPullReason(e.target.value)} placeholder="Minimum 5 characters (ALCOA+)" />
+                </div>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -601,7 +697,7 @@ export function StabilityMonitoringPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {schedules.map((s) => (
+                    {filteredSchedules.map((s) => (
                       <TableRow key={s.id}>
                         <TableCell className="text-sm">{s.stabilityStudyNumber}</TableCell>
                         <TableCell>{s.batchNumber}</TableCell>
@@ -782,6 +878,20 @@ export function StabilityMonitoringPage() {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
+              <div><Label>Product Version</Label><Input value={studyForm.productVersion || ''} onChange={(e) => setStudyForm((f) => ({ ...f, productVersion: e.target.value }))} /></div>
+              <div><Label>Strength</Label><Input value={studyForm.strength || ''} onChange={(e) => setStudyForm((f) => ({ ...f, strength: e.target.value }))} /></div>
+              <div><Label>Dosage Form</Label><Input value={studyForm.dosageForm || ''} onChange={(e) => setStudyForm((f) => ({ ...f, dosageForm: e.target.value }))} /></div>
+              <div><Label>Pack Size</Label><Input value={studyForm.packSize || ''} onChange={(e) => setStudyForm((f) => ({ ...f, packSize: e.target.value }))} /></div>
+              <div><Label>Packaging Type</Label><Input value={studyForm.packagingType || ''} onChange={(e) => setStudyForm((f) => ({ ...f, packagingType: e.target.value }))} /></div>
+              <div><Label>Shelf Life (Months)</Label><Input type="number" value={studyForm.shelfLifeMonths ?? ''} onChange={(e) => setStudyForm((f) => ({ ...f, shelfLifeMonths: e.target.value ? Number(e.target.value) : undefined }))} /></div>
+              <div><Label>Protocol Version</Label><Input value={studyForm.protocolVersion || ''} onChange={(e) => setStudyForm((f) => ({ ...f, protocolVersion: e.target.value }))} /></div>
+              <div><Label>Specification Version</Label><Input value={studyForm.specificationVersion || ''} onChange={(e) => setStudyForm((f) => ({ ...f, specificationVersion: e.target.value }))} /></div>
+              <div><Label>Site</Label><Input value={studyForm.site || ''} onChange={(e) => setStudyForm((f) => ({ ...f, site: e.target.value }))} /></div>
+              <div><Label>Department</Label><Input value={studyForm.department || ''} onChange={(e) => setStudyForm((f) => ({ ...f, department: e.target.value }))} /></div>
+              <div><Label>Chamber ID</Label><Input value={studyForm.chamberId || ''} onChange={(e) => setStudyForm((f) => ({ ...f, chamberId: e.target.value }))} /></div>
+              <div><Label>Chamber Name</Label><Input value={studyForm.chamberName || ''} onChange={(e) => setStudyForm((f) => ({ ...f, chamberName: e.target.value }))} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Study Start Date *</Label>
                 <Input type="date" value={studyForm.studyStartDate || ''} onChange={(e) => setStudyForm((f) => ({ ...f, studyStartDate: e.target.value }))} />
@@ -794,6 +904,10 @@ export function StabilityMonitoringPage() {
             <div>
               <Label>Remarks</Label>
               <Textarea value={studyForm.remarks || ''} onChange={(e) => setStudyForm((f) => ({ ...f, remarks: e.target.value }))} />
+            </div>
+            <div>
+              <Label>Change Reason *</Label>
+              <Textarea value={studyForm.changeReason || ''} onChange={(e) => setStudyForm((f) => ({ ...f, changeReason: e.target.value }))} placeholder="Minimum 5 characters (ALCOA+)" />
             </div>
             <Button className="w-full" disabled={submitting} onClick={saveStudy}>
               {submitting ? 'Saving…' : 'Save Study'}
@@ -879,9 +993,21 @@ export function StabilityMonitoringPage() {
                 <Input value={resultForm.analyst || ''} onChange={(e) => setResultForm((f) => ({ ...f, analyst: e.target.value }))} />
               </div>
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>Chamber ID</Label><Input value={resultForm.chamberId || ''} onChange={(e) => setResultForm((f) => ({ ...f, chamberId: e.target.value }))} /></div>
+              <div><Label>Chamber Name</Label><Input value={resultForm.chamberName || ''} onChange={(e) => setResultForm((f) => ({ ...f, chamberName: e.target.value }))} /></div>
+              <div><Label>Alert Low</Label><Input type="number" value={resultForm.alertLimitLow ?? ''} onChange={(e) => setResultForm((f) => ({ ...f, alertLimitLow: e.target.value ? Number(e.target.value) : undefined }))} /></div>
+              <div><Label>Alert High</Label><Input type="number" value={resultForm.alertLimitHigh ?? ''} onChange={(e) => setResultForm((f) => ({ ...f, alertLimitHigh: e.target.value ? Number(e.target.value) : undefined }))} /></div>
+              <div><Label>Action Low</Label><Input type="number" value={resultForm.actionLimitLow ?? ''} onChange={(e) => setResultForm((f) => ({ ...f, actionLimitLow: e.target.value ? Number(e.target.value) : undefined }))} /></div>
+              <div><Label>Action High</Label><Input type="number" value={resultForm.actionLimitHigh ?? ''} onChange={(e) => setResultForm((f) => ({ ...f, actionLimitHigh: e.target.value ? Number(e.target.value) : undefined }))} /></div>
+            </div>
             <div>
               <Label>Remarks</Label>
               <Textarea value={resultForm.remarks || ''} onChange={(e) => setResultForm((f) => ({ ...f, remarks: e.target.value }))} />
+            </div>
+            <div>
+              <Label>Change Reason *</Label>
+              <Textarea value={resultForm.changeReason || ''} onChange={(e) => setResultForm((f) => ({ ...f, changeReason: e.target.value }))} placeholder="Minimum 5 characters (ALCOA+)" />
             </div>
             <Button className="w-full" disabled={submitting} onClick={saveResult}>
               {submitting ? 'Saving…' : 'Save Result'}
@@ -961,6 +1087,7 @@ export function StabilityMonitoringPage() {
         <DialogContent>
           <DialogHeader><DialogTitle>Generate Pulling Schedule</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">Select intervals or leave empty to use defaults for study type.</p>
+          <div><Label>Change Reason *</Label><Textarea className="mt-1" value={scheduleReason} onChange={(e) => setScheduleReason(e.target.value)} placeholder="Minimum 5 characters (ALCOA+)" /></div>
           <div className="flex flex-wrap gap-2 py-4">
             {STABILITY_PULLING_INTERVALS.map((interval) => {
               const selected = selectedIntervals.includes(interval);
@@ -984,6 +1111,55 @@ export function StabilityMonitoringPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={Boolean(approveTarget) && !esignOpen} onOpenChange={(open) => { if (!open) setApproveTarget(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Approve Stability Result</DialogTitle><DialogDescription>Change reason and electronic signature required (Part 11 / ALCOA+).</DialogDescription></DialogHeader>
+          <div className="space-y-2"><Label>Change Reason *</Label><Textarea value={actionReason} onChange={(e) => setActionReason(e.target.value)} /></div>
+          <DialogFooter><Button variant="outline" onClick={() => setApproveTarget(null)}>Cancel</Button><Button disabled={submitting} onClick={() => {
+            if (actionReason.trim().length < 5) { toast.error('Change reason must be at least 5 characters'); return; }
+            setEsignAction('approve'); setEsignOpen(true);
+          }}>Continue to E-Sign</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(deleteTarget) && !esignOpen} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Soft-Delete Stability Result</DialogTitle><DialogDescription>Archive this record with a change reason and electronic signature.</DialogDescription></DialogHeader>
+          <div className="space-y-2"><Label>Change Reason *</Label><Textarea value={actionReason} onChange={(e) => setActionReason(e.target.value)} /></div>
+          <DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" disabled={submitting} onClick={() => {
+            if (actionReason.trim().length < 5) { toast.error('Change reason must be at least 5 characters'); return; }
+            setEsignAction('delete'); setEsignOpen(true);
+          }}>Continue to E-Sign</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ElectronicSignatureDialog
+        open={esignOpen}
+        onOpenChange={setEsignOpen}
+        moduleName="Stability Monitoring"
+        recordId={(esignAction === 'approve' ? approveTarget : esignAction === 'delete' ? deleteTarget : editingResult)?.id || ''}
+        documentNumber={(esignAction === 'approve' ? approveTarget : esignAction === 'delete' ? deleteTarget : editingResult)?.stabilityMonitoringId || ''}
+        actionType={esignAction === 'approve' ? 'Approve' : esignAction === 'delete' ? 'Soft Delete' : 'QA Override'}
+        onSuccess={() => {
+          if (esignAction === 'approve' && approveTarget) {
+            void (async () => {
+              setSubmitting(true);
+              const { error: err } = await approveStabilityResult(approveTarget.id, actor, actionReason, { esignConfirmed: true });
+              setSubmitting(false); setEsignOpen(false); setApproveTarget(null); setActionReason('');
+              if (err) toast.error(err); else { toast.success('Result approved'); await load(); }
+            })();
+          } else if (esignAction === 'delete' && deleteTarget) {
+            void (async () => {
+              setSubmitting(true);
+              const { error: err } = await softDeleteStabilityResult(deleteTarget.id, actor, actionReason, { esignConfirmed: true });
+              setSubmitting(false); setEsignOpen(false); setDeleteTarget(null); setActionReason('');
+              if (err) toast.error(err); else { toast.success('Result soft-deleted'); await load(); }
+            })();
+          } else void applyQaOverride();
+        }}
+        onCancel={() => setEsignOpen(false)}
+      />
     </div>
   );
 }

@@ -7,7 +7,7 @@ import {
   FlaskConical, Package, SlidersHorizontal, GitBranch, CheckSquare, Hash,
   FileSearch, PenLine, Bell, Database, Settings, PanelLeftClose,
   PanelLeftOpen, ChevronRight, ShieldCheck, LogIn, UserCheck, KeyRound,
-  Mail, Blocks, FileUp, HardDrive, Cloud, Activity,
+  Mail, Blocks, FileUp, HardDrive, Cloud, Activity, LayoutGrid,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -15,11 +15,11 @@ import { Badge } from '@/components/ui/badge';
 import { ADMIN_NAV_ITEMS } from '@/lib/admin/constants';
 import { useAdminPermissions } from '@/hooks/use-admin-permissions';
 import {
-  canViewApprovalMatrix, canViewAuditTrail, canViewBackup, canViewBatches,
+  canViewApprovalMatrix, canViewAuditTrail, canViewLoginActivity, canViewBackup, canViewBatches,
   canViewCompanySites, canViewDepartments, canViewDesignations,
   canViewDocumentNumbering, canViewEsignSettings, canViewNotificationSettings,
   canViewParameters, canViewProducts, canViewRoles, canViewSystemSettings,
-  canViewUsers, canViewWorkflows,
+  canViewModuleConfiguration, canViewMasterDataImportExport, canViewUsers, canViewWorkflows, canViewAccessReview,
 } from '@/lib/permissions';
 
 const ICON_MAP: Record<string, React.ElementType> = {
@@ -72,6 +72,14 @@ export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
     if (href === '/admin/approval-matrix') {
       return pathname.startsWith('/admin/approval-matrix') || pathname.startsWith('/dashboard/admin/approval-matrix');
     }
+    if (href === '/admin/firebase-status') {
+      return pathname.startsWith('/admin/firebase-status')
+        || pathname.startsWith('/dashboard/admin/firebase-status');
+    }
+    if (href === '/admin/system-health') {
+      return pathname.startsWith('/admin/system-health')
+        || pathname.startsWith('/dashboard/admin/system-health');
+    }
     return pathname === href || pathname.startsWith(href + '/');
   };
 
@@ -88,17 +96,26 @@ export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
     ['/admin/approval-matrix', canViewApprovalMatrix],
     ['/admin/document-numbering', canViewDocumentNumbering],
     ['/admin/audit-trail', canViewAuditTrail],
-    ['/dashboard/admin/login-activity', canViewAuditTrail],
-    ['/dashboard/admin/user-access-review', canViewUsers],
+    ['/admin/login-activity', canViewLoginActivity],
+    ['/dashboard/admin/login-activity', canViewLoginActivity],
+    ['/admin/user-access-review', canViewAccessReview],
+    ['/dashboard/admin/user-access-review', canViewAccessReview],
     ['/admin/esign-settings', canViewEsignSettings],
     ['/admin/notifications', canViewNotificationSettings],
+    ['/admin/email-sms-templates', canViewNotificationSettings],
     ['/dashboard/admin/email-sms-templates', canViewNotificationSettings],
-    ['/dashboard/admin/module-configuration', canViewSystemSettings],
-    ['/dashboard/admin/master-data-import-export', canViewSystemSettings],
+    ['/admin/module-configuration', canViewModuleConfiguration],
+    ['/dashboard/admin/module-configuration', canViewModuleConfiguration],
+    ['/admin/master-data-import-export', canViewMasterDataImportExport],
+    ['/dashboard/admin/master-data-import-export', canViewMasterDataImportExport],
     ['/admin/backup', canViewBackup],
+    ['/admin/backup/history', canViewBackup],
     ['/dashboard/admin/data-backup-log', canViewBackup],
     ['/admin/system-settings', canViewSystemSettings],
+    ['/admin/firebase-status', canViewSystemSettings],
+    ['/admin/system-health', canViewSystemSettings],
     ['/dashboard/admin/password-policy', canViewSystemSettings],
+    ['/admin/system-settings/password-policy', canViewSystemSettings],
     ['/dashboard/admin/firebase-status', canViewSystemSettings],
     ['/dashboard/admin/system-health', canViewSystemSettings],
   ];
@@ -140,6 +157,15 @@ export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
       )}
 
       <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
+        {!collapsed && (
+          <Link
+            href="/launcher"
+            className="mb-2 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700 dark:text-slate-300 dark:hover:bg-slate-800"
+          >
+            <LayoutGrid className="h-4 w-4 shrink-0" />
+            All Modules
+          </Link>
+        )}
         {filteredNav.map((item) => {
           const Icon = ICON_MAP[item.icon] || Settings;
           const active = isActive(item.href);

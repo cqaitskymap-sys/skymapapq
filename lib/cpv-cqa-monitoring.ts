@@ -69,7 +69,7 @@ export interface CqaStageParameterOption {
 }
 
 export const CQA_RESULT_STATUSES = [
-  'Complies', 'Alert', 'Action', 'OOS', 'Pass', 'Fail', 'Does Not Comply',
+  'Complies', 'Alert', 'Action', 'OOT', 'OOS', 'Pass', 'Fail', 'Does Not Comply',
 ] as const;
 
 export const CQA_REVIEW_STATUSES = ['Draft', 'Under Review', 'Approved'] as const;
@@ -109,6 +109,15 @@ export const cqaResultFormSchema = z.object({
   reviewedBy: z.string().trim().default(''),
   reviewDate: z.string().trim().default(''),
   remarks: z.string().trim().default(''),
+  productVersion: z.string().trim().default(''),
+  specificationVersion: z.string().trim().default(''),
+  testMethod: z.string().trim().default(''),
+  site: z.string().trim().default(''),
+  department: z.string().trim().default(''),
+  shift: z.string().trim().default(''),
+  equipmentId: z.string().trim().default(''),
+  equipmentName: z.string().trim().default(''),
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => d.lowerLimit < d.upperLimit, {
   message: 'Upper limit must be greater than lower limit',
   path: ['upperLimit'],
@@ -122,7 +131,7 @@ export const cqaResultFormSchema = z.object({
 
 export type CqaResultFormData = z.infer<typeof cqaResultFormSchema>;
 
-export interface CqaResultRecord extends CqaResultFormData, Record<string, unknown> {
+export interface CqaResultRecord extends Omit<CqaResultFormData, 'changeReason'>, Record<string, unknown> {
   id: string;
   cqaResultId: string;
   status: string;
@@ -135,6 +144,8 @@ export interface CqaResultRecord extends CqaResultFormData, Record<string, unkno
   linkedCapaNumber: string;
   reviewStatus: typeof CQA_REVIEW_STATUSES[number];
   isLocked: boolean;
+  ucl?: number | null;
+  lcl?: number | null;
   createdAt: string;
   updatedAt: string;
   createdBy: string;
@@ -142,6 +153,7 @@ export interface CqaResultRecord extends CqaResultFormData, Record<string, unkno
   createdByName?: string;
   updatedByName?: string;
   isDeleted: boolean;
+  changeReason?: string;
 }
 
 export interface CqaSummary {
@@ -165,10 +177,10 @@ export function evaluateCqaStatus(
   lsl: number,
   usl: number,
   resultType: string,
-  alertLow?: number,
-  alertHigh?: number,
-  actionLow?: number,
-  actionHigh?: number,
+  alertLow?: number | null,
+  alertHigh?: number | null,
+  actionLow?: number | null,
+  actionHigh?: number | null,
 ): string {
   if (resultType === 'Pass/Fail') {
     const v = String(observed).toLowerCase();
@@ -181,10 +193,15 @@ export function evaluateCqaStatus(
   const num = Number(observed);
   if (!Number.isFinite(num)) return 'OOS';
   if (num < lsl || num > usl) return 'OOS';
-  if (actionLow != null && !Number.isNaN(actionLow) && num < actionLow) return 'Action';
-  if (actionHigh != null && !Number.isNaN(actionHigh) && num > actionHigh) return 'Action';
-  if (alertLow != null && !Number.isNaN(alertLow) && num < alertLow) return 'Alert';
-  if (alertHigh != null && !Number.isNaN(alertHigh) && num > alertHigh) return 'Alert';
+  if (actionLow != null && Number.isFinite(actionLow) && num < actionLow) return 'Action';
+  if (actionHigh != null && Number.isFinite(actionHigh) && num > actionHigh) return 'Action';
+  if (alertLow != null && Number.isFinite(alertLow) && num < alertLow) return 'Alert';
+  if (alertHigh != null && Number.isFinite(alertHigh) && num > alertHigh) return 'Alert';
+  // Legacy OOT band when alert limits unset (outer 10% of specification range)
+  if (alertLow == null && alertHigh == null && usl > lsl) {
+    const band = 0.1 * (usl - lsl);
+    if (num < lsl + band || num > usl - band) return 'OOT';
+  }
   return 'Complies';
 }
 
@@ -201,7 +218,7 @@ export function evaluateCqaRiskLevel(
     if (criticality === 'Major') return 'High';
     return 'Medium';
   }
-  if (status === 'Action' || status === 'Alert') return 'Medium';
+  if (status === 'Action' || status === 'Alert' || status === 'OOT') return 'Medium';
   return 'Low';
 }
 
@@ -209,7 +226,7 @@ export function summarizeCqaResults(results: CqaResultRecord[]): CqaSummary {
   return {
     total: results.length,
     compliant: results.filter((r) => r.status === 'Complies' || r.status === 'Pass').length,
-    alert: results.filter((r) => r.status === 'Alert').length,
+    alert: results.filter((r) => r.status === 'Alert' || r.status === 'OOT').length,
     action: results.filter((r) => r.status === 'Action').length,
     oos: results.filter((r) => r.status === 'OOS' || r.status === 'Fail' || r.status === 'Does Not Comply').length,
     highRisk: results.filter((r) => r.riskLevel === 'High').length,

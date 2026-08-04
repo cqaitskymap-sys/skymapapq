@@ -1,9 +1,9 @@
 import {
-  addDoc, collection, getDocs, limit, orderBy, query, where,
+  collection, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS, CppRecord, CqaRecord } from '@/lib/cpv';
 import { fetchStabilityResults } from '@/lib/cpv-stability-monitoring-service';
@@ -21,13 +21,12 @@ import { fetchCpvReviewRecords } from '@/lib/cpv-annual-review-service';
 import {
   ALERTS_COLLECTION,
   ALERTS_LEGACY,
-  ALERT_ESCALATIONS_COLLECTION,
-  ALERT_NOTIFICATIONS_COLLECTION,
   ALERT_RULES_COLLECTION,
-  CPV_ALERT_MODULE,
   buildDefaultAlertRules,
   buildAlertId,
-  generateAlertNumber,
+  computeAlertIntelligence,
+  emptyAlertAiIntelligence,
+  inferAlertCategory,
   inferAlertFromRecord,
   mapLegacyPriority,
   mapLegacySeverity,
@@ -38,47 +37,23 @@ import {
   type CpvAlertRecord,
   type CpvAlertRuleFormData,
   type CpvAlertRuleRecord,
+  type DeliveryChannel,
 } from '@/lib/cpv-alert-records';
+import { enrichAiClient } from '@/lib/ai/client';
 
 export type CpvAlertActor = { id: string; name: string; role?: string };
 
-function actorCtx(actor: CpvAlertActor) {
-  return { moduleName: CPV_ALERT_MODULE, actor: { id: actor.id, name: actor.name } as DocumentActor };
+function callableErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const msg = String((e as { message?: string }).message || '');
+    if (msg) return msg.replace(/^Firebase:\s*/i, '').replace(/\s*\([^)]*\)\.?$/, '').trim() || fallback;
+  }
+  return fallback;
 }
 
-async function logAlertAudit(
-  actionType: string,
-  recordId: string,
-  actor: CpvAlertActor,
-  oldVal?: unknown,
-  newVal?: unknown,
-  docNo?: string,
-) {
-  try {
-    await createAuditLog({
-      moduleName: CPV_ALERT_MODULE,
-      collectionName: ALERTS_COLLECTION,
-      recordId,
-      documentNumber: docNo,
-      actionType,
-      oldValue: oldVal,
-      newValue: newVal,
-      user: { id: actor.id, name: actor.name },
-      status: 'Success',
-    });
-    await writeAuditTrail({
-      collectionName: ALERTS_COLLECTION,
-      documentId: recordId,
-      action: actionType,
-      oldValue: oldVal,
-      newValue: newVal,
-      userId: actor.id,
-      userName: actor.name,
-      moduleName: CPV_ALERT_MODULE,
-    });
-  } catch (e) {
-    console.error('logAlertAudit failed', e);
-  }
+function resolveChangeReason(primary?: string | null, fallback?: string | null, defaultReason?: string): string | null {
+  const candidate = (primary || fallback || defaultReason || '').trim();
+  return candidate.length >= 5 ? candidate : null;
 }
 
 function str(v: unknown, fb = ''): string {
@@ -103,33 +78,11 @@ function addDays(days: number): string {
   return d.toISOString().split('T')[0];
 }
 
-async function createNotification(title: string, message: string, role: string, alertId: string, actor: CpvAlertActor) {
-  if (!isFirebaseConfigured()) return;
-  try {
-    await addDoc(collection(getFirebaseFirestore(), 'notifications'), {
-      title,
-      message,
-      type: 'CPV Alert',
-      targetRole: role,
-      alertId,
-      read: false,
-      createdAt: new Date().toISOString(),
-      createdBy: actor.id,
-      isDeleted: false,
-    });
-    await addDoc(collection(getFirebaseFirestore(), ALERT_NOTIFICATIONS_COLLECTION), {
-      alertId,
-      title,
-      message,
-      targetRole: role,
-      sentAt: new Date().toISOString(),
-      createdBy: actor.id,
-      isDeleted: false,
-    });
-  } catch (e) {
-    console.error('createNotification failed', e);
-  }
+function asChannels(raw: unknown): DeliveryChannel[] {
+  if (!Array.isArray(raw)) return ['In-App', 'Toast'];
+  return raw.map((c) => String(c) as DeliveryChannel).filter(Boolean);
 }
+
 
 export function normalizeAlertRecord(raw: Record<string, unknown>): CpvAlertRecord {
   const legacyModule = str(raw.module || raw.moduleName || raw.module_name, 'Manual Alert');
@@ -138,13 +91,19 @@ export function normalizeAlertRecord(raw: Record<string, unknown>): CpvAlertReco
   const statusMap: Record<string, CpvAlertRecord['alertStatus']> = {
     Open: 'Open', Acknowledged: 'Acknowledged', Closed: 'Closed',
   };
+  const alertType = str(raw.alertType || raw.alert_type, 'Alert Limit Crossed') as CpvAlertRecord['alertType'];
+  const alertPriority = str(raw.alertPriority || raw.alert_priority, mapLegacyPriority(legacySeverity)) as CpvAlertRecord['alertPriority'];
+  const alertSource = str(raw.alertSource || raw.alert_source, legacyModule) as AlertSource;
+  const aiRaw = (raw.aiIntelligence && typeof raw.aiIntelligence === 'object')
+    ? raw.aiIntelligence as Record<string, unknown>
+    : null;
 
   return {
     id: str(raw.id),
     alertId: str(raw.alertId || raw.alert_id, buildAlertId()),
     alertNumber: str(raw.alertNumber || raw.alert_number, `ALT/DRAFT/${Date.now()}`),
     alertTitle: str(raw.alertTitle || raw.alert_title || raw.message, 'CPV Alert'),
-    alertSource: str(raw.alertSource || raw.alert_source, legacyModule) as AlertSource,
+    alertSource,
     moduleName: str(raw.moduleName || raw.module_name || raw.module, legacyModule),
     productName: str(raw.productName || raw.product_name),
     productCode: str(raw.productCode || raw.product_code),
@@ -152,16 +111,20 @@ export function normalizeAlertRecord(raw: Record<string, unknown>): CpvAlertReco
     parameterName: str(raw.parameterName || raw.parameter_name),
     observedValue: val(raw.observedValue ?? raw.observed_value),
     limitValue: val(raw.limit ?? raw.limitValue ?? raw.limit_value),
-    alertType: str(raw.alertType || raw.alert_type, 'Alert Limit Crossed') as CpvAlertRecord['alertType'],
-    alertPriority: str(raw.alertPriority || raw.alert_priority, mapLegacyPriority(legacySeverity)) as CpvAlertRecord['alertPriority'],
+    alertType,
+    alertCategory: (str(raw.alertCategory, inferAlertCategory(alertSource, alertType, alertPriority)) as CpvAlertRecord['alertCategory']),
+    alertPriority,
     alertSeverity: str(raw.alertSeverity || raw.alert_severity, mapLegacySeverity(legacySeverity)) as CpvAlertRecord['alertSeverity'],
     alertStatus: statusMap[legacyStatus] || str(raw.alertStatus, 'Open') as CpvAlertRecord['alertStatus'],
-    riskLevel: str(raw.riskLevel || raw.risk_level, mapLegacyPriority(legacySeverity)) as CpvAlertRecord['riskLevel'],
+    riskLevel: str(raw.riskLevel || raw.risk_level, mapLegacyPriority(legacySeverity) === 'Emergency' ? 'Critical' : mapLegacyPriority(legacySeverity)) as CpvAlertRecord['riskLevel'],
     alertMessage: str(raw.alertMessage || raw.alert_message || raw.message),
     detectedDateTime: str(raw.detectedDateTime || raw.detected_date_time || raw.createdAt),
     assignedTo: str(raw.assignedTo || raw.assigned_to),
     assignedRole: str(raw.assignedRole || raw.assigned_role, 'qa'),
     dueDate: str(raw.dueDate || raw.due_date),
+    slaHours: num(raw.slaHours, 24),
+    escalatedAt: str(raw.escalatedAt),
+    escalationLevel: num(raw.escalationLevel ?? raw.escalateLevel),
     acknowledgedBy: str(raw.acknowledgedBy || raw.acknowledged_by),
     acknowledgedDateTime: str(raw.acknowledgedDateTime || raw.acknowledged_date_time),
     closedBy: str(raw.closedBy || raw.closed_by),
@@ -172,6 +135,22 @@ export function normalizeAlertRecord(raw: Record<string, unknown>): CpvAlertReco
     linkedCapaNumber: str(raw.linkedCapaNumber || raw.linked_capa_number),
     linkedRiskNumber: str(raw.linkedRiskNumber || raw.linked_risk_number),
     sourceRecordId: str(raw.sourceRecordId || raw.source_record_id || raw.recordId),
+    deliveryChannels: asChannels(raw.deliveryChannels),
+    aiIntelligence: aiRaw ? {
+      ...emptyAlertAiIntelligence(),
+      aiConfidenceScore: num(aiRaw.aiConfidenceScore),
+      aiRootCauseSuggestion: str(aiRaw.aiRootCauseSuggestion),
+      aiRecommendedActions: str(aiRaw.aiRecommendedActions),
+      aiClusterId: str(aiRaw.aiClusterId),
+      isPredictive: Boolean(aiRaw.isPredictive),
+      duplicateSuppressed: Boolean(aiRaw.duplicateSuppressed),
+      noiseReductionApplied: Boolean(aiRaw.noiseReductionApplied),
+      correlatedAlertIds: Array.isArray(aiRaw.correlatedAlertIds) ? aiRaw.correlatedAlertIds.map(String) : [],
+      failurePrediction: str(aiRaw.failurePrediction),
+      riskPrediction: str(aiRaw.riskPrediction),
+    } : emptyAlertAiIntelligence(),
+    changeReason: str(raw.changeReason),
+    electronicSignature: Boolean(raw.electronicSignature),
     timeline: Array.isArray(raw.timeline) ? raw.timeline as AlertTimelineEntry[] : [],
     createdAt: str(raw.createdAt),
     updatedAt: str(raw.updatedAt),
@@ -283,96 +262,112 @@ async function isDuplicateAlert(
 
 export async function createCpvAlert(
   form: CpvAlertFormData,
-  actor: CpvAlertActor,
-  existingCount = 0,
-  options?: { sourceRecordId?: string; autoCreated?: boolean },
+  _actor: CpvAlertActor,
+  _existingCount = 0,
+  options?: { sourceRecordId?: string; autoCreated?: boolean; changeReason?: string },
 ): Promise<{ result: CpvAlertRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  const changeReason = resolveChangeReason(
+    form.changeReason || options?.changeReason,
+    null,
+    options?.autoCreated ? 'Auto-generated from CPV source scan' : 'Manual CPV alert created',
+  );
+  if (!changeReason) return { result: null, error: 'Change reason must be at least 5 characters.' };
   try {
-    const year = new Date().getFullYear();
-    const alertNumber = generateAlertNumber(year, existingCount);
-    const alertId = buildAlertId();
-    const now = new Date().toISOString();
-    const timeline: AlertTimelineEntry[] = [{
-      action: options?.autoCreated ? 'alert auto-created' : 'manual alert created',
-      user: actor.name,
-      at: now,
-    }];
-
-    const payload = {
-      alertId,
-      alertNumber,
-      ...form,
-      alertStatus: 'Open' as const,
-      riskLevel: form.alertPriority,
-      detectedDateTime: now,
-      dueDate: form.dueDate || addDays(['Critical', 'High'].includes(form.alertPriority) ? 1 : 3),
-      sourceRecordId: options?.sourceRecordId || '',
-      timeline,
-      acknowledgedBy: '',
-      acknowledgedDateTime: '',
-      closedBy: '',
-      closedDateTime: '',
-      closureRemarks: '',
-      linkedDeviationNumber: '',
-      linkedOosNumber: '',
-      linkedCapaNumber: '',
-      linkedRiskNumber: '',
-      createdByName: actor.name,
-      updatedByName: actor.name,
-    };
-
-    const created = await createRecord(
-      ALERTS_COLLECTION,
-      payload as unknown as Omit<CpvAlertRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
+    const baseIntelligence = computeAlertIntelligence({
+      alertType: form.alertType,
+      alertPriority: form.alertPriority,
+      alertSource: form.alertSource,
+      observedValue: form.observedValue,
+      limitValue: form.limitValue,
+      productName: form.productName,
+      parameterName: form.parameterName,
+    });
+    let aiIntelligence = baseIntelligence;
+    try {
+      const enriched = await enrichAiClient({
+        task: 'alert_intelligence',
+        context: {
+          alertType: form.alertType,
+          alertPriority: form.alertPriority,
+          alertSource: form.alertSource,
+          observedValue: form.observedValue,
+          limitValue: form.limitValue,
+          productName: form.productName,
+          parameterName: form.parameterName,
+        },
+        fallback: { ...baseIntelligence },
+      });
+      aiIntelligence = {
+        ...baseIntelligence,
+        aiRootCauseSuggestion: String(
+          enriched.data.aiRootCauseSuggestion || baseIntelligence.aiRootCauseSuggestion,
+        ),
+        aiRecommendedActions: String(
+          enriched.data.aiRecommendedActions || baseIntelligence.aiRecommendedActions,
+        ),
+        failurePrediction: String(enriched.data.failurePrediction || baseIntelligence.failurePrediction),
+        riskPrediction: String(enriched.data.riskPrediction || baseIntelligence.riskPrediction),
+      };
+    } catch {
+      aiIntelligence = baseIntelligence;
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminCpvAlert',
     );
-    const result = normalizeAlertRecord(created as unknown as Record<string, unknown>);
-    await logAlertAudit(options?.autoCreated ? 'alert auto-created' : 'manual alert created', result.id, actor, null, result, result.alertNumber);
-    await createNotification(result.alertTitle, result.alertMessage, form.assignedRole || 'qa', result.id, actor);
-    if (['High', 'Critical'].includes(form.alertPriority)) {
-      await createNotification(result.alertTitle, result.alertMessage, 'qa', result.id, actor);
-    }
-    if (form.alertPriority === 'Critical') {
-      await createNotification(result.alertTitle, result.alertMessage, 'head_qa', result.id, actor);
-    }
-    return { result, error: null };
+    const result = await fn({
+      ...form,
+      moduleName: form.moduleName || form.alertSource,
+      alertCategory: form.alertCategory || inferAlertCategory(form.alertSource, form.alertType, form.alertPriority),
+      deliveryChannels: form.deliveryChannels || ['In-App', 'Toast'],
+      changeReason,
+      sourceRecordId: options?.sourceRecordId || '',
+      autoCreated: options?.autoCreated === true,
+      aiIntelligence,
+    });
+    return { result: normalizeAlertRecord(result.data), error: null };
   } catch (e) {
     console.error('createCpvAlert failed', e);
-    return { result: null, error: 'Failed to create alert.' };
+    return { result: null, error: callableErrorMessage(e, 'Failed to create alert.') };
   }
 }
 
-export async function acknowledgeCpvAlert(id: string, actor: CpvAlertActor, existing: CpvAlertRecord) {
+export async function acknowledgeCpvAlert(
+  id: string,
+  _actor: CpvAlertActor,
+  existing: CpvAlertRecord,
+  changeReason = 'Alert acknowledged by responsible user',
+) {
   try {
-    const now = new Date().toISOString();
-    const timeline = [...(existing.timeline || []), { action: 'alert acknowledged', user: actor.name, at: now }];
-    await updateRecord(ALERTS_COLLECTION, id, {
-      alertStatus: 'Acknowledged',
-      acknowledgedBy: actor.name,
-      acknowledgedDateTime: now,
-      timeline,
-      updatedByName: actor.name,
-    }, actorCtx(actor));
-    await logAlertAudit('alert acknowledged', id, actor, existing.alertStatus, 'Acknowledged', existing.alertNumber);
+    const reason = resolveChangeReason(changeReason, existing.changeReason, 'Alert acknowledged by responsible user');
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'acknowledgeAdminCpvAlert');
+    await fn({ id, changeReason: reason, alertSource: existing.alertSource });
     return { error: null };
   } catch (e) {
     console.error('acknowledgeCpvAlert failed', e);
-    return { error: 'Acknowledge failed.' };
+    return { error: callableErrorMessage(e, 'Acknowledge failed.') };
   }
 }
 
-export async function assignCpvAlert(id: string, assignedTo: string, assignedRole: string, actor: CpvAlertActor, existing: CpvAlertRecord) {
+export async function assignCpvAlert(
+  id: string,
+  assignedTo: string,
+  assignedRole: string,
+  _actor: CpvAlertActor,
+  existing: CpvAlertRecord,
+  changeReason = 'Alert assignment updated',
+) {
   try {
-    const now = new Date().toISOString();
-    const timeline = [...(existing.timeline || []), { action: 'alert assigned', user: actor.name, at: now, remarks: `${assignedRole}: ${assignedTo}` }];
-    await updateRecord(ALERTS_COLLECTION, id, { assignedTo, assignedRole, timeline, updatedByName: actor.name }, actorCtx(actor));
-    await logAlertAudit('alert assigned', id, actor, existing.assignedTo, assignedTo, existing.alertNumber);
-    await createNotification(`Alert assigned: ${existing.alertNumber}`, existing.alertMessage, assignedRole, id, actor);
+    const reason = resolveChangeReason(changeReason, existing.changeReason, 'Alert assignment updated');
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'assignAdminCpvAlert');
+    await fn({ id, assignedTo, assignedRole, changeReason: reason });
     return { error: null };
   } catch (e) {
     console.error('assignCpvAlert failed', e);
-    return { error: 'Assign failed.' };
+    return { error: callableErrorMessage(e, 'Assign failed.') };
   }
 }
 
@@ -380,128 +375,155 @@ export async function linkCpvAlert(
   id: string,
   linkType: 'linkedDeviationNumber' | 'linkedOosNumber' | 'linkedCapaNumber' | 'linkedRiskNumber',
   linkValue: string,
-  actor: CpvAlertActor,
+  _actor: CpvAlertActor,
   existing: CpvAlertRecord,
+  changeReason = 'Alert linked to QMS record',
 ) {
-  const statusMap: Record<string, CpvAlertRecord['alertStatus']> = {
-    linkedDeviationNumber: 'Linked to Deviation',
-    linkedOosNumber: 'Linked to OOS',
-    linkedCapaNumber: 'Linked to CAPA',
-    linkedRiskNumber: 'Under Investigation',
-  };
-  const auditMap: Record<string, string> = {
-    linkedDeviationNumber: 'alert linked to deviation',
-    linkedOosNumber: 'alert linked to OOS',
-    linkedCapaNumber: 'alert linked to CAPA',
-    linkedRiskNumber: 'alert linked to risk',
-  };
   try {
-    const now = new Date().toISOString();
-    const timeline = [...(existing.timeline || []), { action: auditMap[linkType], user: actor.name, at: now, remarks: linkValue }];
-    await updateRecord(ALERTS_COLLECTION, id, {
-      [linkType]: linkValue,
-      alertStatus: statusMap[linkType],
-      timeline,
-      updatedByName: actor.name,
-    }, actorCtx(actor));
-    await logAlertAudit(auditMap[linkType], id, actor, null, linkValue, existing.alertNumber);
+    const reason = resolveChangeReason(changeReason, existing.changeReason, 'Alert linked to QMS record');
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'linkAdminCpvAlert');
+    await fn({ id, linkType, linkValue, changeReason: reason });
     return { error: null };
   } catch (e) {
     console.error('linkCpvAlert failed', e);
-    return { error: 'Link failed.' };
+    return { error: callableErrorMessage(e, 'Link failed.') };
   }
 }
 
-export async function closeCpvAlert(id: string, closureRemarks: string, actor: CpvAlertActor, existing: CpvAlertRecord) {
-  if (!closureRemarks.trim()) return { error: 'Closure remarks required.' };
+export async function investigateCpvAlert(
+  id: string,
+  existing: CpvAlertRecord,
+  changeReason = 'Alert moved under investigation',
+) {
   try {
-    const now = new Date().toISOString();
-    const timeline = [...(existing.timeline || []), { action: 'alert closed', user: actor.name, at: now, remarks: closureRemarks }];
-    await updateRecord(ALERTS_COLLECTION, id, {
-      alertStatus: 'Closed',
-      closedBy: actor.name,
-      closedDateTime: now,
+    const reason = resolveChangeReason(changeReason, existing.changeReason, 'Alert moved under investigation');
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'investigateAdminCpvAlert');
+    await fn({ id, changeReason: reason });
+    return { error: null };
+  } catch (e) {
+    console.error('investigateCpvAlert failed', e);
+    return { error: callableErrorMessage(e, 'Investigation update failed.') };
+  }
+}
+
+export async function closeCpvAlert(
+  id: string,
+  closureRemarks: string,
+  _actor: CpvAlertActor,
+  existing: CpvAlertRecord,
+  options?: { changeReason?: string; esignConfirmed?: boolean },
+) {
+  if (!closureRemarks.trim() || closureRemarks.trim().length < 5) {
+    return { error: 'Closure remarks must be at least 5 characters.' };
+  }
+  try {
+    const reason = resolveChangeReason(options?.changeReason, existing.changeReason, 'Alert closed with justification');
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'closeAdminCpvAlert');
+    await fn({
+      id,
       closureRemarks,
-      timeline,
-      updatedByName: actor.name,
-    }, actorCtx(actor));
-    await logAlertAudit('alert closed', id, actor, existing.alertStatus, 'Closed', existing.alertNumber);
+      changeReason: reason,
+      esignConfirmed: options?.esignConfirmed !== false,
+    });
     return { error: null };
   } catch (e) {
     console.error('closeCpvAlert failed', e);
-    return { error: 'Close failed.' };
+    return { error: callableErrorMessage(e, 'Close failed.') };
   }
 }
 
-export async function rejectCpvAlert(id: string, remarks: string, actor: CpvAlertActor, existing: CpvAlertRecord) {
+export async function rejectCpvAlert(
+  id: string,
+  remarks: string,
+  _actor: CpvAlertActor,
+  existing: CpvAlertRecord,
+  options?: { changeReason?: string; esignConfirmed?: boolean },
+) {
   try {
-    const now = new Date().toISOString();
-    const timeline = [...(existing.timeline || []), { action: 'alert rejected', user: actor.name, at: now, remarks }];
-    await updateRecord(ALERTS_COLLECTION, id, { alertStatus: 'Rejected', closureRemarks: remarks, timeline, updatedByName: actor.name }, actorCtx(actor));
-    await logAlertAudit('alert rejected', id, actor, existing.alertStatus, 'Rejected', existing.alertNumber);
+    const reason = resolveChangeReason(options?.changeReason, existing.changeReason, 'Alert rejected with justification');
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'rejectAdminCpvAlert');
+    await fn({
+      id,
+      remarks: remarks || 'Rejected',
+      changeReason: reason,
+      esignConfirmed: options?.esignConfirmed !== false,
+    });
     return { error: null };
   } catch (e) {
     console.error('rejectCpvAlert failed', e);
-    return { error: 'Reject failed.' };
+    return { error: callableErrorMessage(e, 'Reject failed.') };
   }
 }
 
-export async function escalateCpvAlert(id: string, actor: CpvAlertActor, existing: CpvAlertRecord, escalationRole = 'head_qa') {
+export async function escalateCpvAlert(
+  id: string,
+  _actor: CpvAlertActor,
+  existing: CpvAlertRecord,
+  escalationRole = 'head_qa',
+  options?: { changeReason?: string; esignConfirmed?: boolean },
+) {
   try {
-    const now = new Date().toISOString();
-    const timeline = [...(existing.timeline || []), { action: 'alert escalated', user: actor.name, at: now }];
-    await updateRecord(ALERTS_COLLECTION, id, { alertStatus: 'Overdue', assignedRole: escalationRole, timeline, updatedByName: actor.name }, actorCtx(actor));
-    await addDoc(collection(getFirebaseFirestore(), ALERT_ESCALATIONS_COLLECTION), {
-      alertId: id,
-      alertNumber: existing.alertNumber,
+    const reason = resolveChangeReason(options?.changeReason, existing.changeReason, 'Alert escalated per SLA matrix');
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'escalateAdminCpvAlert');
+    await fn({
+      id,
       escalationRole,
-      escalatedBy: actor.name,
-      escalatedAt: now,
-      createdBy: actor.id,
-      isDeleted: false,
+      changeReason: reason,
+      esignConfirmed: options?.esignConfirmed !== false,
     });
-    await logAlertAudit('alert escalated', id, actor, existing.alertStatus, escalationRole, existing.alertNumber);
-    await createNotification(`Escalated: ${existing.alertNumber}`, existing.alertMessage, escalationRole, id, actor);
     return { error: null };
   } catch (e) {
     console.error('escalateCpvAlert failed', e);
-    return { error: 'Escalation failed.' };
+    return { error: callableErrorMessage(e, 'Escalation failed.') };
   }
 }
 
-export async function saveAlertRule(form: CpvAlertRuleFormData, actor: CpvAlertActor, existingId?: string) {
+export async function saveAlertRule(form: CpvAlertRuleFormData, _actor: CpvAlertActor, existingId?: string) {
   if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  const reason = resolveChangeReason(form.changeReason, null, 'Alert rule configuration updated');
+  if (!reason) return { error: 'Change reason must be at least 5 characters.' };
   try {
-    const payload = {
-      ruleId: `RULE-${form.ruleCode}`,
+    const fn = httpsCallable(getFirebaseFunctions(), 'saveAdminAlertRule');
+    await fn({
       ...form,
-      updatedByName: actor.name,
-    };
-    if (existingId && !existingId.startsWith('default-')) {
-      await updateRecord(ALERT_RULES_COLLECTION, existingId, payload as Partial<CpvAlertRuleRecord>, actorCtx(actor));
-      await logAlertAudit('alert rule edited', existingId, actor, null, form.ruleName);
-    } else {
-      const created = await createRecord(ALERT_RULES_COLLECTION, {
-        ...payload,
-        createdByName: actor.name,
-      } as unknown as Omit<CpvAlertRuleRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>, actorCtx(actor));
-      await logAlertAudit('alert rule created', created.id || '', actor, null, form.ruleName);
-    }
+      changeReason: reason,
+      existingId: existingId && !existingId.startsWith('default-') ? existingId : undefined,
+    });
     return { error: null };
   } catch (e) {
     console.error('saveAlertRule failed', e);
-    return { error: 'Save rule failed.' };
+    return { error: callableErrorMessage(e, 'Save rule failed.') };
   }
 }
 
-export async function deactivateAlertRule(id: string, actor: CpvAlertActor) {
+export async function deactivateAlertRule(id: string, _actor: CpvAlertActor, changeReason = 'Alert rule deactivated') {
   try {
-    await updateRecord(ALERT_RULES_COLLECTION, id, { status: 'Inactive', updatedByName: actor.name }, actorCtx(actor));
-    await logAlertAudit('alert rule deactivated', id, actor, 'Active', 'Inactive');
+    const reason = resolveChangeReason(changeReason, null, 'Alert rule deactivated');
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'deactivateAdminAlertRule');
+    await fn({ id, changeReason: reason });
     return { error: null };
   } catch (e) {
     console.error('deactivateAlertRule failed', e);
-    return { error: 'Deactivate failed.' };
+    return { error: callableErrorMessage(e, 'Deactivate failed.') };
+  }
+}
+
+export async function softDeleteCpvAlert(id: string, existing: CpvAlertRecord, changeReason: string) {
+  try {
+    const reason = resolveChangeReason(changeReason, existing.changeReason);
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminCpvAlert');
+    await fn({ id, changeReason: reason });
+    return { error: null };
+  } catch (e) {
+    console.error('softDeleteCpvAlert failed', e);
+    return { error: callableErrorMessage(e, 'Delete failed.') };
   }
 }
 
@@ -525,6 +547,9 @@ export async function scanAndCreateAlerts(actor: CpvAlertActor): Promise<{ creat
       fetchPackingMaterialRecords(300),
       fetchCpvReviewRecords(100),
     ]);
+
+    // Keep trend scan available for future correlation (read path retained).
+    void fetchTrendAnalysisRecords(100).catch(() => []);
 
     const scans: Array<{ source: AlertSource; records: Record<string, unknown>[]; ruleModule: string }> = [
       { source: 'CPP Monitoring', records: cpp as unknown as Record<string, unknown>[], ruleModule: 'CPP Monitoring' },
@@ -551,9 +576,35 @@ export async function scanAndCreateAlerts(actor: CpvAlertActor): Promise<{ creat
         const alertType = inferred.alertType as AlertType;
         const dup = await isDuplicateAlert(scan.source, recordId, alertType, rule?.repeatAlertSuppressionHours || 24, existing);
         if (dup) continue;
-        const { result } = await createCpvAlert(inferred as CpvAlertFormData, actor, existing.length + created, {
+        const formPayload = {
+          alertTitle: inferred.alertTitle || `${scan.source} alert`,
+          alertSource: inferred.alertSource || scan.source,
+          moduleName: inferred.moduleName || scan.source,
+          productName: inferred.productName || 'Unknown',
+          productCode: inferred.productCode || '',
+          batchNumber: inferred.batchNumber || '',
+          parameterName: inferred.parameterName || '',
+          observedValue: inferred.observedValue ?? '',
+          limitValue: inferred.limitValue ?? '',
+          alertType: inferred.alertType || 'Alert Limit Crossed',
+          alertCategory: inferAlertCategory(
+            String(inferred.alertSource || scan.source),
+            String(inferred.alertType || 'Alert Limit Crossed'),
+            String(inferred.alertPriority || 'High'),
+          ),
+          alertPriority: inferred.alertPriority || 'High',
+          alertSeverity: inferred.alertSeverity || 'Major',
+          alertMessage: inferred.alertMessage || `${scan.source} alert`,
+          assignedTo: inferred.assignedTo || '',
+          assignedRole: inferred.assignedRole || rule?.notifyRole || 'qa',
+          dueDate: inferred.dueDate || '',
+          deliveryChannels: rule?.deliveryChannels || ['In-App', 'Toast'],
+          changeReason: `Auto-scan from ${scan.source}`,
+        } as CpvAlertFormData;
+        const { result } = await createCpvAlert(formPayload, actor, existing.length + created, {
           sourceRecordId: recordId,
           autoCreated: true,
+          changeReason: formPayload.changeReason,
         });
         if (result) {
           created++;
@@ -569,7 +620,7 @@ export async function scanAndCreateAlerts(actor: CpvAlertActor): Promise<{ creat
       if (due >= now) continue;
       const inferred: CpvAlertFormData = {
         alertTitle: 'CPV annual review overdue',
-        alertSource: 'Manual Alert',
+        alertSource: 'Annual CPV Review',
         moduleName: 'Annual CPV Review',
         productName: review.productName,
         productCode: review.productCode || '',
@@ -578,28 +629,45 @@ export async function scanAndCreateAlerts(actor: CpvAlertActor): Promise<{ creat
         observedValue: '',
         limitValue: '',
         alertType: 'Overdue Review',
+        alertCategory: 'Compliance',
         alertPriority: 'Medium',
         alertSeverity: 'Warning',
         alertMessage: `Annual CPV review ${review.cpvReviewNumber} is overdue`,
         assignedRole: 'qa',
         assignedTo: '',
         dueDate: addDays(7),
+        deliveryChannels: ['In-App', 'Email'],
+        changeReason: 'Auto-scan annual CPV review overdue',
       };
       const dup = await isDuplicateAlert('Annual CPV Review', review.id, 'Overdue Review', 72, existing);
       if (dup) continue;
-      const { result } = await createCpvAlert(inferred, actor, existing.length + created, { sourceRecordId: review.id, autoCreated: true });
+      const { result } = await createCpvAlert(inferred, actor, existing.length + created, {
+        sourceRecordId: review.id,
+        autoCreated: true,
+        changeReason: inferred.changeReason,
+      });
       if (result) { created++; existing.push(result); }
     }
 
     return { created, error: null };
   } catch (e) {
     console.error('scanAndCreateAlerts failed', e);
-    return { created: 0, error: 'Scan failed.' };
+    return { created: 0, error: callableErrorMessage(e, 'Scan failed.') };
   }
 }
 
 export async function logAlertExport(actor: CpvAlertActor, count: number) {
-  await logAlertAudit('export alert list', 'export', actor, null, count);
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminCpvAlertExport');
+    await fn({
+      count,
+      changeReason: 'Alert register export',
+      documentNumber: `EXPORT-${count}`,
+      actorName: actor.name,
+    });
+  } catch (e) {
+    console.error('logAlertExport failed', e);
+  }
 }
 
 /* Legacy compatibility */

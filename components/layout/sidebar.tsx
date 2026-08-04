@@ -12,13 +12,15 @@ import {
   PanelLeftOpen, LogOut, Settings, UserCircle, PackageSearch, Beaker, Award,
   AlertCircle, Building2, Activity,   Hash, GitBranch, PenLine, Database, SlidersHorizontal,
   BadgeCheck, Factory, FileSearch, Plus, CheckCircle, FileDown, Search, Link2, Microscope, Calendar, MessageSquare, RotateCcw, Library, Grid3X3, ListChecks, FileSignature, TrendingUp, FileCheck, PlayCircle, Monitor, Sparkles, Server, Code, PenTool, Lock, Wrench, MapPin, Thermometer, Droplets, PackagePlus, ShieldAlert, Boxes,
-  CalendarDays, UserCheck, ScrollText, History,
+  CalendarDays, UserCheck, ScrollText, History, Mail, Blocks, FileUp, LayoutGrid,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/contexts/auth-context';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useModuleConfigurationCatalog } from '@/hooks/use-module-configuration';
 import { navHrefModule } from '@/lib/nav-permissions';
+import { resolveNavGroupFromPath } from '@/lib/launcher/module-scope';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface NavItem {
@@ -52,6 +54,9 @@ const navItems: NavItem[] = [
       { label: 'Audit Trail', href: '/admin/audit-trail', icon: FileSearch },
       { label: 'E-Signature Settings', href: '/admin/esign-settings', icon: PenLine },
       { label: 'Notification Settings', href: '/admin/notifications', icon: Bell },
+      { label: 'Email & SMS Templates', href: '/admin/email-sms-templates', icon: Mail },
+      { label: 'Module Configuration', href: '/admin/module-configuration', icon: Blocks },
+      { label: 'Master Data Import / Export', href: '/admin/master-data-import-export', icon: FileUp },
       { label: 'Backup & Restore', href: '/admin/backup', icon: Database },
       { label: 'System Settings', href: '/admin/system-settings', icon: Settings },
     ],
@@ -76,8 +81,8 @@ const navItems: NavItem[] = [
       { label: 'Hold Time Monitoring', href: '/cpv/hold-time-monitoring', icon: Calendar },
       { label: 'Process Capability', href: '/cpv/process-capability', icon: BarChart3 },
       { label: 'Trend Analysis', href: '/cpv/trend-analysis', icon: LineChart },
-      { label: 'Control Charts', href: '/cpv/control-charts', icon: BarChart3 },
-      { label: 'Risk Assessment', href: '/cpv/risk-assessment', icon: ShieldCheck },
+      { label: 'Statistical Process Control', href: '/cpv/statistical-process-control', icon: BarChart3 },
+      { label: 'Risk Assessment Worksheet', href: '/cpv/risk-assessment', icon: ShieldCheck },
       { label: 'Annual CPV Review', href: '/cpv/annual-review', icon: FileText },
       { label: 'Reports & Analytics', href: '/cpv/reports-analytics', icon: FileDown },
       { label: 'Alert Engine', href: '/cpv/alert-engine', icon: Bell },
@@ -100,27 +105,7 @@ const navItems: NavItem[] = [
       { label: 'Stability Review', href: '/pqr/stability', icon: LineChart },
       { label: 'Summary & Conclusion', href: '/pqr/summary', icon: FileText },
       { label: 'Approval', href: '/pqr/approval', icon: CheckCircle },
-    ],
-  },
-  {
-    label: 'Training Management',
-    icon: Users,
-    matchPrefix: '/training',
-    children: [
-      { label: 'Dashboard', href: '/training', icon: LayoutDashboard },
-      { label: 'Training Matrix', href: '/training/matrix', icon: Grid3X3 },
-      { label: 'Assignment & Scheduling', href: '/training/assignments', icon: ClipboardList },
-      { label: 'Calendar & Scheduler', href: '/training/calendar', icon: CalendarDays },
-      { label: 'Completion & Attendance', href: '/training/completion', icon: UserCheck },
-      { label: 'Approval Workflow', href: '/training/approval-workflow', icon: ShieldCheck },
-      { label: 'Audit Trail', href: '/training/audit-trail', icon: FileSearch },
-      { label: 'Training Effectiveness', href: '/training/effectiveness', icon: CheckCircle },
-      { label: 'Competency Assessment', href: '/training/competency', icon: Award },
-      { label: 'Certificates', href: '/training/certificates', icon: ScrollText },
-      { label: 'Retraining', href: '/training/retraining', icon: RefreshCw },
-      { label: 'Employee History', href: '/training/history', icon: History },
-      { label: 'Training Reports', href: '/training/reports', icon: FileDown },
-      { label: 'LMS Integration', href: '/training/lms-integration', icon: Link2 },
+      { label: 'Audit Trail', href: '/dashboard/audit-trail?module=PQR', icon: ClipboardList },
     ],
   },
   {
@@ -128,6 +113,7 @@ const navItems: NavItem[] = [
     icon: ShieldCheck,
     matchPrefix: '/qms',
     children: [
+      { label: 'QMS Dashboard', href: '/qms/dashboard', icon: LayoutDashboard },
       { label: 'Deviation Management', href: '/qms/deviation', icon: AlertTriangle },
       { label: 'OOS Management', href: '/qms/oos', icon: TestTube },
       { label: 'CAPA Management', href: '/qms/capa', icon: CheckSquare },
@@ -149,7 +135,9 @@ const navItems: NavItem[] = [
   {
     label: 'Manufacturing',
     icon: Building2,
+    matchPrefix: '/manufacturing',
     children: [
+      { label: 'Dashboard', href: '/manufacturing/dashboard', icon: LayoutDashboard },
       { label: 'Batch Management', href: '/dashboard/batches', icon: Package },
       { label: 'Product Master', href: '/dashboard/products', icon: FlaskConical },
     ],
@@ -157,6 +145,7 @@ const navItems: NavItem[] = [
   {
     label: 'Regulatory & Compliance',
     icon: Award,
+    matchPrefix: '/dashboard/audit-trail',
     children: [
       { label: 'Audit Trail', href: '/dashboard/audit-trail', icon: FileText },
       { label: 'Document Management', href: '/qms/documents/master', icon: BookOpen },
@@ -165,6 +154,7 @@ const navItems: NavItem[] = [
   {
     label: 'Operations',
     icon: Cog,
+    matchPrefix: '/qms/equipment',
     children: [
       { label: 'Equipment Management', href: '/qms/equipment', icon: Wrench },
       { label: 'Environmental Monitoring', href: '/qms/monitoring', icon: Thermometer },
@@ -175,11 +165,11 @@ const navItems: NavItem[] = [
   {
     label: 'Master Data',
     icon: Settings,
+    matchPrefix: '/dashboard/master',
     children: [
-      { label: 'Product Master', href: '/dashboard/master/product', icon: FlaskConical },
+      { label: 'Product Master', href: '/admin/products', icon: FlaskConical },
       { label: 'Material Master', href: '/dashboard/master/materials', icon: Beaker },
-      { label: 'Vendor Master', href: '/dashboard/master/vendors', icon: TruckIcon },
-      { label: 'Abbreviations', href: '/dashboard/master/abbreviations', icon: BookOpen },
+      { label: 'Vendor Master', href: '/qms/vendors', icon: TruckIcon },
     ],
   },
   { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
@@ -197,11 +187,11 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
   const pathname = usePathname();
   const { profile, signOut } = useAuth();
   const { canAccessModule, canViewDashboard, loading: permLoading } = usePermissions();
+  const { isPathAllowed } = useModuleConfigurationCatalog();
   const [openGroups, setOpenGroups] = useState<string[]>([
     'Admin',
     'Continued Process Verification',
     'PQR Management',
-    'Training Management',
   ]);
 
   const visibleNavItems = navItems
@@ -214,10 +204,12 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
           const mod = navHrefModule(item.href)!;
           if (!canAccessModule(mod)) return null;
         }
+        if (item.href && !isPathAllowed(item.href)) return null;
         return item;
       }
       const children = item.children.filter((child) => {
         if (!child.href) return true;
+        if (!isPathAllowed(child.href)) return false;
         const mod = navHrefModule(child.href);
         if (!mod) return true;
         return canAccessModule(mod);
@@ -227,6 +219,11 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
       return { ...item, children };
     })
     .filter(Boolean) as NavItem[];
+
+  const activeModuleGroup = resolveNavGroupFromPath(pathname);
+  const scopedNavItems = activeModuleGroup
+    ? visibleNavItems.filter((item) => item.label === activeModuleGroup)
+    : [];
 
   if (permLoading) {
     return (
@@ -244,7 +241,7 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
 
   const isLinkActive = (href?: string) => {
     if (!href) return false;
-    if (href === '/dashboard' || href === '/cpv' || href === '/cpv/dashboard' || href === '/admin' || href === '/pqr/dashboard' || href === '/training') {
+    if (href === '/dashboard' || href === '/cpv' || href === '/cpv/dashboard' || href === '/admin' || href === '/pqr/dashboard' || href === '/manufacturing/dashboard' || href === '/qms/dashboard') {
       return pathname === href || (href === '/cpv/dashboard' && pathname === '/cpv');
     }
     return pathname === href || pathname.startsWith(href + '/');
@@ -302,7 +299,16 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
         </div>
 
         <nav className="flex-1 overflow-y-auto sidebar-scroll py-3 px-2 space-y-0.5">
-          {visibleNavItems.map((item) => {
+          {!collapsed && (
+            <Link
+              href="/launcher"
+              className="mb-2 flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <LayoutGrid className="h-4 w-4" />
+              All Modules
+            </Link>
+          )}
+          {scopedNavItems.map((item) => {
             if (item.children) {
               const isOpen = openGroups.includes(item.label) || isGroupActive(item);
               const hasActiveChild = isGroupActive(item);

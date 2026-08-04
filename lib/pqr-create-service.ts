@@ -1,18 +1,22 @@
 import {
-  collection, doc, addDoc, getDocs, query, where, limit, orderBy, writeBatch, updateDoc,
+  collection, doc, addDoc, getDocs, getDoc, query, where, limit, orderBy, writeBatch, updateDoc,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getFirebaseFirestore, getFirebaseStorage, isFirebaseConfigured } from '@/lib/firebase';
 import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
-import { generateDocumentNumber } from '@/lib/admin/document-numbering-service';
+import { generateDocumentNumber, previewDocumentNumber } from '@/lib/admin/document-numbering-service';
 import { sendInAppNotification } from '@/lib/notification-service';
+import { downloadCsv } from '@/lib/export-utils';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
 import { CPV_PRODUCT_COLLECTION } from '@/lib/cpv-product-master';
 import {
   PQR_CREATE_COLLECTIONS, PQR_CREATE_MODULE, PQR_SECTION_DEFINITIONS,
+  SCOPE_TO_SECTIONS, ALWAYS_INCLUDED_SECTIONS,
   emptyCollectedSummary, type PqrCollectedData, type PqrCollectedSummary,
   type PqrCreateRecord, type PqrProductOption, type PqrQualityStatus,
   type PqrRiskLevel, type PqrSectionRecord, type ReviewScope,
+  type PqrBatchOption, type PqrTeamMember, type PqrConflictCheck, type PqrAttachmentMeta,
+  type DataLoadState,
 } from '@/lib/pqr-create-records';
 
 export type PqrCreateActor = { id: string; name: string; role?: string };
@@ -20,6 +24,10 @@ export type PqrCreateActor = { id: string; name: string; role?: string };
 const nowIso = () => new Date().toISOString();
 const str = (v: unknown, fb = '') => (v === null || v === undefined ? fb : String(v));
 const num = (v: unknown, fb = 0) => { const n = Number(v); return Number.isFinite(n) ? n : fb; };
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
 
 async function readCollection(name: string, max = 500): Promise<Record<string, unknown>[]> {
   if (!isFirebaseConfigured()) return [];
@@ -46,9 +54,9 @@ async function readFirst(names: string[], max = 500): Promise<Record<string, unk
 }
 
 function inDateRange(raw: string | undefined, from: string, to: string): boolean {
-  if (!raw) return true;
+  if (!raw) return false; // strict: exclude undated records
   const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return true;
+  if (Number.isNaN(d.getTime())) return false;
   return d >= new Date(from) && d <= new Date(`${to}T23:59:59`);
 }
 
@@ -71,18 +79,30 @@ function mapProduct(raw: Record<string, unknown>, source: 'products' | 'cpv_prod
     brandName: str(raw.brandName || raw.brand_name),
     strength: str(raw.strength),
     dosageForm: str(raw.dosageForm || raw.dosage_form),
+    productType: str(raw.productType || raw.product_type),
+    productVersion: str(raw.productVersion || raw.product_version || raw.version),
     routeOfAdministration: str(raw.routeOfAdministration || raw.route_of_administration || raw.route),
     packSize: str(raw.packSize || raw.pack_size),
     market: str(raw.market),
     shelfLife: str(raw.shelfLife || raw.shelf_life),
     storageCondition: str(raw.storageCondition || raw.storage_condition),
+    manufacturingSite: str(raw.manufacturingSite || raw.manufacturing_site || raw.site),
     manufacturingLicenseNumber: str(raw.manufacturingLicenseNumber || raw.manufacturing_license_number || raw.manufacturingLicenseNo),
     mfrNumber: str(raw.mfrNumber || raw.mfr_number),
     bmrNumber: str(raw.bmrNumber || raw.bmr_number),
     bprNumber: str(raw.bprNumber || raw.bpr_number),
     specificationNumber: str(raw.specificationNumber || raw.specification_number),
     stpNumber: str(raw.stpNumber || raw.stp_number),
+    status: str(raw.status),
+    lifecycleStatus: str(raw.lifecycleStatus || raw.lifecycle_status),
   };
+}
+
+function isProductActive(raw: Record<string, unknown>): boolean {
+  if (raw.isDeleted) return false;
+  const status = str(raw.status || raw.lifecycleStatus || raw.lifecycle_status).toLowerCase();
+  if (status.includes('deleted') || status.includes('inactive') || status.includes('discontinued')) return false;
+  return true;
 }
 
 async function logCreateAudit(actionType: string, actor: PqrCreateActor, detail?: unknown, recordId = 'create-wizard') {
@@ -111,6 +131,10 @@ async function logCreateAudit(actionType: string, actor: PqrCreateActor, detail?
   }
 }
 
+// ---------------------------------------------------------------------------
+// Product fetching
+// ---------------------------------------------------------------------------
+
 export async function fetchPqrCreateProducts(): Promise<PqrProductOption[]> {
   if (!isFirebaseConfigured()) return [];
   try {
@@ -119,8 +143,8 @@ export async function fetchPqrCreateProducts(): Promise<PqrProductOption[]> {
       readCollection(CPV_PRODUCT_COLLECTION),
     ]);
     const mapped = [
-      ...adminProducts.filter((p) => !p.isDeleted).map((p) => mapProduct(p, 'products')),
-      ...cpvProducts.filter((p) => !p.isDeleted).map((p) => mapProduct(p, 'cpv_products')),
+      ...adminProducts.filter(isProductActive).map((p) => mapProduct(p, 'products')),
+      ...cpvProducts.filter(isProductActive).map((p) => mapProduct(p, 'cpv_products')),
     ];
     const seen = new Set<string>();
     return mapped.filter((p) => {
@@ -135,13 +159,144 @@ export async function fetchPqrCreateProducts(): Promise<PqrProductOption[]> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Eligible batches
+// ---------------------------------------------------------------------------
+
+export async function fetchEligibleBatches(
+  product: PqrProductOption,
+  from: string,
+  to: string,
+  site?: string,
+): Promise<PqrBatchOption[]> {
+  if (!isFirebaseConfigured()) return [];
+  try {
+    const [batchesRaw, cpvBatchesRaw, pqrBatchesRaw] = await Promise.all([
+      readCollection(PQR_CREATE_COLLECTIONS.batches),
+      readCollection(PQR_CREATE_COLLECTIONS.cpvBatches),
+      readCollection('pqr_batches'),
+    ]);
+    const all = [...batchesRaw, ...cpvBatchesRaw, ...pqrBatchesRaw];
+
+    const seen = new Set<string>();
+    const results: PqrBatchOption[] = [];
+
+    for (const raw of all) {
+      if (raw.isDeleted) continue;
+      if (!matchesProduct(raw, product.productName, product.productCode)) continue;
+
+      const mfgDate = str(raw.manufacturingDate || raw.manufacturing_date || raw.mfgDate);
+      if (!mfgDate) continue; // strict: exclude undated
+      if (!inDateRange(mfgDate, from, to)) continue;
+
+      if (site) {
+        const batchSite = str(raw.manufacturingSite || raw.manufacturing_site || raw.site).toLowerCase();
+        if (batchSite && !batchSite.includes(site.toLowerCase())) continue;
+      }
+
+      const batchNumber = str(raw.batchNumber || raw.batch_number || raw.batchNo || raw.batch_no);
+      if (!batchNumber || seen.has(batchNumber.toLowerCase())) continue;
+      seen.add(batchNumber.toLowerCase());
+
+      results.push({
+        id: str(raw.id),
+        batchNumber,
+        productName: str(raw.productName || raw.product_name),
+        productCode: str(raw.productCode || raw.product_code),
+        batchSize: str(raw.batchSize || raw.batch_size),
+        manufacturingDate: mfgDate,
+        expiryDate: str(raw.expiryDate || raw.expiry_date),
+        manufacturingSite: str(raw.manufacturingSite || raw.manufacturing_site || raw.site),
+        batchStatus: str(raw.batchStatus || raw.batch_status || raw.status),
+        releaseStatus: str(raw.releaseStatus || raw.release_status),
+        batchType: str(raw.batchType || raw.batch_type),
+        source: str(raw.source || 'batches'),
+      });
+    }
+
+    return results.sort((a, b) => a.manufacturingDate.localeCompare(b.manufacturingDate));
+  } catch (e) {
+    console.error('fetchEligibleBatches failed', e);
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Conflict check
+// ---------------------------------------------------------------------------
+
 function datesOverlap(aFrom: string, aTo: string, bFrom: string, bTo: string): boolean {
   return new Date(aFrom) <= new Date(`${bTo}T23:59:59`) && new Date(bFrom) <= new Date(`${aTo}T23:59:59`);
 }
 
 function isApprovedStatus(status: string): boolean {
-  const s = status.toLowerCase().replace(/_/g, ' ');
-  return s === 'approved';
+  return status.toLowerCase().replace(/_/g, ' ') === 'approved';
+}
+
+const ACTIVE_DRAFT_STATUSES = new Set(['draft', 'generated', 'under review', 'data collection']);
+
+export async function checkPqrConflicts(input: {
+  productId: string;
+  productName: string;
+  productCode: string;
+  from: string;
+  to: string;
+  pqrNumber?: string;
+  site?: string;
+}): Promise<PqrConflictCheck> {
+  const result: PqrConflictCheck = { overlap: false, duplicateNumber: false, activeDraft: false };
+  if (!isFirebaseConfigured()) return result;
+
+  try {
+    const records = await readFirst([PQR_CREATE_COLLECTIONS.records, PQR_CREATE_COLLECTIONS.recordsLegacy]);
+    for (const r of records) {
+      if (r.isDeleted) continue;
+      const pid = str(r.productId || r.product_id);
+      const pname = str(r.productName || r.product_name);
+      const pcode = str(r.productCode || r.product_code);
+      const matchesOwner = pid === input.productId
+        || pname.toLowerCase() === input.productName.toLowerCase()
+        || (pcode && pcode.toLowerCase() === input.productCode.toLowerCase());
+      if (!matchesOwner) continue;
+
+      if (input.site) {
+        const rSite = str(r.site || r.manufacturingSite).toLowerCase();
+        if (rSite && !rSite.includes(input.site.toLowerCase())) continue;
+      }
+
+      const rStatus = str(r.status || r.document_status).toLowerCase().replace(/_/g, ' ');
+      const rFrom = str(r.reviewPeriodFrom || r.review_period_from);
+      const rTo = str(r.reviewPeriodTo || r.review_period_to);
+
+      if (isApprovedStatus(str(r.status || r.document_status)) && datesOverlap(input.from, input.to, rFrom, rTo)) {
+        result.overlap = true;
+        result.existingPqrNumber = str(r.pqrNumber || r.pqr_number);
+        result.existingPqrId = str(r.id);
+        result.existingStatus = 'Approved';
+        result.warning = `An approved PQR (${result.existingPqrNumber}) already covers this period.`;
+      }
+
+      if (ACTIVE_DRAFT_STATUSES.has(rStatus)) {
+        result.activeDraft = true;
+        if (!result.existingPqrNumber) {
+          result.existingPqrNumber = str(r.pqrNumber || r.pqr_number);
+          result.existingPqrId = str(r.id);
+          result.existingStatus = str(r.status || r.document_status);
+        }
+        if (!result.warning) {
+          result.warning = `An active PQR (${str(r.pqrNumber || r.pqr_number)}) exists in status "${str(r.status || r.document_status)}".`;
+        }
+      }
+
+      if (input.pqrNumber && str(r.pqrNumber || r.pqr_number) === input.pqrNumber) {
+        result.duplicateNumber = true;
+        if (!result.warning) result.warning = `PQR number "${input.pqrNumber}" is already in use.`;
+      }
+    }
+  } catch (e) {
+    console.error('checkPqrConflicts failed', e);
+  }
+  return result;
 }
 
 export async function checkPqrPeriodOverlap(
@@ -150,31 +305,44 @@ export async function checkPqrPeriodOverlap(
   from: string,
   to: string,
 ): Promise<{ overlap: boolean; existingPqrNumber?: string }> {
-  if (!isFirebaseConfigured()) return { overlap: false };
+  const c = await checkPqrConflicts({ productId, productName, productCode: '', from, to });
+  return { overlap: c.overlap, existingPqrNumber: c.existingPqrNumber };
+}
+
+// ---------------------------------------------------------------------------
+// Team candidates
+// ---------------------------------------------------------------------------
+
+export async function fetchPqrTeamCandidates(): Promise<PqrTeamMember[]> {
+  if (!isFirebaseConfigured()) return [];
   try {
-    const records = await readFirst([PQR_CREATE_COLLECTIONS.records, PQR_CREATE_COLLECTIONS.recordsLegacy]);
-    const match = records.find((r) => {
-      if (r.isDeleted) return false;
-      const pid = str(r.productId || r.product_id);
-      const pname = str(r.productName || r.product_name);
-      if (pid !== productId && pname !== productName) return false;
-      if (!isApprovedStatus(str(r.status || r.document_status))) return false;
-      const rFrom = str(r.reviewPeriodFrom || r.review_period_from);
-      const rTo = str(r.reviewPeriodTo || r.review_period_to);
-      return datesOverlap(from, to, rFrom, rTo);
-    });
-    if (match) {
-      return {
-        overlap: true,
-        existingPqrNumber: str(match.pqrNumber || match.pqr_number),
-      };
-    }
-    return { overlap: false };
+    const profiles = await readCollection(PQR_CREATE_COLLECTIONS.profiles, 1000);
+    return profiles
+      .filter((p) => {
+        if (p.isDeleted) return false;
+        const s = str(p.status || p.accountStatus).toLowerCase();
+        return !s.includes('inactive') && !s.includes('disabled') && !s.includes('deleted');
+      })
+      .map((p) => ({
+        id: str(p.id || p.uid),
+        name: str(p.name || p.displayName || p.fullName || `${str(p.firstName)} ${str(p.lastName)}`.trim()),
+        email: str(p.email),
+        role: str(p.role || p.userRole),
+        department: str(p.department),
+        designation: str(p.designation || p.title),
+        status: str(p.status || p.accountStatus || 'Active'),
+      }))
+      .filter((m) => m.name)
+      .sort((a, b) => a.name.localeCompare(b.name));
   } catch (e) {
-    console.error('checkPqrPeriodOverlap failed', e);
-    return { overlap: false };
+    console.error('fetchPqrTeamCandidates failed', e);
+    return [];
   }
 }
+
+// ---------------------------------------------------------------------------
+// Data collection
+// ---------------------------------------------------------------------------
 
 function filterByProductAndDate(
   records: Record<string, unknown>[],
@@ -209,32 +377,45 @@ function countOpenCritical(records: Record<string, unknown>[], type: 'oos' | 'de
   }).length;
 }
 
+function countOot(records: Record<string, unknown>[]): number {
+  return records.filter((r) => {
+    const s = str(r.status || r.result || r.classification).toLowerCase();
+    return s.includes('oot') || s.includes('out of trend');
+  }).length;
+}
+
 export async function collectPqrData(
   product: PqrProductOption,
   from: string,
   to: string,
   scope: ReviewScope,
   actor: PqrCreateActor,
+  options?: { selectedBatchIds?: string[] },
 ): Promise<PqrCollectedData> {
   await logCreateAudit('data collection started', actor, { product: product.productName, from, to });
 
-  const empty: PqrCollectedData = {
+  const emptyResult = (): PqrCollectedData => ({
     summary: emptyCollectedSummary(),
+    loadState: 'empty',
     batches: [], rawMaterials: [], packingMaterials: [], cppResults: [], cqaResults: [],
     yieldRecords: [], stabilityRecords: [], holdTimeRecords: [], deviations: [], oosRecords: [],
     capaRecords: [], changeControls: [], complaints: [], recalls: [], validationRecords: [],
-    equipmentRecords: [], vendorRecords: [], capabilityRecords: [],
-  };
+    equipmentRecords: [], vendorRecords: [], capabilityRecords: [], riskRecords: [],
+  });
 
-  if (!isFirebaseConfigured()) return empty;
+  if (!isFirebaseConfigured()) {
+    return { ...emptyResult(), loadState: 'error', loadError: 'Firebase is not configured.' };
+  }
 
   try {
     const [
-      batchesRaw, cpvBatchesRaw, rawMat, packMat, cpp, cqa, yields, stability, holdTime,
-      deviations, oos, capa, cc, complaints, recalls, validation, equipment, vendors, capability,
+      batchesRaw, cpvBatchesRaw, pqrBatchesRaw, rawMat, packMat, cpp, cqa, yields,
+      stability, holdTime, deviations, oos, capa, cc, complaints, recalls,
+      validation, equipment, vendors, capability,
     ] = await Promise.all([
-      scope.batchReview ? readFirst([PQR_CREATE_COLLECTIONS.batches, 'pqr_batches']) : Promise.resolve([]),
+      scope.batchReview ? readCollection(PQR_CREATE_COLLECTIONS.batches) : Promise.resolve([]),
       scope.batchReview ? readCollection(PQR_CREATE_COLLECTIONS.cpvBatches) : Promise.resolve([]),
+      scope.batchReview ? readCollection('pqr_batches') : Promise.resolve([]),
       scope.rawMaterialReview ? readFirst([PQR_CREATE_COLLECTIONS.rawMaterialMonitoring, CPV_COLLECTIONS.rawMaterials]) : Promise.resolve([]),
       scope.packingMaterialReview ? readFirst([PQR_CREATE_COLLECTIONS.packingMaterialMonitoring, CPV_COLLECTIONS.packingMaterials]) : Promise.resolve([]),
       scope.cppReview ? readFirst([PQR_CREATE_COLLECTIONS.cppResults, CPV_COLLECTIONS.cpp]) : Promise.resolve([]),
@@ -242,7 +423,7 @@ export async function collectPqrData(
       scope.yieldReview ? readFirst([PQR_CREATE_COLLECTIONS.yieldMonitoring, CPV_COLLECTIONS.yieldMonitoring, CPV_COLLECTIONS.yield]) : Promise.resolve([]),
       scope.stabilityReview ? readFirst([PQR_CREATE_COLLECTIONS.stabilityMonitoring, CPV_COLLECTIONS.stability]) : Promise.resolve([]),
       scope.holdTimeReview ? readFirst([PQR_CREATE_COLLECTIONS.holdTimeMonitoring, CPV_COLLECTIONS.holdTime]) : Promise.resolve([]),
-      scope.deviationReview ? readFirst([PQR_CREATE_COLLECTIONS.deviations, 'deviation']) : Promise.resolve([]),
+      scope.deviationReview ? readFirst([PQR_CREATE_COLLECTIONS.deviations]) : Promise.resolve([]),
       scope.oosReview ? readFirst([PQR_CREATE_COLLECTIONS.oosRecords, 'oos']) : Promise.resolve([]),
       scope.capaReview ? readFirst([PQR_CREATE_COLLECTIONS.capaRecords, 'capa']) : Promise.resolve([]),
       scope.changeControlReview ? readFirst([PQR_CREATE_COLLECTIONS.changeControls, 'change_control']) : Promise.resolve([]),
@@ -255,7 +436,24 @@ export async function collectPqrData(
     ]);
 
     const { productName, productCode } = product;
-    const batches = filterByProductAndDate([...batchesRaw, ...cpvBatchesRaw], productName, productCode, from, to);
+
+    // Merge + dedupe batches by batch number
+    const allBatchesRaw = [...batchesRaw, ...cpvBatchesRaw, ...pqrBatchesRaw];
+    const batchesSeen = new Set<string>();
+    const dedupedBatches = allBatchesRaw.filter((b) => {
+      const bn = str(b.batchNumber || b.batch_number || b.batchNo || b.batch_no).toLowerCase();
+      if (!bn || batchesSeen.has(bn)) return false;
+      batchesSeen.add(bn);
+      return true;
+    });
+
+    let batches = filterByProductAndDate(dedupedBatches, productName, productCode, from, to);
+
+    if (options?.selectedBatchIds?.length) {
+      const selectedSet = new Set(options.selectedBatchIds);
+      batches = batches.filter((b) => selectedSet.has(str(b.id)));
+    }
+
     const rawMaterials = filterByProductAndDate(rawMat, productName, productCode, from, to);
     const packingMaterials = filterByProductAndDate(packMat, productName, productCode, from, to);
     const cppResults = filterByProductAndDate(cpp, productName, productCode, from, to);
@@ -290,6 +488,7 @@ export async function collectPqrData(
       holdTimeRecords: holdTimeRecords.length,
       deviations: deviationRecords.length,
       oos: oosRecords.length,
+      oot: countOot(oosRecords),
       capa: capaRecords.length,
       changeControls: changeControls.length,
       complaints: complaintRecords.length,
@@ -297,27 +496,42 @@ export async function collectPqrData(
       validationRecords: validationRecords.length,
       equipmentRecords: equipmentRecords.length,
       vendorRecords: vendorRecords.length,
+      riskRecords: capabilityRecords.length,
       averageCpk,
       openCriticalOos: countOpenCritical(oosRecords, 'oos'),
       openCriticalDeviations: countOpenCritical(deviationRecords, 'deviation'),
       openCapa: capaRecords.filter((c) => !str(c.status).toLowerCase().includes('closed')).length,
     };
 
+    const hasData = batches.length > 0 || rawMaterials.length > 0 || oosRecords.length > 0
+      || deviationRecords.length > 0 || cppResults.length > 0;
+    const loadState: DataLoadState = hasData ? 'ok' : 'empty';
+
     const result: PqrCollectedData = {
       summary,
+      loadState,
       batches, rawMaterials, packingMaterials, cppResults, cqaResults,
       yieldRecords, stabilityRecords, holdTimeRecords, deviations: deviationRecords,
       oosRecords, capaRecords, changeControls, complaints: complaintRecords,
-      recalls: recallRecords, validationRecords, equipmentRecords, vendorRecords, capabilityRecords,
+      recalls: recallRecords, validationRecords, equipmentRecords, vendorRecords,
+      capabilityRecords, riskRecords: capabilityRecords,
     };
 
     await logCreateAudit('data collection completed', actor, summary);
     return result;
   } catch (e) {
     console.error('collectPqrData failed', e);
-    return empty;
+    return {
+      ...emptyResult(),
+      loadState: 'error',
+      loadError: (e as Error).message || 'Data collection failed',
+    } as PqrCollectedData;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Assessment
+// ---------------------------------------------------------------------------
 
 export function computeOverallAssessment(data: PqrCollectedSummary): {
   overallQualityStatus: PqrQualityStatus;
@@ -348,7 +562,9 @@ export function computeOverallAssessment(data: PqrCollectedSummary): {
     recommendations.push('Review process capability and implement improvement actions.');
   }
 
-  const stabilityOk = stabilityRecords === 0 || stabilityRecords > 0;
+  // FIX: stabilityOk must NOT be always-true. If no records, cannot claim within spec.
+  const stabilityOk = stabilityRecords > 0;
+
   const conclusionParts = [
     rejectedBatches === 0 && recalls === 0
       ? 'All batches manufactured during the review period were released and no batch was rejected.'
@@ -361,7 +577,7 @@ export function computeOverallAssessment(data: PqrCollectedSummary): {
       : `${data.deviations} deviation(s) recorded; ${openCriticalDeviations} critical open.`,
     stabilityOk
       ? 'Stability data reviewed during the period indicates that the product remains within approved specification.'
-      : 'Stability program requires continued monitoring.',
+      : 'Stability data not available for this period; continued monitoring recommended.',
     averageCpk >= 1.33
       ? 'Based on the reviewed data, the process is considered to be in a state of control.'
       : 'Process capability requires review against predefined acceptance criteria.',
@@ -374,6 +590,10 @@ export function computeOverallAssessment(data: PqrCollectedSummary): {
     recommendations: recommendations.join(' '),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Sections
+// ---------------------------------------------------------------------------
 
 function sectionNarrative(
   key: string,
@@ -448,11 +668,24 @@ function sectionNarrative(
       ? `${s.cqaRecords} CQA record(s) reviewed for continued process verification.`
       : 'CQA monitoring maintained per CPV requirements.',
     summary: `Annual PQR summary for ${product.productName}: ${s.totalBatches} batches, ${s.deviations} deviations, ${s.oos} OOS, ${s.capa} CAPA.`,
+    summary_conclusion: `Annual PQR for ${product.productName} covering ${from} to ${to}. ${computeOverallAssessment(s).conclusion}`,
     conclusion: computeOverallAssessment(s).conclusion,
     revision_history: 'Revision 00 — Initial annual PQR generated from integrated QMS and CPV data.',
     approval_page: 'Prepared, reviewed and approved signatures captured on final submission.',
   };
   return narratives[key] || 'Section content to be reviewed by QA.';
+}
+
+function buildIncludedSections(scope: ReviewScope): Set<string> {
+  const included = new Set<string>(ALWAYS_INCLUDED_SECTIONS);
+  included.add('summary_conclusion');
+
+  for (const [scopeKey, sectionKeys] of Object.entries(SCOPE_TO_SECTIONS)) {
+    if (scope[scopeKey as keyof ReviewScope] && sectionKeys) {
+      for (const sk of sectionKeys) included.add(sk);
+    }
+  }
+  return included;
 }
 
 export function buildPqrSections(
@@ -462,8 +695,11 @@ export function buildPqrSections(
   to: string,
   data: PqrCollectedData,
   actor: PqrCreateActor,
+  scope?: ReviewScope,
 ): PqrSectionRecord[] {
   const ts = nowIso();
+  const includedKeys = scope ? buildIncludedSections(scope) : null;
+
   return PQR_SECTION_DEFINITIONS.map((def) => ({
     pqrId,
     sectionKey: def.key,
@@ -471,7 +707,7 @@ export function buildPqrSections(
     sectionTitle: def.title,
     narrative: sectionNarrative(def.key, product, from, to, data),
     dataSummary: '',
-    included: true,
+    included: includedKeys ? includedKeys.has(def.key) : true,
     status: 'Draft' as const,
     createdAt: ts,
     updatedAt: ts,
@@ -481,18 +717,21 @@ export function buildPqrSections(
   }));
 }
 
-export async function generateAnnualPqrNumber(productCode: string, year: number): Promise<string> {
+// ---------------------------------------------------------------------------
+// Document numbering
+// ---------------------------------------------------------------------------
+
+export async function previewAnnualPqrNumber(productCode: string, year: number): Promise<string> {
   try {
-    const result = await generateDocumentNumber('PQR', 'Annual PQR', {
+    const result = await previewDocumentNumber('PQR', 'Annual PQR', {
       productCode,
       date: new Date(year, 0, 1),
-      increment: true,
     });
     if (result.number) return result.number;
   } catch (e) {
-    console.error('generateDocumentNumber fallback', e);
+    console.error('previewAnnualPqrNumber fallback', e);
   }
-
+  // Fallback without burning sequence
   const records = await readFirst([PQR_CREATE_COLLECTIONS.records, PQR_CREATE_COLLECTIONS.recordsLegacy]);
   const yearRecords = records.filter((r) =>
     num(r.reviewYear || r.pqr_year) === year
@@ -502,13 +741,33 @@ export async function generateAnnualPqrNumber(productCode: string, year: number)
   return `PQR/${productCode || 'PRD'}/${seq}/${year}`;
 }
 
-const defaultApprovals = [
-  { approval_type: 'prepared', designation: 'Executive QA', name: '', status: 'Pending' },
-  { approval_type: 'reviewed', designation: 'Manager QA', name: '', status: 'Pending' },
-  { approval_type: 'reviewed', designation: 'Manager QC', name: '', status: 'Pending' },
-  { approval_type: 'reviewed', designation: 'Manager Production', name: '', status: 'Pending' },
-  { approval_type: 'approved', designation: 'Head QA', name: '', status: 'Pending' },
-];
+export async function allocateAnnualPqrNumber(productCode: string, year: number): Promise<string> {
+  try {
+    const result = await generateDocumentNumber('PQR', 'Annual PQR', {
+      productCode,
+      date: new Date(year, 0, 1),
+      increment: true,
+    });
+    if (result.number) return result.number;
+  } catch (e) {
+    console.error('allocateAnnualPqrNumber fallback', e);
+  }
+  const records = await readFirst([PQR_CREATE_COLLECTIONS.records, PQR_CREATE_COLLECTIONS.recordsLegacy]);
+  const yearRecords = records.filter((r) =>
+    num(r.reviewYear || r.pqr_year) === year
+    && str(r.productCode || r.product_code) === productCode,
+  );
+  const seq = String(yearRecords.length + 1).padStart(4, '0');
+  return `PQR/${productCode || 'PRD'}/${seq}/${year}`;
+}
+
+export async function generateAnnualPqrNumber(productCode: string, year: number): Promise<string> {
+  return previewAnnualPqrNumber(productCode, year);
+}
+
+// ---------------------------------------------------------------------------
+// Create draft
+// ---------------------------------------------------------------------------
 
 export async function createAnnualPqrDraft(input: {
   product: PqrProductOption;
@@ -523,14 +782,45 @@ export async function createAnnualPqrDraft(input: {
   pqrNumber?: string;
   qaOverride?: boolean;
   actor: PqrCreateActor;
+  selectedBatchIds?: string[];
+  selectedBatchNumbers?: string[];
+  pqrType?: PqrCreateRecord['pqrType'];
+  site?: string;
+  plant?: string;
+  department?: string;
+  description?: string;
+  qaReviewer?: string;
+  qcReviewer?: string;
+  productionReviewer?: string;
+  engineeringReviewer?: string;
+  regulatoryReviewer?: string;
+  finalApprover?: string;
 }): Promise<{ pqrId: string; pqrNumber: string; sections: PqrSectionRecord[]; error?: string }> {
   if (!isFirebaseConfigured()) {
     return { pqrId: '', pqrNumber: '', sections: [], error: 'Firebase is not configured.' };
   }
 
   const { product, actor } = input;
+
+  // Conflict check
+  const conflicts = await checkPqrConflicts({
+    productId: product.id,
+    productName: product.productName,
+    productCode: product.productCode,
+    from: input.reviewPeriodFrom,
+    to: input.reviewPeriodTo,
+    pqrNumber: input.pqrNumber,
+    site: input.site,
+  });
+  if (conflicts.duplicateNumber) {
+    return { pqrId: '', pqrNumber: '', sections: [], error: `PQR number "${input.pqrNumber}" is already in use.` };
+  }
+
   const assessment = computeOverallAssessment(input.collectedData.summary);
-  const pqrNumber = input.pqrNumber || await generateAnnualPqrNumber(product.productCode, input.reviewYear);
+
+  // Allocate number at create (increment)
+  const pqrNumber = input.pqrNumber || await allocateAnnualPqrNumber(product.productCode, input.reviewYear);
+
   const ts = nowIso();
   const pqrIdValue = `PQR-${Date.now().toString(36).toUpperCase()}`;
 
@@ -538,6 +828,7 @@ export async function createAnnualPqrDraft(input: {
     pqrId: pqrIdValue,
     pqrNumber,
     pqrTitle: `Annual Product Quality Review — ${product.productName} (${input.reviewYear})`,
+    pqrType: input.pqrType || 'Annual',
     productId: product.id,
     productCode: product.productCode,
     productName: product.productName,
@@ -550,29 +841,43 @@ export async function createAnnualPqrDraft(input: {
     market: product.market,
     shelfLife: product.shelfLife,
     storageCondition: product.storageCondition,
+    manufacturingSite: product.manufacturingSite || input.site || '',
     manufacturingLicenseNumber: product.manufacturingLicenseNumber,
     mfrNumber: product.mfrNumber,
     bmrNumber: product.bmrNumber,
     bprNumber: product.bprNumber,
     specificationNumber: product.specificationNumber,
     stpNumber: product.stpNumber,
+    site: input.site || product.manufacturingSite || '',
+    plant: input.plant || '',
+    department: input.department || '',
     reviewPeriodFrom: input.reviewPeriodFrom,
     reviewPeriodTo: input.reviewPeriodTo,
     reviewYear: input.reviewYear,
     pqrFrequency: input.pqrFrequency,
     pqrOwner: input.pqrOwner || actor.name,
+    qaReviewer: input.qaReviewer || '',
+    qcReviewer: input.qcReviewer || '',
+    productionReviewer: input.productionReviewer || '',
+    engineeringReviewer: input.engineeringReviewer || '',
+    regulatoryReviewer: input.regulatoryReviewer || '',
+    finalApprover: input.finalApprover || '',
     preparedBy: actor.name,
     reviewedBy: '',
     approvedBy: '',
     dueDate: input.dueDate,
     status: 'Generated',
+    version: '1.0',
     overallQualityStatus: assessment.overallQualityStatus,
     overallRiskLevel: assessment.overallRiskLevel,
     executiveSummary: `Annual PQR for ${product.productName} covering ${input.reviewPeriodFrom} to ${input.reviewPeriodTo}. ${input.collectedData.summary.totalBatches} batches reviewed.`,
     conclusion: assessment.conclusion,
     recommendations: assessment.recommendations,
     remarks: '',
+    description: input.description || '',
     reviewScope: input.reviewScope,
+    selectedBatchIds: input.selectedBatchIds || [],
+    selectedBatchNumbers: input.selectedBatchNumbers || [],
     collectedSummary: input.collectedData.summary,
     qaOverride: input.qaOverride || false,
     createdAt: ts,
@@ -586,30 +891,120 @@ export async function createAnnualPqrDraft(input: {
 
   try {
     const docRef = await addDoc(collection(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records), record);
-    const sections = buildPqrSections(docRef.id, product, input.reviewPeriodFrom, input.reviewPeriodTo, input.collectedData, actor);
+    const sections = buildPqrSections(docRef.id, product, input.reviewPeriodFrom, input.reviewPeriodTo, input.collectedData, actor, input.reviewScope);
     const batch = writeBatch(getFirebaseFirestore());
 
     sections.forEach((section) => {
-      const ref = doc(collection(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.sections));
-      batch.set(ref, { ...section, pqrId: docRef.id });
+      const sRef = doc(collection(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.sections));
+      batch.set(sRef, { ...section, pqrId: docRef.id });
     });
 
-    defaultApprovals.forEach((a) => {
-      const ref = doc(collection(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.approvals));
-      batch.set(ref, {
-        ...a,
-        pqr_id: docRef.id,
+    // Write pqr_summary_conclusion stub (Draft until Generate Summary consolidates real metrics)
+    const scRef = doc(collection(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.summaryConclusion));
+    batch.set(scRef, {
+      summaryId: `PSUM-${pqrNumber.replace(/\s+/g, '-')}-STUB`,
+      pqrId: docRef.id,
+      pqrNumber,
+      product: product.productName,
+      productCode: product.productCode,
+      reviewYear: String(input.reviewYear || new Date().getFullYear()),
+      reviewPeriodFrom: input.reviewPeriodFrom,
+      reviewPeriodTo: input.reviewPeriodTo,
+      executiveSummary: record.executiveSummary,
+      finalConclusion: assessment.conclusion,
+      recommendations: assessment.recommendations,
+      overallQualityStatus: assessment.overallQualityStatus,
+      overallProcessStatus: 'Controlled With Monitoring',
+      overallRiskLevel: assessment.overallRiskLevel,
+      preparedBy: actor.name || '',
+      reviewedBy: '',
+      approvedBy: '',
+      approvalDate: '',
+      reviewerComments: '',
+      qaComments: '',
+      headQaComments: '',
+      finalApprovalComments: '',
+      eSignatureApplied: false,
+      eSignatureMeaning: '',
+      metrics: null,
+      status: 'Draft',
+      createdAt: ts,
+      updatedAt: ts,
+      createdBy: actor.id,
+      updatedBy: actor.id,
+      createdByName: actor.name || '',
+      updatedByName: actor.name || '',
+      isDeleted: false,
+    });
+
+    // Write full-schema pqr_batch_review records for selected batches (aligned with Batch Review module)
+    const batchIds = input.selectedBatchIds || [];
+    const batchNumbers = input.selectedBatchNumbers || [];
+    const collectedById = new Map(
+      (input.collectedData.batches || []).map((b) => [str(b.id), b]),
+    );
+    const collectedByNumber = new Map(
+      (input.collectedData.batches || []).map((b) => [
+        str(b.batchNumber || b.batch_number || b.batchNo).toLowerCase(),
+        b,
+      ]),
+    );
+    for (let i = 0; i < Math.max(batchIds.length, batchNumbers.length); i++) {
+      const batchId = batchIds[i] || '';
+      const batchNumber = batchNumbers[i] || '';
+      const raw = collectedById.get(batchId)
+        || collectedByNumber.get(batchNumber.toLowerCase())
+        || {};
+      const brRef = doc(collection(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.batchReview));
+      const mfg = str(raw.manufacturingDate || raw.manufacturing_date || raw.mfg_date).slice(0, 10);
+      const exp = str(raw.expiryDate || raw.expiry_date || raw.exp_date).slice(0, 10);
+      const statusRaw = str(raw.batchStatus || raw.batch_status || raw.status || 'Manufactured');
+      const releaseRaw = str(raw.releaseStatus || raw.release_status || 'Pending');
+      batch.set(brRef, {
+        batchReviewId: `PBR-${(batchNumber || batchId || String(i)).toUpperCase().replace(/\s+/g, '-')}-${Date.now().toString(36).toUpperCase()}`,
         pqrId: docRef.id,
-        name: a.approval_type === 'prepared' ? actor.name : '',
-        signature_url: '',
-        signature_text: '',
-        approval_date: null,
+        pqrNumber,
+        product: product.productName,
+        productCode: product.productCode,
+        genericName: product.genericName,
+        strength: product.strength,
+        dosageForm: product.dosageForm,
+        reviewPeriodFrom: input.reviewPeriodFrom,
+        reviewPeriodTo: input.reviewPeriodTo,
+        batchNumber: batchNumber || str(raw.batchNumber || raw.batch_number),
+        semiFinishedBatchNumber: str(raw.semiFinishedBatchNumber || raw.semi_finished_batch_number),
+        finishedProductBatchNumber: str(raw.finishedProductBatchNumber || raw.finished_product_batch_number),
+        packingBatchNumber: str(raw.packingBatchNumber || raw.packing_batch_number),
+        manufacturingDate: mfg,
+        expiryDate: exp,
+        batchSize: Number(raw.batchSize ?? raw.batch_size) || 0,
+        batchSizeUnit: str(raw.batchSizeUnit || raw.batch_size_unit || 'Vials', 'Vials'),
+        manufacturedFor: str(raw.manufacturedFor || raw.manufactured_for),
+        customerName: str(raw.customerName || raw.customer_name),
+        market: str(raw.market || product.market),
+        batchStatus: statusRaw.toLowerCase().includes('pending') ? 'Manufactured' : statusRaw,
+        releaseStatus: releaseRaw.toLowerCase().includes('pending') || !releaseRaw ? 'Pending' : releaseRaw,
+        releaseDate: str(raw.releaseDate || raw.qaReleaseDate).slice(0, 10),
+        qaReleasedBy: str(raw.qaReleasedBy || ''),
+        rejectionReason: '',
+        holdReason: '',
+        reworkRequired: false,
+        reprocessRequired: false,
+        linkedDeviationCount: 0,
+        linkedOosCount: 0,
+        linkedCapaCount: 0,
         remarks: '',
+        sourceType: 'batch_master',
+        sourceId: batchId || str(raw.id),
         createdAt: ts,
+        updatedAt: ts,
         createdBy: actor.id,
+        updatedBy: actor.id,
+        createdByName: actor.name,
+        updatedByName: actor.name,
         isDeleted: false,
       });
-    });
+    }
 
     await batch.commit();
     await logCreateAudit('PQR sections generated', actor, { pqrId: docRef.id, pqrNumber, sectionCount: sections.length }, docRef.id);
@@ -621,6 +1016,55 @@ export async function createAnnualPqrDraft(input: {
     return { pqrId: '', pqrNumber: '', sections: [], error: (e as Error).message || 'Failed to create PQR draft' };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Draft load / list
+// ---------------------------------------------------------------------------
+
+export async function loadPqrDraft(pqrId: string): Promise<PqrCreateRecord | null> {
+  if (!isFirebaseConfigured()) return null;
+  try {
+    const snap = await getDoc(doc(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records, pqrId));
+    if (snap.exists()) return { id: snap.id, ...snap.data() } as unknown as PqrCreateRecord;
+    return null;
+  } catch (e) {
+    console.error('loadPqrDraft failed', e);
+    return null;
+  }
+}
+
+export async function listPqrDraftsForUser(userId: string): Promise<PqrCreateRecord[]> {
+  if (!isFirebaseConfigured()) return [];
+  try {
+    const snap = await getDocs(query(
+      collection(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records),
+      where('createdBy', '==', userId),
+      where('isDeleted', '==', false),
+      orderBy('createdAt', 'desc'),
+      limit(100),
+    ));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as unknown as PqrCreateRecord));
+  } catch {
+    try {
+      const snap = await getDocs(query(
+        collection(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records),
+        where('createdBy', '==', userId),
+        limit(100),
+      ));
+      return snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as unknown as PqrCreateRecord))
+        .filter((r) => !r.isDeleted)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    } catch (e) {
+      console.error('listPqrDraftsForUser failed', e);
+      return [];
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sections CRUD
+// ---------------------------------------------------------------------------
 
 export async function fetchPqrSections(pqrId: string): Promise<PqrSectionRecord[]> {
   if (!isFirebaseConfigured()) return [];
@@ -658,6 +1102,10 @@ export async function updatePqrSectionNarrative(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Save / Submit
+// ---------------------------------------------------------------------------
+
 export async function savePqrDraft(
   pqrId: string,
   updates: Partial<Pick<PqrCreateRecord, 'executiveSummary' | 'conclusion' | 'recommendations' | 'remarks' | 'status'>>,
@@ -681,6 +1129,19 @@ export async function savePqrDraft(
 export async function submitPqrForReview(pqrId: string, actor: PqrCreateActor): Promise<{ error?: string }> {
   if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
   try {
+    // Ensure summary_conclusion section exists
+    const sectionsSnap = await getDocs(query(
+      collection(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.sections),
+      where('pqrId', '==', pqrId),
+      where('isDeleted', '==', false),
+    ));
+    const hasSummaryConclusion = sectionsSnap.docs.some(
+      (d) => d.data().sectionKey === 'summary_conclusion' || d.data().sectionKey === 'summary',
+    );
+    if (!hasSummaryConclusion) {
+      return { error: 'Summary & Conclusion section is required before submission.' };
+    }
+
     await updateDoc(doc(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records, pqrId), {
       status: 'Under Review',
       updatedAt: nowIso(),
@@ -688,6 +1149,29 @@ export async function submitPqrForReview(pqrId: string, actor: PqrCreateActor): 
       updatedByName: actor.name,
     });
     await logCreateAudit('submit for review', actor, { pqrId }, pqrId);
+
+    // Dynamic import to avoid circular dependency
+    try {
+      const { submitPqrForApproval } = await import('@/lib/pqr-approval-service');
+      const pqrDoc = await getDoc(doc(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records, pqrId));
+      if (pqrDoc.exists()) {
+        const data = pqrDoc.data();
+        await submitPqrForApproval({
+          id: pqrId,
+          pqrNumber: str(data.pqrNumber),
+          productName: str(data.productName),
+          productCode: str(data.productCode),
+          genericName: str(data.genericName),
+          strength: str(data.strength),
+          dosageForm: str(data.dosageForm),
+          reviewPeriodFrom: str(data.reviewPeriodFrom),
+          reviewPeriodTo: str(data.reviewPeriodTo),
+        }, actor);
+      }
+    } catch (approvalErr) {
+      console.error('submitPqrForApproval delegation failed (non-blocking)', approvalErr);
+    }
+
     await sendInAppNotification({
       userId: actor.id,
       moduleName: 'PQR',
@@ -697,13 +1181,19 @@ export async function submitPqrForReview(pqrId: string, actor: PqrCreateActor): 
       message: 'Annual PQR has been submitted and awaits QA review.',
       type: 'approval',
       recipientRole: 'qa_manager',
-      actionLink: `/pqr/${pqrId}`,
+      actionLink: `/pqr/${pqrId}/approval`,
     });
     return {};
   } catch (e) {
-    return { error: (e as Error).message };
+    const msg = (e as Error).message || 'Failed to submit PQR for review';
+    console.error('submitPqrForReview failed', e);
+    return { error: msg };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
 
 export async function uploadPqrAttachment(
   pqrId: string,
@@ -716,12 +1206,73 @@ export async function uploadPqrAttachment(
     const storageRef = ref(getFirebaseStorage(), path);
     await uploadBytes(storageRef, file);
     const url = await getDownloadURL(storageRef);
+
+    const meta: PqrAttachmentMeta = {
+      fileName: file.name,
+      url,
+      path,
+      uploadedAt: nowIso(),
+      uploadedBy: actor.name,
+    };
+
+    // Persist metadata on pqr_records attachments array
+    const pqrDoc = await getDoc(doc(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records, pqrId));
+    if (pqrDoc.exists()) {
+      const existing: PqrAttachmentMeta[] = (pqrDoc.data().attachments as PqrAttachmentMeta[]) || [];
+      await updateDoc(doc(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records, pqrId), {
+        attachments: [...existing, meta],
+        updatedAt: nowIso(),
+        updatedBy: actor.id,
+      });
+    }
+
     await logCreateAudit('attachment uploaded', actor, { pqrId, fileName: file.name, path }, pqrId);
     return { url };
   } catch (e) {
     return { error: (e as Error).message };
   }
 }
+
+// ---------------------------------------------------------------------------
+// CSV export
+// ---------------------------------------------------------------------------
+
+export function exportCreateSummaryCsv(summary: PqrCollectedSummary, productName: string, period: string): void {
+  const headers = ['Metric', 'Value'];
+  const rows: Array<[string, string | number]> = [
+    ['Product', productName],
+    ['Period', period],
+    ['Total Batches', summary.totalBatches],
+    ['Released Batches', summary.releasedBatches],
+    ['Rejected Batches', summary.rejectedBatches],
+    ['Raw Material Lots', summary.rawMaterialLots],
+    ['Packing Material Lots', summary.packingMaterialLots],
+    ['CPP Records', summary.cppRecords],
+    ['CQA Records', summary.cqaRecords],
+    ['Yield Records', summary.yieldRecords],
+    ['Stability Records', summary.stabilityRecords],
+    ['Hold Time Records', summary.holdTimeRecords],
+    ['Deviations', summary.deviations],
+    ['OOS', summary.oos],
+    ['OOT', summary.oot],
+    ['CAPA', summary.capa],
+    ['Change Controls', summary.changeControls],
+    ['Complaints', summary.complaints],
+    ['Recalls', summary.recalls],
+    ['Validation Records', summary.validationRecords],
+    ['Equipment Records', summary.equipmentRecords],
+    ['Vendor Records', summary.vendorRecords],
+    ['Average Cpk', summary.averageCpk.toFixed(2)],
+    ['Open Critical OOS', summary.openCriticalOos],
+    ['Open Critical Deviations', summary.openCriticalDeviations],
+    ['Open CAPA', summary.openCapa],
+  ];
+  downloadCsv(`PQR_Summary_${productName.replace(/\s+/g, '_')}.csv`, headers, rows);
+}
+
+// ---------------------------------------------------------------------------
+// Audit log helpers
+// ---------------------------------------------------------------------------
 
 export async function logPqrCreateView(actor: PqrCreateActor) {
   await logCreateAudit('create wizard viewed', actor);

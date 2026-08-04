@@ -10,7 +10,7 @@ import { ErrorCard } from '@/components/admin/dashboard/error-card';
 import { useAuth } from '@/contexts/auth-context';
 import { useAdminPermissions } from '@/hooks/use-admin-permissions';
 import { canEditDocumentNumbering } from '@/lib/permissions';
-import { createDocumentNumbering } from '@/lib/admin/document-numbering-service';
+import { createDocumentNumbering } from '@/components/admin/document-numbering/document-numbering-api';
 import { fetchCompanySites } from '@/lib/admin/company-site-service';
 import { fetchDepartments } from '@/lib/admin/department-service';
 import { fetchProducts } from '@/lib/admin/product-service';

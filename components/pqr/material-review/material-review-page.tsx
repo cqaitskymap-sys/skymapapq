@@ -1,8 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Download, Eye, FileSpreadsheet, Loader2, Pencil, Plus, RefreshCw, Save, Trash2, Upload,
+  ArrowLeft, ArrowRight, Download, Eye, FileSpreadsheet, Loader2, Pencil, Plus,
+  RefreshCw, Save, Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -11,18 +14,23 @@ import {
 } from 'recharts';
 import { useAuth } from '@/contexts/auth-context';
 import { isFirebaseConfigured } from '@/lib/firebase';
-import type { PqrOption } from '@/lib/pqr-batch-review-records';
+import {
+  PQR_SECTION_FLOW, pqrSectionHref, type PqrOption,
+} from '@/lib/pqr-batch-review-records';
+import { fetchPqrById } from '@/lib/pqr-batch-review-service';
 import {
   PQR_MATERIAL_TYPES, PQR_QC_STATUSES, buildVendorAvlRows,
   canAddMaterialReview, canExportMaterialReview, canManageMaterialReview,
-  computeMaterialSummary, type MaterialReviewFormData, type PqrMaterialReviewRecord,
+  computeMaterialSummary, filterMaterialReviewRecords, formatQty, formatVariance,
+  type MaterialReviewFormData, type PqrMaterialReviewRecord,
 } from '@/lib/pqr-material-review-records';
 import {
-  buildMaterialCharts, createMaterialReviewRecord, fetchMaterialQualityMetrics,
-  fetchMaterialReviewRecords, fetchPqrOptions, getMaterialReviewNarrative, logMaterialNarrativeEdit,
-  logMaterialReviewExport, logMaterialReviewView, pullMaterialData,
-  recalculateAllCompliance, saveMaterialSectionToPqr, softDeleteMaterialReviewRecord,
-  updateMaterialReviewRecord, uploadMaterialAttachment,
+  buildMaterialCharts, createMaterialReviewRecord, exportMaterialReviewCsv,
+  fetchMaterialQualityMetrics, fetchMaterialReviewRecords, fetchPqrOptions,
+  getMaterialReviewNarrative, logMaterialNarrativeEdit, logMaterialReviewExport,
+  logMaterialReviewView, pullMaterialData, recalculateAllCompliance,
+  saveMaterialSectionToPqr, softDeleteMaterialReviewRecord, updateMaterialReviewRecord,
+  uploadMaterialAttachment,
 } from '@/lib/pqr-material-review-service';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ResponsiveDataTable } from '@/components/cpv/product-master/responsive-data-table';
@@ -62,6 +70,8 @@ type TableRow = PqrMaterialReviewRecord & { srNo: number };
 
 export function MaterialReviewPage() {
   const { user, profile } = useAuth();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const role = profile?.role;
   const canAdd = canAddMaterialReview(role);
   const canManage = canManageMaterialReview(role);
@@ -74,6 +84,7 @@ export function MaterialReviewPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [narrative, setNarrative] = useState('');
+  const [narrativeDirty, setNarrativeDirty] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [editRecord, setEditRecord] = useState<PqrMaterialReviewRecord | null>(null);
   const [detailRecord, setDetailRecord] = useState<PqrMaterialReviewRecord | null>(null);
@@ -88,7 +99,10 @@ export function MaterialReviewPage() {
   const [filterSupplier, setFilterSupplier] = useState('');
   const [filterAvl, setFilterAvl] = useState('all');
   const [filterRisk, setFilterRisk] = useState('all');
-  const [qualityMetrics, setQualityMetrics] = useState({ materialOosCount: 0, materialDeviationCount: 0 });
+  const [filterSearch, setFilterSearch] = useState('');
+  const [qualityMetrics, setQualityMetrics] = useState({
+    materialOosCount: 0, materialDeviationCount: 0, materialCapaCount: 0,
+  });
 
   const actor = useMemo(() => ({
     id: user?.uid || 'system',
@@ -98,6 +112,14 @@ export function MaterialReviewPage() {
 
   const selectedPqr = useMemo(() => pqrs.find((p) => p.id === selectedPqrId) || null, [pqrs, selectedPqrId]);
 
+  const syncPqrIdToUrl = useCallback((pqrId: string) => {
+    if (!pqrId) return;
+    const params = new URLSearchParams(searchParams?.toString() || '');
+    if (params.get('pqrId') === pqrId) return;
+    params.set('pqrId', pqrId);
+    router.replace(`/pqr/materials?${params.toString()}`, { scroll: false });
+  }, [router, searchParams]);
+
   const loadPqrs = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -105,10 +127,26 @@ export function MaterialReviewPage() {
       if (!isFirebaseConfigured()) { setError('Firebase is not configured.'); return; }
       const opts = await fetchPqrOptions();
       setPqrs(opts);
-      if (opts.length && !selectedPqrId) setSelectedPqrId(opts[0].id);
+      const fromUrl = searchParams?.get('pqrId') || '';
+      let nextId = selectedPqrId;
+      if (fromUrl && opts.some((p) => p.id === fromUrl)) {
+        nextId = fromUrl;
+      } else if (fromUrl) {
+        const direct = await fetchPqrById(fromUrl);
+        if (direct) {
+          setPqrs((prev) => (prev.some((p) => p.id === direct.id) ? prev : [direct, ...prev]));
+          nextId = direct.id;
+        } else if (!nextId && opts.length) nextId = opts[0].id;
+      } else if (!nextId && opts.length) {
+        nextId = opts[0].id;
+      }
+      if (nextId) {
+        setSelectedPqrId(nextId);
+        syncPqrIdToUrl(nextId);
+      }
     } catch { setError('Failed to load PQR records.'); }
     finally { setLoading(false); }
-  }, [selectedPqrId]);
+  }, [selectedPqrId, searchParams, syncPqrIdToUrl]);
 
   const loadRecords = useCallback(async (pqrId: string, pqr?: PqrOption | null) => {
     if (!pqrId) return;
@@ -117,6 +155,7 @@ export function MaterialReviewPage() {
       const rows = await fetchMaterialReviewRecords(pqrId);
       setRecords(rows);
       setNarrative(getMaterialReviewNarrative(rows));
+      setNarrativeDirty(false);
       if (pqr) {
         const metrics = await fetchMaterialQualityMetrics(pqr, rows);
         setQualityMetrics(metrics);
@@ -125,49 +164,71 @@ export function MaterialReviewPage() {
     finally { setBusy(false); }
   }, []);
 
-  useEffect(() => { void loadPqrs(); void logMaterialReviewView(actor); }, [loadPqrs, actor]);
-  useEffect(() => { if (selectedPqrId) void loadRecords(selectedPqrId, selectedPqr); }, [selectedPqrId, selectedPqr, loadRecords]);
+  useEffect(() => { void loadPqrs(); void logMaterialReviewView(actor); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filtered = useMemo(() => records.filter((r) => {
-    if (filterType !== 'all' && r.materialType !== filterType) return false;
-    if (filterQc !== 'all' && r.qcStatus !== filterQc) return false;
-    if (filterCompliance !== 'all' && r.complianceStatus !== filterCompliance) return false;
-    if (filterAvl !== 'all' && r.vendorAvlStatus !== filterAvl) return false;
-    if (filterRisk !== 'all' && r.riskLevel !== filterRisk) return false;
-    if (filterMaterial && !r.materialName.toLowerCase().includes(filterMaterial.toLowerCase())) return false;
-    if (filterBatch && !`${r.batchNumber} ${r.materialLotNumber}`.toLowerCase().includes(filterBatch.toLowerCase())) return false;
-    if (filterManufacturer && !r.manufacturerName.toLowerCase().includes(filterManufacturer.toLowerCase())) return false;
-    if (filterSupplier && !r.supplierName.toLowerCase().includes(filterSupplier.toLowerCase())) return false;
-    return true;
-  }), [records, filterType, filterQc, filterCompliance, filterAvl, filterRisk, filterMaterial, filterBatch, filterManufacturer, filterSupplier]);
+  useEffect(() => {
+    if (selectedPqrId) {
+      void loadRecords(selectedPqrId, selectedPqr);
+      syncPqrIdToUrl(selectedPqrId);
+    }
+  }, [selectedPqrId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const apiRecords = useMemo(() => filtered.filter((r) => r.materialType === 'API'), [filtered]);
-  const rawRecords = useMemo(() => filtered.filter((r) => r.materialType !== 'API'), [filtered]);
+  const filtered = useMemo(() => filterMaterialReviewRecords(records, {
+    materialType: filterType,
+    qcStatus: filterQc,
+    complianceStatus: filterCompliance,
+    avlStatus: filterAvl,
+    riskLevel: filterRisk,
+    material: filterMaterial,
+    batch: filterBatch,
+    manufacturer: filterManufacturer,
+    supplier: filterSupplier,
+    search: filterSearch,
+  }), [records, filterType, filterQc, filterCompliance, filterAvl, filterRisk, filterMaterial, filterBatch, filterManufacturer, filterSupplier, filterSearch]);
+
+  const apiRecords = useMemo(() => filtered.filter((r) => r.materialType === 'API' || r.materialType.toLowerCase().includes('active')), [filtered]);
+  const rawRecords = useMemo(() => filtered.filter((r) => r.materialType !== 'API' && !r.materialType.toLowerCase().includes('active')), [filtered]);
   const summary = useMemo(() => computeMaterialSummary(filtered, qualityMetrics), [filtered, qualityMetrics]);
   const charts = useMemo(() => buildMaterialCharts(filtered), [filtered]);
   const vendorRows = useMemo(() => buildVendorAvlRows(filtered), [filtered]);
 
+  const resetFilters = () => {
+    setFilterType('all');
+    setFilterQc('all');
+    setFilterCompliance('all');
+    setFilterMaterial('');
+    setFilterBatch('');
+    setFilterManufacturer('');
+    setFilterSupplier('');
+    setFilterAvl('all');
+    setFilterRisk('all');
+    setFilterSearch('');
+  };
+
   const tableColumns: ColumnDef<TableRow>[] = [
     { key: 'srNo', header: 'Sr. No.' },
     { key: 'materialName', header: 'Material Name' },
+    { key: 'materialType', header: 'Type' },
     { key: 'manufacturerName', header: 'Manufacturer' },
     { key: 'supplierName', header: 'Supplier' },
     { key: 'arNumber', header: 'AR No.' },
-    { key: 'materialLotNumber', header: 'Batch / Lot No.', render: (r) => r.materialLotNumber || r.batchNumber || '—' },
-    { key: 'usedQuantity', header: 'Quantity Used', render: (r) => `${r.usedQuantity} ${r.unit}` },
+    { key: 'materialLotNumber', header: 'Lot No.', render: (r) => r.materialLotNumber || '—' },
+    { key: 'batchNumber', header: 'FP Batch', render: (r) => r.batchNumber || '—' },
+    { key: 'usedQuantity', header: 'Qty Used', render: (r) => formatQty(r.usedQuantity, r.unit) },
+    { key: 'variancePct', header: 'Variance %', render: (r) => formatVariance(r.variancePct) },
     { key: 'qcStatus', header: 'QC Status', render: (r) => <QcStatusBadge status={r.qcStatus} /> },
-    { key: 'vendorAvlStatus', header: 'AVL Status', render: (r) => <AvlStatusBadge status={r.vendorAvlStatus} /> },
+    { key: 'vendorAvlStatus', header: 'AVL', render: (r) => <AvlStatusBadge status={r.vendorAvlStatus} /> },
     { key: 'complianceStatus', header: 'Compliance', render: (r) => <ComplianceBadge status={r.complianceStatus} /> },
-    { key: 'remarks', header: 'Remarks', render: (r) => <span className="line-clamp-1 max-w-[100px]">{r.remarks || '—'}</span> },
+    { key: 'riskLevel', header: 'Risk', render: (r) => <MaterialRiskBadge level={r.riskLevel} /> },
     {
       key: 'actions', header: 'Action',
       render: (r) => (
         <div className="flex gap-1">
-          <Button variant="ghost" size="icon" onClick={() => setDetailRecord(r)}><Eye className="h-4 w-4" /></Button>
+          <Button variant="ghost" size="icon" aria-label={`View ${r.materialName}`} onClick={() => setDetailRecord(r)}><Eye className="h-4 w-4" /></Button>
           {canManage && (
             <>
-              <Button variant="ghost" size="icon" onClick={() => { setEditRecord(r); setFormOpen(true); }}><Pencil className="h-4 w-4" /></Button>
-              <Button variant="ghost" size="icon" onClick={() => setDeleteId(r.id || null)}><Trash2 className="h-4 w-4 text-red-500" /></Button>
+              <Button variant="ghost" size="icon" aria-label={`Edit ${r.materialName}`} onClick={() => { setEditRecord(r); setFormOpen(true); }}><Pencil className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="icon" aria-label={`Remove ${r.materialName}`} onClick={() => setDeleteId(r.id || null)}><Trash2 className="h-4 w-4 text-red-500" /></Button>
             </>
           )}
         </div>
@@ -183,7 +244,7 @@ export function MaterialReviewPage() {
     const { created, skipped, error: err } = await pullMaterialData(selectedPqr, actor);
     setBusy(false);
     if (err) return toast.error(err);
-    toast.success(`${created} material lot(s) pulled (${skipped} skipped)`);
+    toast.success(`${created} material lot(s) pulled (${skipped} already linked)`);
     await loadRecords(selectedPqr.id, selectedPqr);
   };
 
@@ -207,15 +268,19 @@ export function MaterialReviewPage() {
     const { error: err } = await saveMaterialSectionToPqr(selectedPqr.id, narrative, records, actor);
     setBusy(false);
     if (err) toast.error(err);
-    else toast.success('Material section saved to PQR');
+    else {
+      setNarrativeDirty(false);
+      toast.success('Material section saved to PQR');
+    }
   };
 
   const handleRecalc = async () => {
     if (!selectedPqr) return;
     setBusy(true);
-    await recalculateAllCompliance(selectedPqr.id, actor);
+    const { updated, error: err } = await recalculateAllCompliance(selectedPqr.id, actor);
     setBusy(false);
-    toast.success('Compliance recalculated');
+    if (err) return toast.error(err);
+    toast.success(`Compliance recalculated for ${updated} lot(s)`);
     await loadRecords(selectedPqr.id, selectedPqr);
   };
 
@@ -230,6 +295,23 @@ export function MaterialReviewPage() {
     await loadRecords(selectedPqr.id, selectedPqr);
   };
 
+  const exportCsv = () => {
+    if (!filtered.length) return toast.info('No material records to export');
+    exportMaterialReviewCsv(filtered, selectedPqr?.pqrNumber);
+    void logMaterialReviewExport(actor, 'csv');
+    toast.success('Material review exported as CSV');
+  };
+
+  const sectionNav = useMemo(() => {
+    const idx = PQR_SECTION_FLOW.findIndex((s) => s.key === 'materials');
+    const prev = PQR_SECTION_FLOW[idx - 1];
+    const next = PQR_SECTION_FLOW[idx + 1];
+    return {
+      prev: prev ? { ...prev, href: pqrSectionHref(prev.href, selectedPqrId) } : null,
+      next: next ? { ...next, href: pqrSectionHref(next.href, selectedPqrId) } : null,
+    };
+  }, [selectedPqrId]);
+
   if (loading) return <MaterialReviewAccessGuard><div className="p-4 sm:p-6"><LoadingSkeleton rows={3} /></div></MaterialReviewAccessGuard>;
   if (error) return <MaterialReviewAccessGuard><div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={() => void loadPqrs()} /></div></MaterialReviewAccessGuard>;
 
@@ -238,7 +320,7 @@ export function MaterialReviewPage() {
       <div className="space-y-6 p-4 sm:p-6">
         <CpvPageHeader
           title="Material Review"
-          description="Review API and raw materials used during the PQR period"
+          description="Review API and raw materials for the selected Annual PQR using Material Master, warehouse, and linked QMS records"
           trail={[
             { label: 'Dashboard', href: '/dashboard' },
             { label: 'PQR Management', href: '/pqr/dashboard' },
@@ -247,14 +329,9 @@ export function MaterialReviewPage() {
           actions={(
             <>
               {canExport && (
-                <>
-                  <Button variant="outline" size="sm" onClick={() => { void logMaterialReviewExport(actor, 'import'); toast.info('Excel import placeholder'); }}>
-                    <Upload className="h-4 w-4 mr-1" />Import
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => { void logMaterialReviewExport(actor, 'excel'); toast.info('Excel export placeholder'); }}>
-                    <FileSpreadsheet className="h-4 w-4 mr-1" />Export
-                  </Button>
-                </>
+                <Button variant="outline" size="sm" onClick={exportCsv} disabled={!filtered.length}>
+                  <FileSpreadsheet className="h-4 w-4 mr-1" />Export CSV
+                </Button>
               )}
               {canManage && selectedPqr && (
                 <>
@@ -272,13 +349,31 @@ export function MaterialReviewPage() {
           )}
         />
 
+        <div className="flex flex-wrap gap-2 text-sm">
+          {PQR_SECTION_FLOW.filter((s) => !['dashboard', 'create'].includes(s.key)).map((s) => (
+            <Link
+              key={s.key}
+              href={pqrSectionHref(s.href, selectedPqrId)}
+              className={`rounded-md border px-2.5 py-1 ${s.key === 'materials' ? 'bg-blue-600 text-white border-blue-600' : 'hover:bg-slate-50'}`}
+            >
+              {s.label}
+            </Link>
+          ))}
+        </div>
+
         <Card>
           <CardContent className="pt-6">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div className="space-y-2 sm:col-span-2">
-                <Label>PQR Number *</Label>
-                <Select value={selectedPqrId} onValueChange={setSelectedPqrId}>
-                  <SelectTrigger><SelectValue placeholder="Select PQR..." /></SelectTrigger>
+                <Label htmlFor="pqr-select">PQR Number *</Label>
+                <Select
+                  value={selectedPqrId}
+                  onValueChange={(id) => {
+                    setSelectedPqrId(id);
+                    syncPqrIdToUrl(id);
+                  }}
+                >
+                  <SelectTrigger id="pqr-select"><SelectValue placeholder="Select PQR..." /></SelectTrigger>
                   <SelectContent>
                     {pqrs.map((p) => <SelectItem key={p.id} value={p.id}>{p.pqrNumber} — {p.productName}</SelectItem>)}
                   </SelectContent>
@@ -286,8 +381,27 @@ export function MaterialReviewPage() {
               </div>
               {selectedPqr && (
                 <>
-                  <div><Label className="text-muted-foreground">Product</Label><p className="text-sm font-medium">{selectedPqr.productName}</p></div>
-                  <div><Label className="text-muted-foreground">Review Period</Label><p className="text-sm font-medium">{selectedPqr.reviewPeriodFrom} — {selectedPqr.reviewPeriodTo}</p></div>
+                  <div>
+                    <Label className="text-muted-foreground">Product / Code</Label>
+                    <p className="text-sm font-medium">{selectedPqr.productName}</p>
+                    <p className="text-xs text-muted-foreground">{selectedPqr.productCode}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Review Period</Label>
+                    <p className="text-sm font-medium">{selectedPqr.reviewPeriodFrom || '—'} — {selectedPqr.reviewPeriodTo || '—'}</p>
+                  </div>
+                  {(selectedPqr.strength || selectedPqr.dosageForm) && (
+                    <div>
+                      <Label className="text-muted-foreground">Strength / Dosage Form</Label>
+                      <p className="text-sm font-medium">{[selectedPqr.strength, selectedPqr.dosageForm].filter(Boolean).join(' / ')}</p>
+                    </div>
+                  )}
+                  {selectedPqr.status && (
+                    <div>
+                      <Label className="text-muted-foreground">PQR Status</Label>
+                      <p className="text-sm font-medium capitalize">{selectedPqr.status.replace(/_/g, ' ')}</p>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -298,43 +412,52 @@ export function MaterialReviewPage() {
           <EmptyState title="Select a PQR" message="Choose a PQR to review materials for the annual review period." />
         ) : (
           <>
-            <div className="grid gap-3 grid-cols-2 md:grid-cols-5 xl:grid-cols-10">
+            <div className="grid gap-3 grid-cols-2 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-12">
               <KpiCard label="Total Lots" value={summary.totalMaterialLots} />
+              <KpiCard label="Materials" value={summary.uniqueMaterials} />
               <KpiCard label="API Lots" value={summary.totalApiLots} />
-              <KpiCard label="Raw Material Lots" value={summary.totalRawMaterialLots} />
-              <KpiCard label="Approved Lots" value={summary.approvedLots} tone="green" />
-              <KpiCard label="Rejected Lots" value={summary.rejectedLots} tone="red" />
-              <KpiCard label="AVL Compliant" value={summary.avlApprovedLots} tone="green" />
+              <KpiCard label="Raw Lots" value={summary.totalRawMaterialLots} />
+              <KpiCard label="Approved" value={summary.approvedLots} tone="green" />
+              <KpiCard label="Rejected" value={summary.rejectedLots} tone="red" />
+              <KpiCard label="Pending" value={summary.pendingLots} tone="amber" />
+              <KpiCard label="Accept %" value={`${summary.acceptancePct}%`} tone="green" />
               <KpiCard label="Non-Compliant" value={summary.nonCompliantLots} tone="red" />
               <KpiCard label="Expired/Retest" value={summary.expiredMaterials + summary.retestDueMaterials} tone="amber" />
-              <KpiCard label="Material OOS" value={summary.materialOosCount} tone="amber" />
-              <KpiCard label="Deviations" value={summary.materialDeviationCount} />
+              <KpiCard label="OOS / Dev / CAPA" value={`${summary.materialOosCount}/${summary.materialDeviationCount}/${summary.materialCapaCount}`} />
+              <KpiCard label="Suppliers" value={summary.uniqueSuppliers} />
             </div>
 
             <Card><CardContent className="pt-6">
               <div className="flex flex-wrap gap-2">
+                <Input
+                  placeholder="Search material / AR / lot"
+                  className="w-full sm:w-[200px]"
+                  value={filterSearch}
+                  onChange={(e) => setFilterSearch(e.target.value)}
+                  aria-label="Search materials"
+                />
                 <Select value={filterType} onValueChange={setFilterType}>
-                  <SelectTrigger className="w-[160px]"><SelectValue placeholder="Material Type" /></SelectTrigger>
+                  <SelectTrigger className="w-[160px]" aria-label="Filter material type"><SelectValue placeholder="Material Type" /></SelectTrigger>
                   <SelectContent><SelectItem value="all">All Types</SelectItem>{PQR_MATERIAL_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={filterQc} onValueChange={setFilterQc}>
-                  <SelectTrigger className="w-[140px]"><SelectValue placeholder="QC Status" /></SelectTrigger>
+                  <SelectTrigger className="w-[140px]" aria-label="Filter QC status"><SelectValue placeholder="QC Status" /></SelectTrigger>
                   <SelectContent><SelectItem value="all">All QC</SelectItem>{PQR_QC_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={filterCompliance} onValueChange={setFilterCompliance}>
-                  <SelectTrigger className="w-[160px]"><SelectValue placeholder="Compliance" /></SelectTrigger>
+                  <SelectTrigger className="w-[160px]" aria-label="Filter compliance"><SelectValue placeholder="Compliance" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Compliance</SelectItem>
                     <SelectItem value="Complies">Complies</SelectItem>
                     <SelectItem value="Does Not Comply">Does Not Comply</SelectItem>
                   </SelectContent>
                 </Select>
-                <Input placeholder="Material name" className="w-[160px]" value={filterMaterial} onChange={(e) => setFilterMaterial(e.target.value)} />
-                <Input placeholder="Batch / lot" className="w-[140px]" value={filterBatch} onChange={(e) => setFilterBatch(e.target.value)} />
-                <Input placeholder="Manufacturer" className="w-[140px]" value={filterManufacturer} onChange={(e) => setFilterManufacturer(e.target.value)} />
-                <Input placeholder="Supplier" className="w-[130px]" value={filterSupplier} onChange={(e) => setFilterSupplier(e.target.value)} />
+                <Input placeholder="Material name" className="w-[140px]" value={filterMaterial} onChange={(e) => setFilterMaterial(e.target.value)} />
+                <Input placeholder="Batch / lot" className="w-[130px]" value={filterBatch} onChange={(e) => setFilterBatch(e.target.value)} />
+                <Input placeholder="Manufacturer" className="w-[130px]" value={filterManufacturer} onChange={(e) => setFilterManufacturer(e.target.value)} />
+                <Input placeholder="Supplier" className="w-[120px]" value={filterSupplier} onChange={(e) => setFilterSupplier(e.target.value)} />
                 <Select value={filterAvl} onValueChange={setFilterAvl}>
-                  <SelectTrigger className="w-[150px]"><SelectValue placeholder="AVL Status" /></SelectTrigger>
+                  <SelectTrigger className="w-[140px]" aria-label="Filter AVL"><SelectValue placeholder="AVL Status" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All AVL</SelectItem>
                     <SelectItem value="Approved">Approved</SelectItem>
@@ -344,7 +467,7 @@ export function MaterialReviewPage() {
                   </SelectContent>
                 </Select>
                 <Select value={filterRisk} onValueChange={setFilterRisk}>
-                  <SelectTrigger className="w-[130px]"><SelectValue placeholder="Risk" /></SelectTrigger>
+                  <SelectTrigger className="w-[120px]" aria-label="Filter risk"><SelectValue placeholder="Risk" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Risk</SelectItem>
                     <SelectItem value="Low">Low</SelectItem>
@@ -353,7 +476,8 @@ export function MaterialReviewPage() {
                     <SelectItem value="Critical">Critical</SelectItem>
                   </SelectContent>
                 </Select>
-                <Button variant="outline" size="icon" onClick={() => void loadRecords(selectedPqrId, selectedPqr)} disabled={busy}>
+                <Button variant="outline" size="sm" onClick={resetFilters}>Reset</Button>
+                <Button variant="outline" size="icon" aria-label="Reload" onClick={() => void loadRecords(selectedPqrId, selectedPqr)} disabled={busy}>
                   <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} />
                 </Button>
               </div>
@@ -361,10 +485,10 @@ export function MaterialReviewPage() {
 
             <Tabs defaultValue="api">
               <TabsList className="flex flex-wrap h-auto">
-                <TabsTrigger value="api">API Review</TabsTrigger>
-                <TabsTrigger value="raw">Raw Material Review</TabsTrigger>
-                <TabsTrigger value="vendor">Vendor AVL Review</TabsTrigger>
-                <TabsTrigger value="compliance">Compliance Summary</TabsTrigger>
+                <TabsTrigger value="api">API Review ({apiRecords.length})</TabsTrigger>
+                <TabsTrigger value="raw">Raw Material Review ({rawRecords.length})</TabsTrigger>
+                <TabsTrigger value="vendor">Vendor AVL</TabsTrigger>
+                <TabsTrigger value="compliance">Compliance</TabsTrigger>
                 <TabsTrigger value="charts">Charts</TabsTrigger>
                 <TabsTrigger value="narrative">Narrative</TabsTrigger>
               </TabsList>
@@ -373,14 +497,14 @@ export function MaterialReviewPage() {
                 <Card><CardContent className="pt-6 overflow-x-auto">
                   {apiRecords.length ? (
                     <ResponsiveDataTable columns={tableColumns} data={toTable(apiRecords)} searchKeys={['materialName', 'arNumber', 'manufacturerName']} mobileTitleKey="materialName" mobileSubtitleKey="arNumber" pageSize={15} />
-                  ) : <EmptyState title="No API records" message="Pull materials or add manually." />}
+                  ) : <EmptyState title="No API records" message="Pull materials from monitoring/warehouse for linked batches, or add manually." />}
                 </CardContent></Card>
               </TabsContent>
 
               <TabsContent value="raw" className="mt-4">
                 <Card><CardContent className="pt-6 overflow-x-auto">
                   {rawRecords.length ? (
-                    <ResponsiveDataTable columns={tableColumns} data={toTable(rawRecords)} searchKeys={['materialName', 'arNumber']} mobileTitleKey="materialName" mobileSubtitleKey="supplierName" pageSize={15} />
+                    <ResponsiveDataTable columns={tableColumns} data={toTable(rawRecords)} searchKeys={['materialName', 'arNumber', 'supplierName']} mobileTitleKey="materialName" mobileSubtitleKey="supplierName" pageSize={15} />
                   ) : <EmptyState title="No raw material records" message="Pull materials or add manually." />}
                 </CardContent></Card>
               </TabsContent>
@@ -398,8 +522,8 @@ export function MaterialReviewPage() {
                         <tbody>
                           {vendorRows.map((v) => (
                             <tr key={v.id} className="border-b">
-                              <td className="px-3 py-2">{v.supplierName}</td>
-                              <td className="px-3 py-2">{v.manufacturerName}</td>
+                              <td className="px-3 py-2">{v.supplierName || '—'}</td>
+                              <td className="px-3 py-2">{v.manufacturerName || '—'}</td>
                               <td className="px-3 py-2">{v.materialCount}</td>
                               <td className="px-3 py-2"><AvlStatusBadge status={v.avlStatus} /></td>
                               <td className="px-3 py-2">{v.compliantLots}</td>
@@ -416,13 +540,13 @@ export function MaterialReviewPage() {
               <TabsContent value="compliance" className="mt-4">
                 <div className="grid gap-4 md:grid-cols-2">
                   <Card><CardHeader><CardTitle className="text-sm">Compliant Lots</CardTitle></CardHeader>
-                    <CardContent>{filtered.filter((r) => r.complianceStatus === 'Complies').length} of {filtered.length}</CardContent></Card>
+                    <CardContent>{filtered.filter((r) => r.complianceStatus === 'Complies').length} of {filtered.length} ({summary.acceptancePct}% QC approved)</CardContent></Card>
                   <Card><CardHeader><CardTitle className="text-sm">Non-Compliant Reasons</CardTitle></CardHeader>
                     <CardContent className="space-y-2 text-sm">
-                      {Array.from(new Set(filtered.flatMap((r) => r.complianceReasons))).map((reason) => (
-                        <p key={reason}>• {reason}: {filtered.filter((r) => r.complianceReasons.includes(reason)).length}</p>
+                      {Array.from(new Set(filtered.flatMap((r) => r.complianceReasons || []))).map((reason) => (
+                        <p key={reason}>• {reason}: {filtered.filter((r) => (r.complianceReasons || []).includes(reason)).length}</p>
                       ))}
-                      {!filtered.some((r) => r.complianceReasons.length) && <p className="text-muted-foreground">All materials comply.</p>}
+                      {!filtered.some((r) => (r.complianceReasons || []).length) && <p className="text-muted-foreground">All materials comply.</p>}
                     </CardContent></Card>
                 </div>
               </TabsContent>
@@ -436,7 +560,7 @@ export function MaterialReviewPage() {
                       </Pie><Tooltip /></PieChart>
                     </ResponsiveContainer>
                   </SafeChart>
-                  <SafeChart title="Approved vs Rejected Lots" empty={!charts.approvedVsRejected.some((d) => d.value > 0)}>
+                  <SafeChart title="Approved / Rejected / Pending" empty={!charts.approvedVsRejected.some((d) => d.value > 0)}>
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={charts.approvedVsRejected}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="name" /><YAxis /><Tooltip /><Bar dataKey="value" fill="#2563eb" /></BarChart>
                     </ResponsiveContainer>
@@ -469,21 +593,51 @@ export function MaterialReviewPage() {
 
               <TabsContent value="narrative" className="mt-4">
                 <Card>
-                  <CardHeader className="flex flex-row items-center justify-between">
+                  <CardHeader className="flex flex-row items-center justify-between gap-2">
                     <CardTitle className="text-base">PQR Section Narrative — API / Raw Material Review</CardTitle>
                     {canManage && (
-                      <Button size="sm" onClick={() => void handleSaveSection()} disabled={busy}>
+                      <Button size="sm" onClick={() => void handleSaveSection()} disabled={busy || !narrativeDirty}>
                         <Save className="h-4 w-4 mr-1" />Save to PQR
                       </Button>
                     )}
                   </CardHeader>
                   <CardContent>
-                    <Textarea className="min-h-[140px]" value={narrative} readOnly={!canManage}
-                      onChange={(e) => { setNarrative(e.target.value); if (selectedPqr) void logMaterialNarrativeEdit(actor, selectedPqr.id); }} />
+                    <Textarea
+                      className="min-h-[140px]"
+                      value={narrative}
+                      readOnly={!canManage}
+                      aria-label="Material review narrative"
+                      onChange={(e) => {
+                        setNarrative(e.target.value);
+                        setNarrativeDirty(true);
+                        if (selectedPqr) logMaterialNarrativeEdit(actor, selectedPqr.id);
+                      }}
+                    />
+                    {narrativeDirty && <p className="mt-2 text-xs text-amber-700">Unsaved narrative changes</p>}
                   </CardContent>
                 </Card>
               </TabsContent>
             </Tabs>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+              {sectionNav.prev ? (
+                <Button variant="outline" asChild>
+                  <Link href={sectionNav.prev.href}><ArrowLeft className="h-4 w-4 mr-1" />{sectionNav.prev.label}</Link>
+                </Button>
+              ) : <span />}
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" asChild><Link href="/pqr/dashboard">PQR Dashboard</Link></Button>
+                <Button variant="outline" asChild><Link href="/qms/deviation">Deviations</Link></Button>
+                <Button variant="outline" asChild><Link href="/qms/oos">OOS</Link></Button>
+                <Button variant="outline" asChild><Link href="/qms/capa">CAPA</Link></Button>
+                <Button variant="outline" asChild><Link href="/qms/vendors">Suppliers</Link></Button>
+              </div>
+              {sectionNav.next ? (
+                <Button asChild>
+                  <Link href={sectionNav.next.href}>{sectionNav.next.label}<ArrowRight className="h-4 w-4 ml-1" /></Link>
+                </Button>
+              ) : <span />}
+            </div>
           </>
         )}
 
@@ -498,15 +652,27 @@ export function MaterialReviewPage() {
               <div className="space-y-4">
                 <dl className="grid grid-cols-2 gap-2 text-sm">
                   {[
-                    ['Material Type', detailRecord.materialType], ['Batch', detailRecord.batchNumber],
-                    ['Manufacturer', detailRecord.manufacturerName], ['Supplier', detailRecord.supplierName],
-                    ['AR No.', detailRecord.arNumber], ['GRN', detailRecord.grnNumber],
-                    ['Used Qty', `${detailRecord.usedQuantity} ${detailRecord.unit}`],
-                    ['MFG/EXP', `${detailRecord.mfgDate} / ${detailRecord.expDate}`],
+                    ['PQR', detailRecord.pqrNumber || selectedPqr?.pqrNumber],
+                    ['Product', detailRecord.product],
+                    ['Material Type', detailRecord.materialType],
+                    ['Material Code', detailRecord.materialCode || '—'],
+                    ['FP Batch', detailRecord.batchNumber || '—'],
+                    ['Lot No.', detailRecord.materialLotNumber || '—'],
+                    ['Manufacturer', detailRecord.manufacturerName],
+                    ['Supplier', detailRecord.supplierName],
+                    ['AR No.', detailRecord.arNumber],
+                    ['GRN', detailRecord.grnNumber || '—'],
+                    ['Received', formatQty(detailRecord.receivedQuantity, detailRecord.unit)],
+                    ['Issued', formatQty(detailRecord.issuedQuantity, detailRecord.unit)],
+                    ['Used', formatQty(detailRecord.usedQuantity, detailRecord.unit)],
+                    ['Variance %', formatVariance(detailRecord.variancePct)],
+                    ['MFG / EXP', `${detailRecord.mfgDate || '—'} / ${detailRecord.expDate || '—'}`],
                     ['Retest', detailRecord.retestDate || '—'],
-                    ['COA', detailRecord.coaAvailable],
+                    ['Specification', detailRecord.specificationNumber || '—'],
+                    ['COA', detailRecord.coaAvailable === 'Yes' ? (detailRecord.coaNumber || 'Yes') : 'No'],
+                    ['Source', detailRecord.sourceType || 'manual'],
                   ].map(([k, v]) => (
-                    <div key={k}><dt className="text-muted-foreground">{k}</dt><dd className="font-medium">{String(v)}</dd></div>
+                    <div key={String(k)}><dt className="text-muted-foreground">{k}</dt><dd className="font-medium">{String(v)}</dd></div>
                   ))}
                 </dl>
                 <div className="flex flex-wrap gap-2">
@@ -515,12 +681,23 @@ export function MaterialReviewPage() {
                   <ComplianceBadge status={detailRecord.complianceStatus} />
                   <MaterialRiskBadge level={detailRecord.riskLevel} />
                 </div>
-                {detailRecord.complianceReasons.length > 0 && (
+                {(detailRecord.complianceReasons || []).length > 0 && (
                   <p className="text-sm text-red-600">Reasons: {detailRecord.complianceReasons.join(', ')}</p>
                 )}
-                {detailRecord.id && canManage && (
+                <div className="flex flex-wrap gap-2 border-t pt-3">
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href={`/qms/deviation?batch=${encodeURIComponent(detailRecord.batchNumber || '')}`}>Deviations</Link>
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href={`/qms/oos?batch=${encodeURIComponent(detailRecord.batchNumber || '')}`}>OOS</Link>
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/qms/capa">CAPA</Link>
+                  </Button>
+                </div>
+                {detailRecord.id && canManage && selectedPqr && (
                   <AttachmentUploader
-                    onUpload={(file) => uploadMaterialAttachment(selectedPqr!.id, detailRecord.id!, file, actor)}
+                    onUpload={(file) => uploadMaterialAttachment(selectedPqr.id, detailRecord.id!, file, actor)}
                   />
                 )}
               </div>

@@ -243,7 +243,7 @@ export function DepartmentDetailView({ id }: { id: string }) {
               <p>Total linked users: <span className="font-medium">{linkedUsers.length}</span></p>
               <p>Child departments: <span className="font-medium">{childCount}</span></p>
               <p className="text-muted-foreground">
-                Use User Management filters, Training reports, and Audit Trail exports for formal compliance reporting.
+                Use User Management filters and Audit Trail exports for formal compliance reporting.
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button asChild variant="outline" size="sm">

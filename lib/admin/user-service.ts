@@ -3,10 +3,8 @@ import {
   collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import {
-  getFirebaseApp, getFirebaseAuth, getFirebaseFirestore, isFirebaseConfigured,
-} from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseApp, getFirebaseAuth, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import type { PermissionMatrixData } from '@/lib/permission-presets';
 import {
   checkUniqueField, getAdminRecords,
@@ -204,7 +202,7 @@ export async function createSystemUser(
     }
 
     const createUser = httpsCallable<Record<string, unknown>, AdminUser>(
-      getFunctions(getFirebaseApp()),
+      getFirebaseFunctions(),
       'createAdminUser',
     );
     const response = await createUser({
@@ -311,7 +309,7 @@ export async function updateSystemUser(
         presetId?: string;
       },
       AdminUser
-    >(getFunctions(getFirebaseApp()), 'updateAdminUser');
+    >(getFirebaseFunctions(), 'updateAdminUser');
     const requestPayload = {
       userId: id,
       updates,

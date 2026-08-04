@@ -1,24 +1,20 @@
 import {
   collection, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchParameters, normalizeParameter } from '@/lib/admin/parameter-service';
 import type { Parameter } from '@/lib/admin/schemas';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
+import { isCpvProductOperational } from '@/lib/cpv-product-master';
 import { fetchCpvBatchById, fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS, type CppRecord } from '@/lib/cpv';
-import { createAlert } from '@/lib/cpv-module-service';
 import {
   CPP_RESULTS_COLLECTION,
-  CPP_LEGACY_COLLECTION,
   CPP_MODULE_NAME,
-  DEFAULT_CPP_PARAMETERS,
   buildCppResultId,
-  evaluateCppStatus,
-  evaluateCppRiskLevel,
   parameterMatchesCppProcessStage,
   type CppResultFormData,
   type CppResultRecord,
@@ -30,34 +26,6 @@ export interface CppActor {
   role?: string;
 }
 
-function actorCtx(actor: CppActor) {
-  return { moduleName: CPP_MODULE_NAME, actor: { id: actor.id, name: actor.name } as DocumentActor };
-}
-
-async function logCppAudit(actionType: string, recordId: string, actor: CppActor, oldVal?: unknown, newVal?: unknown, docNo?: string) {
-  await createAuditLog({
-    moduleName: CPP_MODULE_NAME,
-    collectionName: CPP_RESULTS_COLLECTION,
-    recordId,
-    documentNumber: docNo,
-    actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-  await writeAuditTrail({
-    collectionName: CPP_RESULTS_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: CPP_MODULE_NAME,
-  });
-}
-
 function str(v: unknown, fb = ''): string {
   if (v === null || v === undefined) return fb;
   return String(v);
@@ -66,6 +34,12 @@ function str(v: unknown, fb = ''): string {
 function num(v: unknown, fb = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fb;
+}
+
+function optionalNum(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function observedVal(v: unknown): string | number {
@@ -80,13 +54,15 @@ function observedVal(v: unknown): string | number {
   return String(v);
 }
 
-function removeUndefined<T extends Record<string, unknown>>(obj: T): T {
-  return Object.fromEntries(
-    Object.entries(obj).filter(([, value]) => value !== undefined),
-  ) as T;
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const msg = String((e as { message?: string }).message || '');
+    if (msg) return msg.replace(/^Firebase:\s*/i, '').replace(/\s*\(.*\)$/, '').trim() || fallback;
+  }
+  return fallback;
 }
 
-function normalizeCppResult(raw: Record<string, unknown>): CppResultRecord {
+export function normalizeCppResult(raw: Record<string, unknown>): CppResultRecord {
   const batchNumber = str(raw.batchNumber || raw.batchNo || raw.batch_number);
   const parameterCode = str(raw.parameterCode || raw.parameter_code, 'PARAM');
   return {
@@ -95,10 +71,18 @@ function normalizeCppResult(raw: Record<string, unknown>): CppResultRecord {
     cpvProductId: str(raw.cpvProductId || raw.cpv_product_id),
     productName: str(raw.productName || raw.product_name),
     productCode: str(raw.productCode || raw.product_code),
+    productVersion: str(raw.productVersion),
     batchNumber,
     manufacturingDate: str(raw.manufacturingDate || raw.manufacturing_date),
     processStage: str(raw.processStage || raw.process_stage),
     processArea: str(raw.processArea || raw.process_area),
+    equipmentId: str(raw.equipmentId),
+    equipmentName: str(raw.equipmentName),
+    machineId: str(raw.machineId),
+    sensorId: str(raw.sensorId),
+    site: str(raw.site),
+    department: str(raw.department),
+    shift: str(raw.shift),
     parameterId: str(raw.parameterId || raw.parameter_id),
     parameterCode,
     parameterName: str(raw.parameterName || raw.parameter_name),
@@ -107,10 +91,12 @@ function normalizeCppResult(raw: Record<string, unknown>): CppResultRecord {
     targetValue: num(raw.targetValue ?? raw.target_value ?? raw.target),
     lowerLimit: num(raw.lowerLimit ?? raw.lower_limit ?? raw.lsl),
     upperLimit: num(raw.upperLimit ?? raw.upper_limit ?? raw.usl),
-    alertLimitLow: num(raw.alertLimitLow ?? raw.alert_limit_low),
-    alertLimitHigh: num(raw.alertLimitHigh ?? raw.alert_limit_high),
-    actionLimitLow: num(raw.actionLimitLow ?? raw.action_limit_low),
-    actionLimitHigh: num(raw.actionLimitHigh ?? raw.action_limit_high),
+    alertLimitLow: optionalNum(raw.alertLimitLow ?? raw.alert_limit_low),
+    alertLimitHigh: optionalNum(raw.alertLimitHigh ?? raw.alert_limit_high),
+    actionLimitLow: optionalNum(raw.actionLimitLow ?? raw.action_limit_low),
+    actionLimitHigh: optionalNum(raw.actionLimitHigh ?? raw.action_limit_high),
+    ucl: optionalNum(raw.ucl) ?? null,
+    lcl: optionalNum(raw.lcl) ?? null,
     unit: str(raw.unit),
     resultType: (str(raw.resultType || raw.result_type, 'Numeric') as CppResultRecord['resultType']),
     frequency: str(raw.frequency, 'Per Batch'),
@@ -135,6 +121,7 @@ function normalizeCppResult(raw: Record<string, unknown>): CppResultRecord {
     createdByName: str(raw.createdByName),
     updatedByName: str(raw.updatedByName),
     isDeleted: Boolean(raw.isDeleted),
+    changeReason: str(raw.changeReason),
   };
 }
 
@@ -147,7 +134,9 @@ export async function fetchCppResults(max = 500): Promise<CppResultRecord[]> {
     } catch {
       primary = await getRecords<CppResultRecord>(CPP_RESULTS_COLLECTION, [limit(max)]);
     }
-    const normalized = primary.map((r) => normalizeCppResult(r as unknown as Record<string, unknown>));
+    const normalized = primary
+      .map((r) => normalizeCppResult(r as unknown as Record<string, unknown>))
+      .filter((r) => !r.isDeleted);
     if (normalized.length) return normalized.sort((a, b) => b.observationDateTime.localeCompare(a.observationDateTime));
     const legacy = await listCpvRecords<CppRecord>(CPV_COLLECTIONS.cpp, max);
     return legacy.map((r) => normalizeCppResult({
@@ -168,7 +157,10 @@ export async function fetchCppResults(max = 500): Promise<CppResultRecord[]> {
 
 export async function fetchCppResultById(id: string): Promise<CppResultRecord | null> {
   const record = await getRecord<CppResultRecord>(CPP_RESULTS_COLLECTION, id);
-  if (record) return normalizeCppResult(record as unknown as Record<string, unknown>);
+  if (record) {
+    const n = normalizeCppResult(record as unknown as Record<string, unknown>);
+    return n.isDeleted ? null : n;
+  }
   const all = await fetchCppResults();
   return all.find((r) => r.id === id) ?? null;
 }
@@ -222,223 +214,139 @@ export async function fetchCppBatchesForProduct(productName: string) {
   return batches.filter((b) => b.productName === productName || b.productCode === productName);
 }
 
-async function countParameterFailures(batchNumber: string, parameterCode: string): Promise<number> {
-  const results = await fetchCppResults(1000);
-  return results.filter((r) =>
-    r.batchNumber === batchNumber
-    && r.parameterCode === parameterCode
-    && !['Complies', 'Pass'].includes(r.status),
-  ).length;
-}
-
-async function maybeCreateDeviation(record: CppResultRecord, actor: CppActor, autoDeviation: boolean) {
-  if (!autoDeviation || !['OOT/OOL', 'Action', 'Alert', 'OOT', 'OOS'].includes(record.status)) return '';
-  try {
-    const { createDeviationFromCpv } = await import('@/lib/deviation-service');
-    const devStatus = record.status === 'OOT/OOL' ? 'OOT' : record.status === 'Action' ? 'OOT' : 'OOT';
-    const dev = await createDeviationFromCpv('cpv_cpp', {
-      id: record.id,
-      product: record.productName,
-      batchNumber: record.batchNumber,
-      parameter: record.parameterName,
-      observedValue: Number(record.observedValue),
-      status: devStatus,
-      department: 'Production',
-    }, { id: actor.id, name: actor.name, role: actor.role || 'qa' });
-    if (!dev) return '';
-    return String((dev as { deviation_number?: string }).deviation_number || dev.id || '');
-  } catch {
-    return '';
-  }
-}
-
-async function maybeCreateAlert(record: CppResultRecord, actor: CppActor) {
-  if (['Complies', 'Pass'].includes(record.status)) return;
-  try {
-    await createAlert({
-      alertType: record.status === 'OOT/OOL' ? 'OOT' : 'Limit Exceeded',
-      severity: record.riskLevel === 'Critical' ? 'Critical' : record.riskLevel === 'High' ? 'High' : 'Medium',
-      module: 'CPP Monitoring',
-      productName: record.productName,
-      batchNo: record.batchNumber,
-      parameterName: record.parameterName,
-      message: `CPP ${record.parameterName} ${record.status} for batch ${record.batchNumber}`,
-      observedValue: Number(record.observedValue),
-      recordId: record.id,
-    }, { id: actor.id, name: actor.name, role: actor.role });
-  } catch { /* optional */ }
-}
-
 export async function createCppResult(
   data: CppResultFormData,
-  actor: CppActor,
+  _actor: CppActor,
   autoDeviation = true,
 ): Promise<{ result: CppResultRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
+    if (!data.changeReason || data.changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
     const product = await fetchCpvProductById(data.cpvProductId);
-    if (product?.cpvStatus === 'Inactive') return { result: null, error: 'Inactive CPV product — entry not allowed.' };
+    if (product && !isCpvProductOperational(product.cpvStatus)) {
+      return { result: null, error: 'Selected CPV product is not operational for CPP entry.' };
+    }
     const batches = await fetchCppBatchesForProduct(data.productName);
     const batchMatch = batches.find((b) => b.batchNumber === data.batchNumber);
     if (batches.length && !batchMatch) return { result: null, error: 'Batch does not belong to selected product.' };
-    if (batchMatch && ['Cancelled', 'Rejected'].includes(batchMatch.batchStatus)) {
-      return { result: null, error: 'Cancelled or rejected batch — entry not allowed.' };
+    if (batchMatch && ['Cancelled', 'Closed', 'Rejected', 'Archived'].includes(batchMatch.batchStatus)) {
+      return { result: null, error: 'Closed, rejected, or archived batch — entry not allowed.' };
     }
 
-    const existingResults = await fetchCppResults(1000);
-    const duplicate = existingResults.find(
-      (r) => r.batchNumber === data.batchNumber
-        && r.parameterCode === data.parameterCode
-        && !r.isDeleted,
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminCppResult',
     );
-    if (duplicate) return { result: null, error: 'CPP result already exists for this batch and parameter.' };
-
-    const status = evaluateCppStatus(
-      data.observedValue,
-      data.lowerLimit,
-      data.upperLimit,
-      data.resultType,
-      data.alertLimitLow,
-      data.alertLimitHigh,
-      data.actionLimitLow,
-      data.actionLimitHigh,
-    );
-    const failures = await countParameterFailures(data.batchNumber, data.parameterCode);
-    const riskLevel = evaluateCppRiskLevel(status, data.criticality, failures);
-    const capaRequired = failures >= 3;
-
-    const payload = removeUndefined({
-      ...data,
-      cppResultId: buildCppResultId(data.batchNumber, data.parameterCode),
-      status,
-      riskLevel,
-      deviationRequired: autoDeviation && !['Complies', 'Pass'].includes(status),
-      capaRequired,
-      linkedDeviationNumber: '',
-      linkedCapaNumber: '',
-      reviewStatus: 'Draft' as const,
-      isLocked: false,
-      createdByName: actor.name,
-      updatedByName: actor.name,
-      batchNo: data.batchNumber,
-      product_name: data.productName,
-      lsl: data.lowerLimit,
-      usl: data.upperLimit,
-      target_value: data.targetValue,
-    });
-
-    const created = await createRecord(
-      CPP_RESULTS_COLLECTION,
-      payload as Omit<CppResultRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
-    );
-    let result = normalizeCppResult(created as unknown as Record<string, unknown>);
-
-    const devNo = await maybeCreateDeviation(result, actor, autoDeviation);
-    if (devNo) {
-      const updated = await updateRecord(CPP_RESULTS_COLLECTION, result.id, {
-        linkedDeviationNumber: devNo,
-        deviationRequired: true,
-      }, actorCtx(actor));
-      if (updated) result = normalizeCppResult(updated as unknown as Record<string, unknown>);
-      await logCppAudit('deviation auto-created', result.id, actor, null, devNo, result.cppResultId);
-    }
-
-    if (!['Complies', 'Pass'].includes(status)) {
-      await maybeCreateAlert(result, actor);
-      if (capaRequired) await logCppAudit('CAPA suggested', result.id, actor, null, { parameter: data.parameterCode }, result.cppResultId);
-    }
-
-    await logCppAudit('create CPP result', result.id, actor, null, result, result.cppResultId);
-    return { result, error: null };
+    const result = await fn({ ...data, autoDeviation, changeReason: data.changeReason });
+    return { result: normalizeCppResult(result.data), error: null };
   } catch (e) {
     console.error('createCppResult failed', e);
-    return { result: null, error: 'Failed to create CPP result.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to create CPP result.') };
   }
 }
 
 export async function updateCppResult(
   id: string,
   data: Partial<CppResultFormData>,
-  actor: CppActor,
+  _actor: CppActor,
   existing: CppResultRecord,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean },
 ): Promise<{ result: CppResultRecord | null; error: string | null }> {
-  if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Approved CPP result is locked. QA override required.' };
-  }
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    const merged = { ...existing, ...data };
-    const status = evaluateCppStatus(
-      merged.observedValue,
-      merged.lowerLimit,
-      merged.upperLimit,
-      merged.resultType,
-      merged.alertLimitLow,
-      merged.alertLimitHigh,
-      merged.actionLimitLow,
-      merged.actionLimitHigh,
+    const changeReason = data.changeReason || existing.changeReason || '';
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) {
+      return { result: null, error: 'Approved CPP result is locked. QA override required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'updateAdminCppResult',
     );
-    const failures = await countParameterFailures(merged.batchNumber, merged.parameterCode);
-    const riskLevel = evaluateCppRiskLevel(status, merged.criticality, failures);
-    const updates = removeUndefined({
+    const result = await fn({
+      ...existing,
       ...data,
-      status,
-      riskLevel,
-      capaRequired: failures >= 3,
-      updatedByName: actor.name,
+      id,
+      changeReason,
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
     });
-    const updated = await updateRecord(CPP_RESULTS_COLLECTION, id, updates as Partial<CppResultRecord>, actorCtx(actor));
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeCppResult(updated as unknown as Record<string, unknown>);
-    await logCppAudit(qaOverride ? 'QA override' : 'edit CPP result', id, actor, existing, result, result.cppResultId);
-    return { result, error: null };
+    return { result: normalizeCppResult(result.data), error: null };
   } catch (e) {
     console.error('updateCppResult failed', e);
-    return { result: null, error: 'Failed to update CPP result.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to update CPP result.') };
   }
 }
 
-export async function reviewCppResult(id: string, actor: CppActor, existing: CppResultRecord) {
-  const updated = await updateRecord(CPP_RESULTS_COLLECTION, id, {
-    reviewStatus: 'Under Review',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeCppResult(updated as unknown as Record<string, unknown>);
-  await logCppAudit('review CPP result', id, actor, existing.reviewStatus, 'Under Review', result.cppResultId);
-  return { result, error: null };
+export async function reviewCppResult(
+  id: string,
+  _actor: CppActor,
+  _existing: CppResultRecord,
+  changeReason = 'Submitted for QA review',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'reviewAdminCppResult',
+    );
+    const result = await fn({ id, changeReason });
+    return { result: normalizeCppResult(result.data), error: null };
+  } catch (e) {
+    console.error('reviewCppResult failed', e);
+    return { result: null, error: cfErrorMessage(e, 'Failed to submit review.') };
+  }
 }
 
-export async function approveCppResult(id: string, actor: CppActor, existing: CppResultRecord) {
-  const updated = await updateRecord(CPP_RESULTS_COLLECTION, id, {
-    reviewStatus: 'Approved',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    isLocked: true,
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeCppResult(updated as unknown as Record<string, unknown>);
-  await logCppAudit('approve CPP result', id, actor, existing.reviewStatus, 'Approved', result.cppResultId);
-  return { result, error: null };
+export async function approveCppResult(
+  id: string,
+  _actor: CppActor,
+  _existing: CppResultRecord,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'approveAdminCppResult',
+    );
+    const result = await fn({ id, changeReason, esignConfirmed: true });
+    return { result: normalizeCppResult(result.data), error: null };
+  } catch (e) {
+    console.error('approveCppResult failed', e);
+    return { result: null, error: cfErrorMessage(e, 'Failed to approve CPP result.') };
+  }
 }
 
 export async function bulkCreateCppResults(
   rows: CppResultFormData[],
-  actor: CppActor,
+  _actor: CppActor,
+  changeReason = 'Bulk CPP entry',
 ): Promise<{ created: number; errors: string[] }> {
-  let created = 0;
-  const errors: string[] = [];
-  for (const row of rows) {
-    const { error } = await createCppResult(row, actor);
-    if (error) errors.push(`${row.parameterName}: ${error}`);
-    else created += 1;
+  if (!isFirebaseConfigured()) return { created: 0, errors: ['Firebase is not configured.'] };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, { created: number; errors: string[] }>(
+      getFirebaseFunctions(),
+      'bulkCreateAdminCppResults',
+    );
+    const result = await fn({ rows, changeReason });
+    return result.data;
+  } catch (e) {
+    console.error('bulkCreateCppResults failed', e);
+    return { created: 0, errors: [cfErrorMessage(e, 'Bulk create failed.')] };
   }
-  if (created) await logCppAudit('bulk CPP entry', 'bulk', actor, null, { count: created });
-  return { created, errors };
 }
 
 export async function autofillFromBatch(batchId: string) {
@@ -457,14 +365,21 @@ export async function fetchCppAuditTrail(recordId: string) {
   if (!isFirebaseConfigured()) return [];
   try {
     const snap = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('documentId', '==', recordId), limit(50)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (!snap.empty) return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap2 = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('recordId', '==', recordId), limit(50)));
+    return snap2.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch {
     return [];
   }
 }
 
 export async function logCppExport(actor: CppActor, count: number) {
-  await logCppAudit('export CPP list', 'export', actor, null, { count });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminCppExport');
+    await fn({ count, format: 'CSV', changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logCppExport CF failed (non-blocking)', e);
+  }
 }
 
 export function parameterTrendData(results: CppResultRecord[], parameterName: string) {
@@ -480,3 +395,46 @@ export function parameterTrendData(results: CppResultRecord[], parameterName: st
       date: r.observationDateTime,
     }));
 }
+
+export function buildCppExportRows(results: CppResultRecord[]): {
+  headers: string[];
+  rows: (string | number)[][];
+} {
+  const headers = [
+    'CPP Result ID', 'Product Code', 'Product', 'Batch', 'Process Stage', 'Area',
+    'Parameter Code', 'Parameter', 'Observed', 'Target', 'LSL', 'USL', 'UCL', 'LCL',
+    'Unit', 'Status', 'Risk', 'Review Status', 'Equipment', 'Site', 'Shift',
+    'Observation', 'Recorded By', 'Deviation', 'CAPA Required',
+  ];
+  const rows = results.map((r) => [
+    r.cppResultId,
+    r.productCode,
+    r.productName,
+    r.batchNumber,
+    r.processStage,
+    r.processArea || '',
+    r.parameterCode,
+    r.parameterName,
+    r.observedValue,
+    r.targetValue ?? '',
+    r.lowerLimit,
+    r.upperLimit,
+    r.ucl ?? '',
+    r.lcl ?? '',
+    r.unit,
+    r.status,
+    r.riskLevel,
+    r.reviewStatus,
+    r.equipmentName || r.equipmentId || '',
+    r.site || '',
+    r.shift || '',
+    r.observationDateTime,
+    r.recordedBy,
+    r.linkedDeviationNumber || '',
+    r.capaRequired ? 'Yes' : 'No',
+  ]);
+  return { headers, rows };
+}
+
+/** @deprecated Module name retained for callers */
+export const CPP_MODULE = CPP_MODULE_NAME;

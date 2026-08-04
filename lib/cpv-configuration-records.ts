@@ -4,7 +4,9 @@ export const CPV_CONFIGURATION_MODULE = 'CPV Configuration';
 
 export const CPV_CONFIG_COLLECTIONS = {
   main: 'cpv_configuration',
-  products: 'cpv_products',
+  // Product CPV Settings live on dedicated config collection to avoid colliding
+  // with CPV Product Master records on `cpv_products`.
+  products: 'cpv_config_products',
   parameters: 'parameters',
   cppParameters: 'cpp_parameters',
   cqaParameters: 'cqa_parameters',
@@ -43,6 +45,7 @@ export const ANNUAL_REVIEW_SECTIONS = [
 
 export type ConfigurationSectionId =
   | 'general'
+  | 'global'
   | 'product'
   | 'cpp'
   | 'cqa'
@@ -52,10 +55,16 @@ export type ConfigurationSectionId =
   | 'capability'
   | 'spc'
   | 'risk'
+  | 'ai'
+  | 'notification'
   | 'annual-template'
   | 'workflow'
   | 'data-source'
-  | 'export';
+  | 'dashboard'
+  | 'export'
+  | 'security'
+  | 'backup'
+  | 'feature-flags';
 
 export const CONFIGURATION_SECTIONS: Array<{
   id: ConfigurationSectionId;
@@ -65,6 +74,7 @@ export const CONFIGURATION_SECTIONS: Array<{
   singleton?: boolean;
 }> = [
   { id: 'general', label: 'General CPV Settings', description: 'Global CPV automation and review defaults', singleton: true },
+  { id: 'global', label: 'Global / Organization', description: 'Plant, site, locale, calendar and environment', singleton: true },
   { id: 'product', label: 'Product CPV Settings', description: 'Product-level CPV scope and ownership', collection: 'products' },
   { id: 'cpp', label: 'CPP Configuration', description: 'Critical process parameter limits and rules', collection: 'cppParameters' },
   { id: 'cqa', label: 'CQA Configuration', description: 'Critical quality attribute specifications', collection: 'cqaParameters' },
@@ -74,10 +84,16 @@ export const CONFIGURATION_SECTIONS: Array<{
   { id: 'capability', label: 'Process Capability Settings', description: 'Cpk thresholds and automation', singleton: true },
   { id: 'spc', label: 'SPC Settings', description: 'Control chart rules and automation', singleton: true },
   { id: 'risk', label: 'Risk Scoring Settings', description: 'RPN scales and CAPA triggers', singleton: true },
+  { id: 'ai', label: 'AI Configuration', description: 'Prediction engine, thresholds and module toggles', singleton: true },
+  { id: 'notification', label: 'Notification Settings', description: 'Channels, templates, quiet hours and retries', singleton: true },
   { id: 'annual-template', label: 'Annual Review Template', description: 'Annual CPV review document structure', collection: 'reportTemplates' },
   { id: 'workflow', label: 'Approval Workflow Mapping', description: 'Module approval chains', collection: 'workflows' },
-  { id: 'data-source', label: 'Data Source Mapping', description: 'CPV section to Firestore collection mapping', collection: 'integrationMapping' },
+  { id: 'data-source', label: 'Integration / Data Mapping', description: 'CPV section to source system mapping', collection: 'integrationMapping' },
+  { id: 'dashboard', label: 'Dashboard Settings', description: 'KPI widgets, role layouts and theme defaults', singleton: true },
   { id: 'export', label: 'Export & Report Settings', description: 'PDF/Excel/CSV export options', singleton: true },
+  { id: 'security', label: 'Security Configuration', description: 'Session, MFA and Part 11 controls', singleton: true },
+  { id: 'backup', label: 'Backup & Restore', description: 'Retention, schedule and verification', singleton: true },
+  { id: 'feature-flags', label: 'Feature Flags', description: 'Module enablement and rollout controls', singleton: true },
 ];
 
 const requiredText = z.string().trim().min(1, 'Required');
@@ -106,6 +122,26 @@ export const generalSettingsSchema = z.object({
   autoSuggestCapa: z.boolean().default(true),
   requireESignatureForApproval: z.boolean().default(true),
   allowQaOverride: z.boolean().default(false),
+  configurationVersion: z.string().trim().optional().default('1.0'),
+  status: statusField,
+}).merge(auditMetaSchema);
+
+export const globalOrgSettingsSchema = z.object({
+  organizationName: z.string().trim().default(''),
+  companyName: z.string().trim().default(''),
+  plantName: z.string().trim().default(''),
+  siteName: z.string().trim().default(''),
+  department: z.string().trim().default('Quality Assurance'),
+  timeZone: z.string().trim().default('Asia/Kolkata'),
+  language: z.string().trim().default('en-IN'),
+  dateFormat: z.string().trim().default('DD-MMM-YYYY'),
+  numberFormat: z.string().trim().default('en-IN'),
+  currency: z.string().trim().default('INR'),
+  fiscalYearStartMonth: z.coerce.number().int().min(1).max(12).default(4),
+  environment: z.enum(['Development', 'Testing', 'Production']).default('Production'),
+  businessCalendarEnabled: z.boolean().default(true),
+  holidayCalendarEnabled: z.boolean().default(true),
+  shiftCalendarEnabled: z.boolean().default(true),
   status: statusField,
 }).merge(auditMetaSchema);
 
@@ -217,6 +253,11 @@ export const capabilitySettingsSchema = z.object({
   ppPpkRequired: z.boolean().default(false),
   autoRiskIfCpkBelow: finiteNumber.default(1.33),
   autoCapaIfCpkBelow: finiteNumber.default(1.0),
+  cpFormula: z.string().trim().optional().default('(USL-LSL)/(6*sigma)'),
+  cpkFormula: z.string().trim().optional().default('min((USL-mean),(mean-LSL))/(3*sigma)'),
+  ppFormula: z.string().trim().optional().default('(USL-LSL)/(6*s)'),
+  ppkFormula: z.string().trim().optional().default('min((USL-mean),(mean-LSL))/(3*s)'),
+  sigmaLimits: finiteNumber.default(3),
   status: statusField,
 }).merge(auditMetaSchema);
 
@@ -226,8 +267,109 @@ export const spcSettingsSchema = z.object({
   enableRule2SevenPointsSameSide: z.boolean().default(true),
   enableRule3SixIncreasingDecreasing: z.boolean().default(true),
   enableRule4TwoOfThreeNearLimit: z.boolean().default(true),
+  enableWesternElectricRules: z.boolean().default(true),
+  enableNelsonRules: z.boolean().default(true),
+  enableCusum: z.boolean().default(false),
+  enableEwma: z.boolean().default(false),
+  ewmaLambda: finiteNumber.min(0.01).max(1).default(0.2),
+  samplingFrequency: z.string().trim().optional().default('Per Batch'),
+  defaultSampleSize: z.coerce.number().int().min(1).default(5),
   enableAutoRiskCreation: z.boolean().default(true),
   enableCapaSuggestion: z.boolean().default(false),
+  status: statusField,
+}).merge(auditMetaSchema);
+
+export const aiSettingsSchema = z.object({
+  aiEnabled: z.boolean().default(true),
+  enablePredictiveAlerts: z.boolean().default(true),
+  enableInsights: z.boolean().default(true),
+  enableRecommendations: z.boolean().default(true),
+  enableRiskPrediction: z.boolean().default(true),
+  enableTrendPrediction: z.boolean().default(true),
+  enableRootCauseAnalysis: z.boolean().default(true),
+  enablePreventiveRecommendations: z.boolean().default(true),
+  confidenceThreshold: finiteNumber.min(0).max(100).default(70),
+  predictionThreshold: finiteNumber.min(0).max(100).default(65),
+  enableForCpp: z.boolean().default(true),
+  enableForCqa: z.boolean().default(true),
+  enableForYield: z.boolean().default(true),
+  enableForSpc: z.boolean().default(true),
+  enableForRisk: z.boolean().default(true),
+  enableForAlerts: z.boolean().default(true),
+  status: statusField,
+}).merge(auditMetaSchema);
+
+export const notificationSettingsSchema = z.object({
+  enableInApp: z.boolean().default(true),
+  enableEmail: z.boolean().default(true),
+  enableSms: z.boolean().default(false),
+  enableWhatsApp: z.boolean().default(false),
+  enableTeams: z.boolean().default(false),
+  enableSlack: z.boolean().default(false),
+  enablePush: z.boolean().default(true),
+  enableFcm: z.boolean().default(true),
+  reminderEnabled: z.boolean().default(true),
+  reminderBeforeHours: z.coerce.number().int().min(0).default(24),
+  retryAttempts: z.coerce.number().int().min(0).default(3),
+  retryIntervalMinutes: z.coerce.number().int().min(1).default(15),
+  quietHoursEnabled: z.boolean().default(false),
+  quietHoursStart: z.string().trim().optional().default('22:00'),
+  quietHoursEnd: z.string().trim().optional().default('06:00'),
+  defaultTemplate: z.string().trim().optional().default('CPV Alert Standard'),
+  status: statusField,
+}).merge(auditMetaSchema);
+
+export const dashboardSettingsSchema = z.object({
+  enableExecutiveDashboard: z.boolean().default(true),
+  enableRoleBasedLayouts: z.boolean().default(true),
+  defaultTheme: z.enum(['System', 'Light', 'Dark']).default('System'),
+  showKpiCards: z.boolean().default(true),
+  showTrendCharts: z.boolean().default(true),
+  showAlertFeed: z.boolean().default(true),
+  showAiPanel: z.boolean().default(true),
+  refreshIntervalSeconds: z.coerce.number().int().min(15).default(60),
+  savedLayoutName: z.string().trim().optional().default('Default CPV Layout'),
+  status: statusField,
+}).merge(auditMetaSchema);
+
+export const securitySettingsSchema = z.object({
+  enforceRbac: z.boolean().default(true),
+  requireMfaForCriticalChanges: z.boolean().default(false),
+  sessionTimeoutMinutes: z.coerce.number().int().min(5).default(30),
+  passwordMinLength: z.coerce.number().int().min(8).default(12),
+  ipWhitelistEnabled: z.boolean().default(false),
+  ipWhitelist: z.string().trim().optional().default(''),
+  auditAllConfigChanges: z.boolean().default(true),
+  encryptNotificationPayloads: z.boolean().default(true),
+  requireEsignForConfig: z.boolean().default(true),
+  status: statusField,
+}).merge(auditMetaSchema);
+
+export const backupSettingsSchema = z.object({
+  autoBackupEnabled: z.boolean().default(true),
+  backupFrequency: z.enum(['Daily', 'Weekly', 'Monthly']).default('Daily'),
+  retentionDays: z.coerce.number().int().min(1).default(90),
+  verifyAfterBackup: z.boolean().default(true),
+  storeInCloudStorage: z.boolean().default(true),
+  includeAuditTrail: z.boolean().default(true),
+  disasterRecoveryEnabled: z.boolean().default(true),
+  lastBackupAt: z.string().trim().optional().default(''),
+  status: statusField,
+}).merge(auditMetaSchema);
+
+export const featureFlagsSchema = z.object({
+  enableYieldModule: z.boolean().default(true),
+  enableEnvironmentalModule: z.boolean().default(true),
+  enableUtilityModule: z.boolean().default(true),
+  enableHoldTimeModule: z.boolean().default(true),
+  enableStabilityModule: z.boolean().default(true),
+  enableSpcModule: z.boolean().default(true),
+  enableCapabilityModule: z.boolean().default(true),
+  enableRiskModule: z.boolean().default(true),
+  enableAlertEngine: z.boolean().default(true),
+  enableAiAnalytics: z.boolean().default(true),
+  enableAnnualReview: z.boolean().default(true),
+  enableReportsAnalytics: z.boolean().default(true),
   status: statusField,
 }).merge(auditMetaSchema);
 
@@ -259,11 +401,18 @@ export const workflowMappingSchema = z.object({
   moduleName: requiredText,
   workflow: z.string().trim().default('Standard CPV Workflow'),
   approvalMatrix: z.string().trim().optional().default(''),
+  approvalMode: z.enum(['Sequential', 'Parallel', 'Conditional']).default('Sequential'),
   eSignatureRequired: z.boolean().default(true),
   preparedByRole: z.string().trim().default('qa'),
   reviewedByRole: z.string().trim().default('qa_manager'),
   approvedByRole: z.string().trim().default('head_qa'),
   finalApproverRole: z.string().trim().default('head_qa'),
+  escalationRole: z.string().trim().optional().default('head_qa'),
+  slaHours: z.coerce.number().int().min(1).default(48),
+  allowDelegation: z.boolean().default(true),
+  autoApproveEnabled: z.boolean().default(false),
+  autoRejectEnabled: z.boolean().default(false),
+  notifyOnPending: z.boolean().default(true),
   status: statusField,
 }).merge(auditMetaSchema);
 
@@ -285,16 +434,23 @@ export const exportReportSettingsSchema = z.object({
   enablePdfExport: z.boolean().default(true),
   enableExcelExport: z.boolean().default(true),
   enableCsvExport: z.boolean().default(true),
+  enablePrint: z.boolean().default(true),
+  enableScheduledReports: z.boolean().default(false),
+  enableEmailReports: z.boolean().default(false),
   reportHeaderSource: z.string().trim().default('Company Site Master'),
   showCompanyLogo: z.boolean().default(true),
   showPageNumber: z.boolean().default(true),
   showRevisionNumber: z.boolean().default(true),
   showESignatureBlock: z.boolean().default(true),
   showAuditTrailSummary: z.boolean().default(true),
+  enableWatermark: z.boolean().default(true),
+  watermarkText: z.string().trim().optional().default('CONTROLLED COPY'),
+  customBrandingEnabled: z.boolean().default(true),
   status: statusField,
 }).merge(auditMetaSchema);
 
 export type GeneralSettings = z.infer<typeof generalSettingsSchema> & { id?: string };
+export type GlobalOrgSettings = z.infer<typeof globalOrgSettingsSchema> & { id?: string };
 export type ProductCpvSettings = z.infer<typeof productCpvSettingsSchema> & { id?: string };
 export type CppConfiguration = z.infer<typeof cppConfigurationSchema> & { id?: string };
 export type CqaConfiguration = z.infer<typeof cqaConfigurationSchema> & { id?: string };
@@ -304,6 +460,12 @@ export type AlertRuleConfig = z.infer<typeof alertRuleConfigSchema> & { id?: str
 export type CapabilitySettings = z.infer<typeof capabilitySettingsSchema> & { id?: string };
 export type SpcSettings = z.infer<typeof spcSettingsSchema> & { id?: string };
 export type RiskScoringSettings = z.infer<typeof riskScoringSettingsSchema> & { id?: string };
+export type AiSettings = z.infer<typeof aiSettingsSchema> & { id?: string };
+export type NotificationSettings = z.infer<typeof notificationSettingsSchema> & { id?: string };
+export type DashboardSettings = z.infer<typeof dashboardSettingsSchema> & { id?: string };
+export type SecuritySettings = z.infer<typeof securitySettingsSchema> & { id?: string };
+export type BackupSettings = z.infer<typeof backupSettingsSchema> & { id?: string };
+export type FeatureFlags = z.infer<typeof featureFlagsSchema> & { id?: string };
 export type AnnualReviewTemplate = z.infer<typeof annualReviewTemplateSchema> & { id?: string };
 export type WorkflowMapping = z.infer<typeof workflowMappingSchema> & { id?: string };
 export type DataSourceMapping = z.infer<typeof dataSourceMappingSchema> & { id?: string };
@@ -311,6 +473,7 @@ export type ExportReportSettings = z.infer<typeof exportReportSettingsSchema> & 
 
 export interface CpvConfigurationBundle {
   general: GeneralSettings | null;
+  global: GlobalOrgSettings | null;
   products: ProductCpvSettings[];
   cppParameters: CppConfiguration[];
   cqaParameters: CqaConfiguration[];
@@ -320,10 +483,16 @@ export interface CpvConfigurationBundle {
   capability: CapabilitySettings | null;
   spc: SpcSettings | null;
   risk: RiskScoringSettings | null;
+  ai: AiSettings | null;
+  notification: NotificationSettings | null;
   annualTemplates: AnnualReviewTemplate[];
   workflows: WorkflowMapping[];
   dataSourceMappings: DataSourceMapping[];
+  dashboard: DashboardSettings | null;
   exportSettings: ExportReportSettings | null;
+  security: SecuritySettings | null;
+  backup: BackupSettings | null;
+  featureFlags: FeatureFlags | null;
 }
 
 export interface ConfigurationValidationResult {
@@ -347,6 +516,26 @@ export const DEFAULT_GENERAL_SETTINGS: Omit<GeneralSettings, 'id' | 'createdAt' 
   autoSuggestCapa: true,
   requireESignatureForApproval: true,
   allowQaOverride: false,
+  configurationVersion: '1.0',
+  status: 'Active',
+};
+
+export const DEFAULT_GLOBAL_ORG_SETTINGS: Omit<GlobalOrgSettings, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'updatedBy' | 'isDeleted'> = {
+  organizationName: 'SkyMap Pharma',
+  companyName: 'SkyMap',
+  plantName: '',
+  siteName: '',
+  department: 'Quality Assurance',
+  timeZone: 'Asia/Kolkata',
+  language: 'en-IN',
+  dateFormat: 'DD-MMM-YYYY',
+  numberFormat: 'en-IN',
+  currency: 'INR',
+  fiscalYearStartMonth: 4,
+  environment: 'Production',
+  businessCalendarEnabled: true,
+  holidayCalendarEnabled: true,
+  shiftCalendarEnabled: true,
   status: 'Active',
 };
 
@@ -360,6 +549,11 @@ export const DEFAULT_CAPABILITY_SETTINGS: Omit<CapabilitySettings, 'id' | 'creat
   ppPpkRequired: false,
   autoRiskIfCpkBelow: 1.33,
   autoCapaIfCpkBelow: 1.0,
+  cpFormula: '(USL-LSL)/(6*sigma)',
+  cpkFormula: 'min((USL-mean),(mean-LSL))/(3*sigma)',
+  ppFormula: '(USL-LSL)/(6*s)',
+  ppkFormula: 'min((USL-mean),(mean-LSL))/(3*s)',
+  sigmaLimits: 3,
   status: 'Active',
 };
 
@@ -369,6 +563,13 @@ export const DEFAULT_SPC_SETTINGS: Omit<SpcSettings, 'id' | 'createdAt' | 'updat
   enableRule2SevenPointsSameSide: true,
   enableRule3SixIncreasingDecreasing: true,
   enableRule4TwoOfThreeNearLimit: true,
+  enableWesternElectricRules: true,
+  enableNelsonRules: true,
+  enableCusum: false,
+  enableEwma: false,
+  ewmaLambda: 0.2,
+  samplingFrequency: 'Per Batch',
+  defaultSampleSize: 5,
   enableAutoRiskCreation: true,
   enableCapaSuggestion: false,
   status: 'Active',
@@ -387,16 +588,116 @@ export const DEFAULT_RISK_SETTINGS: Omit<RiskScoringSettings, 'id' | 'createdAt'
   status: 'Active',
 };
 
+export const DEFAULT_AI_SETTINGS: Omit<AiSettings, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'updatedBy' | 'isDeleted'> = {
+  aiEnabled: true,
+  enablePredictiveAlerts: true,
+  enableInsights: true,
+  enableRecommendations: true,
+  enableRiskPrediction: true,
+  enableTrendPrediction: true,
+  enableRootCauseAnalysis: true,
+  enablePreventiveRecommendations: true,
+  confidenceThreshold: 70,
+  predictionThreshold: 65,
+  enableForCpp: true,
+  enableForCqa: true,
+  enableForYield: true,
+  enableForSpc: true,
+  enableForRisk: true,
+  enableForAlerts: true,
+  status: 'Active',
+};
+
+export const DEFAULT_NOTIFICATION_SETTINGS: Omit<NotificationSettings, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'updatedBy' | 'isDeleted'> = {
+  enableInApp: true,
+  enableEmail: true,
+  enableSms: false,
+  enableWhatsApp: false,
+  enableTeams: false,
+  enableSlack: false,
+  enablePush: true,
+  enableFcm: true,
+  reminderEnabled: true,
+  reminderBeforeHours: 24,
+  retryAttempts: 3,
+  retryIntervalMinutes: 15,
+  quietHoursEnabled: false,
+  quietHoursStart: '22:00',
+  quietHoursEnd: '06:00',
+  defaultTemplate: 'CPV Alert Standard',
+  status: 'Active',
+};
+
+export const DEFAULT_DASHBOARD_SETTINGS: Omit<DashboardSettings, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'updatedBy' | 'isDeleted'> = {
+  enableExecutiveDashboard: true,
+  enableRoleBasedLayouts: true,
+  defaultTheme: 'System',
+  showKpiCards: true,
+  showTrendCharts: true,
+  showAlertFeed: true,
+  showAiPanel: true,
+  refreshIntervalSeconds: 60,
+  savedLayoutName: 'Default CPV Layout',
+  status: 'Active',
+};
+
+export const DEFAULT_SECURITY_SETTINGS: Omit<SecuritySettings, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'updatedBy' | 'isDeleted'> = {
+  enforceRbac: true,
+  requireMfaForCriticalChanges: false,
+  sessionTimeoutMinutes: 30,
+  passwordMinLength: 12,
+  ipWhitelistEnabled: false,
+  ipWhitelist: '',
+  auditAllConfigChanges: true,
+  encryptNotificationPayloads: true,
+  requireEsignForConfig: true,
+  status: 'Active',
+};
+
+export const DEFAULT_BACKUP_SETTINGS: Omit<BackupSettings, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'updatedBy' | 'isDeleted'> = {
+  autoBackupEnabled: true,
+  backupFrequency: 'Daily',
+  retentionDays: 90,
+  verifyAfterBackup: true,
+  storeInCloudStorage: true,
+  includeAuditTrail: true,
+  disasterRecoveryEnabled: true,
+  lastBackupAt: '',
+  status: 'Active',
+};
+
+export const DEFAULT_FEATURE_FLAGS: Omit<FeatureFlags, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'updatedBy' | 'isDeleted'> = {
+  enableYieldModule: true,
+  enableEnvironmentalModule: true,
+  enableUtilityModule: true,
+  enableHoldTimeModule: true,
+  enableStabilityModule: true,
+  enableSpcModule: true,
+  enableCapabilityModule: true,
+  enableRiskModule: true,
+  enableAlertEngine: true,
+  enableAiAnalytics: true,
+  enableAnnualReview: true,
+  enableReportsAnalytics: true,
+  status: 'Active',
+};
+
 export const DEFAULT_EXPORT_SETTINGS: Omit<ExportReportSettings, 'id' | 'createdAt' | 'updatedAt' | 'createdBy' | 'updatedBy' | 'isDeleted'> = {
   enablePdfExport: true,
   enableExcelExport: true,
   enableCsvExport: true,
+  enablePrint: true,
+  enableScheduledReports: false,
+  enableEmailReports: false,
   reportHeaderSource: 'Company Site Master',
   showCompanyLogo: true,
   showPageNumber: true,
   showRevisionNumber: true,
   showESignatureBlock: true,
   showAuditTrailSummary: true,
+  enableWatermark: true,
+  watermarkText: 'CONTROLLED COPY',
+  customBrandingEnabled: true,
   status: 'Active',
 };
 
@@ -462,15 +763,26 @@ export function summarizeConfiguration(bundle: CpvConfigurationBundle) {
     bundle.workflows.length,
     bundle.dataSourceMappings.length,
   ];
-  const singletonCount = [bundle.general, bundle.capability, bundle.spc, bundle.risk, bundle.exportSettings].filter(Boolean).length;
+  const singletonCount = [
+    bundle.general, bundle.global, bundle.capability, bundle.spc, bundle.risk,
+    bundle.ai, bundle.notification, bundle.dashboard, bundle.exportSettings,
+    bundle.security, bundle.backup, bundle.featureFlags,
+  ].filter(Boolean).length;
   const totalRecords = listCounts.reduce((a, b) => a + b, 0) + singletonCount;
   const activeSections = CONFIGURATION_SECTIONS.filter((section) => {
     if (section.singleton) {
       const key = section.id === 'general' ? bundle.general
-        : section.id === 'capability' ? bundle.capability
-          : section.id === 'spc' ? bundle.spc
-            : section.id === 'risk' ? bundle.risk
-              : bundle.exportSettings;
+        : section.id === 'global' ? bundle.global
+          : section.id === 'capability' ? bundle.capability
+            : section.id === 'spc' ? bundle.spc
+              : section.id === 'risk' ? bundle.risk
+                : section.id === 'ai' ? bundle.ai
+                  : section.id === 'notification' ? bundle.notification
+                    : section.id === 'dashboard' ? bundle.dashboard
+                      : section.id === 'security' ? bundle.security
+                        : section.id === 'backup' ? bundle.backup
+                          : section.id === 'feature-flags' ? bundle.featureFlags
+                            : bundle.exportSettings;
       return Boolean(key);
     }
     const map: Partial<Record<ConfigurationSectionId, unknown[]>> = {
@@ -516,8 +828,20 @@ export function validateConfiguration(bundle: CpvConfigurationBundle): Configura
   if (!bundle.limitRules.length) warnings.push('No limit/threshold rules configured.');
   if (!bundle.alertRules.length) warnings.push('No alert rules configured.');
 
+  if (bundle.ai && (bundle.ai.confidenceThreshold < 0 || bundle.ai.confidenceThreshold > 100)) {
+    errors.push('AI confidence threshold must be between 0 and 100.');
+  }
+
+  if (!bundle.security?.enforceRbac) {
+    warnings.push('RBAC enforcement is disabled in security configuration.');
+  }
+
+  if (!bundle.global?.organizationName) warnings.push('Organization name is not configured.');
+  if (!bundle.ai?.aiEnabled) warnings.push('AI engine is disabled.');
+
   const checks = [
     Boolean(bundle.general),
+    Boolean(bundle.global),
     bundle.products.length > 0,
     bundle.cppParameters.length > 0,
     bundle.cqaParameters.length > 0,
@@ -527,10 +851,16 @@ export function validateConfiguration(bundle: CpvConfigurationBundle): Configura
     Boolean(bundle.capability),
     Boolean(bundle.spc),
     Boolean(bundle.risk),
+    Boolean(bundle.ai),
+    Boolean(bundle.notification),
     bundle.annualTemplates.length > 0,
     bundle.workflows.length > 0,
     bundle.dataSourceMappings.length > 0,
+    Boolean(bundle.dashboard),
     Boolean(bundle.exportSettings),
+    Boolean(bundle.security),
+    Boolean(bundle.backup),
+    Boolean(bundle.featureFlags),
   ];
   const completenessPct = Math.round((checks.filter(Boolean).length / checks.length) * 100);
 

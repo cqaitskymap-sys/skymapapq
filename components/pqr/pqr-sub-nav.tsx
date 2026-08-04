@@ -31,8 +31,8 @@ interface PqrNavProps {
 }
 
 const globalNav = [
-  { label: 'PQR Dashboard', href: '/dashboard/pqr', icon: LayoutDashboard },
-  { label: 'Create PQR', href: '/dashboard/pqr/create', icon: Plus },
+  { label: 'PQR Dashboard', href: '/pqr/dashboard', icon: LayoutDashboard },
+  { label: 'Create PQR', href: '/pqr/create', icon: Plus },
 ];
 
 function sectionNav(pqrId: string) {

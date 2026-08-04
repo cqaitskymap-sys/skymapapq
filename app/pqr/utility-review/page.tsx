@@ -1,5 +1,11 @@
+import { Suspense } from 'react';
 import { UtilityEnvironmentalReviewPage } from '@/components/pqr/utility-environmental-review-page';
+import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 
 export default function Page() {
-  return <UtilityEnvironmentalReviewPage />;
+  return (
+    <Suspense fallback={<div className="p-4 sm:p-6"><LoadingSkeleton rows={3} /></div>}>
+      <UtilityEnvironmentalReviewPage />
+    </Suspense>
+  );
 }

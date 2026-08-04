@@ -62,6 +62,7 @@ function EditNotificationSettingContent() {
     eventName: setting.eventName,
     moduleName: setting.moduleName as NotificationSettingFormData['moduleName'],
     eventTrigger: setting.eventTrigger as NotificationSettingFormData['eventTrigger'],
+    eventAliases: (setting.eventAliases || []).join(', '),
     notificationType: setting.notificationType,
     recipientRole: setting.recipientRole,
     recipientUserOptional: setting.recipientUserOptional,
@@ -79,6 +80,7 @@ function EditNotificationSettingContent() {
     enableEmailNotification: setting.enableEmailNotification,
     enableSmsNotification: setting.enableSmsNotification,
     remarks: setting.remarks,
+    changeReason: '',
   };
 
   const onSubmit = async (data: NotificationSettingFormData) => {

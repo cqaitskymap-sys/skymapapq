@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { BackupStatusBadge } from './backup-status-badge';
 import { useAdminPermissions } from '@/hooks/use-admin-permissions';
-import { canCreateBackup, canApproveRestore } from '@/lib/permissions';
+import { canViewBackup, canApproveRestore } from '@/lib/permissions';
 import type { BackupHistory } from '@/lib/admin/schemas';
 import {
   downloadBackup, verifyBackup, logBackupExport,
@@ -24,7 +24,7 @@ interface BackupDetailViewProps {
 
 export function BackupDetailView({ backup, auditMeta, onRefresh }: BackupDetailViewProps) {
   const { role } = useAdminPermissions();
-  const canDownload = canCreateBackup(role);
+  const canDownload = canViewBackup(role);
   const canRestore = canApproveRestore(role);
   const [verifying, setVerifying] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -34,7 +34,7 @@ export function BackupDetailView({ backup, auditMeta, onRefresh }: BackupDetailV
     const result = await downloadBackup(backup);
     setDownloading(false);
     if (result.success) {
-      await logBackupExport('download', auditMeta, 1);
+      await logBackupExport(`Backup downloaded: ${backup.backupNumber}`, backup.backupId);
       toast.success('Backup download started');
     } else toast.error(result.error || 'Download failed');
   };
@@ -109,6 +109,11 @@ export function BackupDetailView({ backup, auditMeta, onRefresh }: BackupDetailV
             <div className="flex justify-between"><span className="text-muted-foreground">File Name</span><span>{backup.fileName}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Storage</span><span className="text-xs">{backup.storageLocation}</span></div>
             <div className="flex justify-between"><span className="text-muted-foreground">Checksum</span><span className="text-xs font-mono truncate max-w-[200px]">{backup.checksum || '—'}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Encryption</span><span>{backup.encryptionStatus || '—'} ({backup.encryptionAlgorithm || '—'})</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Integrity</span><span>{backup.integrityStatus || '—'}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Provider</span><span>{backup.storageProvider || '—'}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Expires</span><span>{backup.expirationDate ? String(backup.expirationDate).slice(0, 10) : '—'}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Protected</span><span>{backup.isProtected ? 'Yes' : 'No'}</span></div>
             {backup.remarks && <p className="text-muted-foreground pt-2">{backup.remarks}</p>}
           </CardContent>
         </Card>

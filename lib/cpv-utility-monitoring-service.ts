@@ -1,25 +1,25 @@
+/**
+ * CPV Utility Monitoring — client service.
+ * Reads: Firestore. Writes: Cloud Functions only.
+ */
 import {
-  addDoc, collection, getDocs, limit, orderBy, query, where,
+  collection, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchParameters, normalizeParameter } from '@/lib/admin/parameter-service';
 import type { Parameter } from '@/lib/admin/schemas';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
+import { isCpvProductOperational } from '@/lib/cpv-product-master';
 import { fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
 import { listCpvRecords } from '@/lib/cpv-service';
-import { CPV_COLLECTIONS } from '@/lib/cpv';
-import { createAlert } from '@/lib/cpv-module-service';
 import { listEquipment } from '@/lib/equipment-mgmt-service';
 import {
   UTILITY_MONITORING_COLLECTION,
   UTILITY_LEGACY_COLLECTIONS,
   UTILITY_MASTER_COLLECTION,
-  UTILITY_MODULE_NAME,
   buildUtilityMonitoringId,
-  evaluateUtilityStatus,
-  evaluateUtilityRisk,
   parametersForUtilityType,
   type UtilityMonitoringFormData,
   type UtilityMonitoringRecord,
@@ -41,41 +41,6 @@ export interface UtilitySystemOption {
   department: string;
 }
 
-function actorCtx(actor: UtilityActor) {
-  return { moduleName: UTILITY_MODULE_NAME, actor: { id: actor.id, name: actor.name } as DocumentActor };
-}
-
-async function logUtilityAudit(
-  actionType: string,
-  recordId: string,
-  actor: UtilityActor,
-  oldVal?: unknown,
-  newVal?: unknown,
-  docNo?: string,
-) {
-  await createAuditLog({
-    moduleName: UTILITY_MODULE_NAME,
-    collectionName: UTILITY_MONITORING_COLLECTION,
-    recordId,
-    documentNumber: docNo,
-    actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-  await writeAuditTrail({
-    collectionName: UTILITY_MONITORING_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: UTILITY_MODULE_NAME,
-  });
-}
-
 function str(v: unknown, fb = ''): string {
   if (v === null || v === undefined) return fb;
   return String(v);
@@ -84,6 +49,12 @@ function str(v: unknown, fb = ''): string {
 function num(v: unknown, fb = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fb;
+}
+
+function optionalNum(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function observedVal(v: unknown): string | number {
@@ -98,7 +69,15 @@ function observedVal(v: unknown): string | number {
   return String(v);
 }
 
-function normalizeUtilityRecord(raw: Record<string, unknown>): UtilityMonitoringRecord {
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const msg = String((e as { message?: string }).message || '');
+    if (msg) return msg.replace(/^Firebase:\s*/i, '').replace(/\s*\(.*\)$/, '').trim() || fallback;
+  }
+  return fallback;
+}
+
+export function normalizeUtilityRecord(raw: Record<string, unknown>): UtilityMonitoringRecord {
   const batchNumber = str(raw.batchNumber || raw.batchNo || raw.batch_number);
   const parameterCode = str(raw.parameterCode || raw.parameter_code, 'PARAM');
   const samplingPoint = str(raw.samplingPoint || raw.sampling_point);
@@ -117,18 +96,28 @@ function normalizeUtilityRecord(raw: Record<string, unknown>): UtilityMonitoring
     utilitySystemCode: str(raw.utilitySystemCode || raw.utility_system_code),
     samplingPoint,
     areaRoomNo: str(raw.areaRoomNo || raw.area_room_no || raw.area),
+    building: str(raw.building),
+    site: str(raw.site),
     department: str(raw.department),
+    shift: str(raw.shift),
+    productionLine: str(raw.productionLine || raw.production_line),
+    equipmentId: str(raw.equipmentId || raw.equipment_id),
+    equipmentName: str(raw.equipmentName || raw.equipment_name),
+    dataSource: str(raw.dataSource || raw.data_source, 'Manual') as UtilityMonitoringRecord['dataSource'],
+    sensorId: str(raw.sensorId || raw.sensor_id),
+    alarmStatus: str(raw.alarmStatus || raw.alarm_status),
+    communicationStatus: str(raw.communicationStatus || raw.communication_status, 'OK'),
     parameterId: str(raw.parameterId || raw.parameter_id),
     parameterCode,
     parameterName: str(raw.parameterName || raw.parameter_name),
     observedValue: observedVal(raw.observedValue ?? raw.observed_value),
-    targetValue: num(raw.targetValue ?? raw.target_value ?? raw.target),
+    targetValue: optionalNum(raw.targetValue ?? raw.target_value ?? raw.target),
     lowerLimit: num(raw.lowerLimit ?? raw.lower_limit ?? raw.lsl),
     upperLimit: num(raw.upperLimit ?? raw.upper_limit ?? raw.usl),
-    alertLimitLow: num(raw.alertLimitLow ?? raw.alert_limit_low),
-    alertLimitHigh: num(raw.alertLimitHigh ?? raw.alert_limit_high),
-    actionLimitLow: num(raw.actionLimitLow ?? raw.action_limit_low),
-    actionLimitHigh: num(raw.actionLimitHigh ?? raw.action_limit_high),
+    alertLimitLow: optionalNum(raw.alertLimitLow ?? raw.alert_limit_low),
+    alertLimitHigh: optionalNum(raw.alertLimitHigh ?? raw.alert_limit_high),
+    actionLimitLow: optionalNum(raw.actionLimitLow ?? raw.action_limit_low),
+    actionLimitHigh: optionalNum(raw.actionLimitHigh ?? raw.action_limit_high),
     unit: str(raw.unit),
     resultType: (str(raw.resultType || raw.result_type, 'Numeric') as UtilityMonitoringRecord['resultType']),
     monitoringDate: str(raw.monitoringDate || raw.monitoring_date || raw.recordedDate),
@@ -139,6 +128,11 @@ function normalizeUtilityRecord(raw: Record<string, unknown>): UtilityMonitoring
     remarks: str(raw.remarks),
     utilityCriticality: str(raw.utilityCriticality || raw.criticality, 'Major'),
     autoDeviationRequired: Boolean(raw.autoDeviationRequired ?? raw.auto_deviation_required ?? true),
+    specificationNumber: str(raw.specificationNumber || raw.specification_number),
+    version: str(raw.version, '1.0'),
+    effectiveDate: str(raw.effectiveDate || raw.effective_date),
+    description: str(raw.description),
+    changeReason: str(raw.changeReason || raw.change_reason),
     status: str(raw.status, 'Complies'),
     riskLevel: str(raw.riskLevel || raw.risk_level, 'Low'),
     deviationRequired: Boolean(raw.deviationRequired || raw.deviation_required),
@@ -147,6 +141,8 @@ function normalizeUtilityRecord(raw: Record<string, unknown>): UtilityMonitoring
     linkedCapaNumber: str(raw.linkedCapaNumber || raw.linked_capa_number),
     reviewStatus: (str(raw.reviewStatus || raw.review_status, 'Draft') as UtilityMonitoringRecord['reviewStatus']),
     isLocked: Boolean(raw.isLocked || raw.is_locked),
+    oosRequired: Boolean(raw.oosRequired || raw.oos_required),
+    linkedOosNumber: str(raw.linkedOosNumber || raw.linked_oos_number),
     createdAt: str(raw.createdAt || raw.created_at),
     updatedAt: str(raw.updatedAt || raw.updated_at),
     createdBy: str(raw.createdBy || raw.created_by),
@@ -169,14 +165,16 @@ export async function fetchUtilityRecords(max = 500): Promise<UtilityMonitoringR
     } catch {
       primary = await getRecords<UtilityMonitoringRecord>(UTILITY_MONITORING_COLLECTION, [limit(max)]);
     }
-    const normalized = primary.map((r) => normalizeUtilityRecord(r as unknown as Record<string, unknown>));
+    const normalized = primary
+      .map((r) => normalizeUtilityRecord(r as unknown as Record<string, unknown>))
+      .filter((r) => !r.isDeleted);
     if (normalized.length) {
       return normalized.sort((a, b) => `${b.monitoringDate}${b.monitoringTime}`.localeCompare(`${a.monitoringDate}${a.monitoringTime}`));
     }
     for (const legacyName of UTILITY_LEGACY_COLLECTIONS) {
       const legacy = await listCpvRecords<Record<string, unknown>>(legacyName, max);
       if (legacy.length) {
-        return legacy.map((r) => normalizeUtilityRecord(r));
+        return legacy.map((r) => normalizeUtilityRecord(r)).filter((r) => !r.isDeleted);
       }
     }
     return [];
@@ -188,7 +186,10 @@ export async function fetchUtilityRecords(max = 500): Promise<UtilityMonitoringR
 
 export async function fetchUtilityRecordById(id: string): Promise<UtilityMonitoringRecord | null> {
   const record = await getRecord<UtilityMonitoringRecord>(UTILITY_MONITORING_COLLECTION, id);
-  if (record) return normalizeUtilityRecord(record as unknown as Record<string, unknown>);
+  if (record) {
+    const normalized = normalizeUtilityRecord(record as unknown as Record<string, unknown>);
+    return normalized.isDeleted ? null : normalized;
+  }
   const all = await fetchUtilityRecords();
   return all.find((r) => r.id === id) ?? null;
 }
@@ -264,251 +265,189 @@ export async function fetchUtilitySystems(): Promise<UtilitySystemOption[]> {
   return systems;
 }
 
-async function countUtilityFailures(batchNumber: string, parameterCode: string, samplingPoint: string): Promise<number> {
-  const results = await fetchUtilityRecords(1000);
-  return results.filter((r) =>
-    r.batchNumber === batchNumber
-    && r.parameterCode === parameterCode
-    && r.samplingPoint === samplingPoint
-    && ['Alert', 'Action', 'Excursion'].includes(r.status),
-  ).length;
-}
-
-async function maybeCreateDeviation(record: UtilityMonitoringRecord, actor: UtilityActor, autoDeviation: boolean) {
-  if (!autoDeviation || !['Excursion', 'Action', 'Alert'].includes(record.status)) return '';
-  try {
-    const { createDeviationFromCpv } = await import('@/lib/deviation-service');
-    const devStatus = record.status === 'Excursion' ? 'OOS' : 'OOT';
-    const dev = await createDeviationFromCpv('cpv_cpp', {
-      id: record.id,
-      product: record.productName,
-      batchNumber: record.batchNumber,
-      parameter: `${record.utilitySystemName}: ${record.parameterName}`,
-      observedValue: Number(record.observedValue),
-      status: devStatus,
-      department: record.department || 'Engineering',
-    }, { id: actor.id, name: actor.name, role: actor.role || 'qa' });
-    if (!dev) return '';
-    return String((dev as { deviation_number?: string }).deviation_number || dev.id || '');
-  } catch {
-    return '';
-  }
-}
-
-async function maybeCreateAlertAndNotification(record: UtilityMonitoringRecord, actor: UtilityActor) {
-  if (record.status === 'Complies') return;
-  try {
-    await createAlert({
-      alertType: record.status === 'Excursion' ? 'OOT' : 'Limit Exceeded',
-      severity: record.riskLevel === 'Critical' ? 'Critical' : record.riskLevel === 'High' ? 'High' : 'Medium',
-      module: 'Utility Monitoring',
-      productName: record.productName,
-      batchNo: record.batchNumber,
-      parameterName: record.parameterName,
-      message: `Utility ${record.parameterName} ${record.status} at ${record.samplingPoint}`,
-      observedValue: Number(record.observedValue),
-      recordId: record.id,
-    }, { id: actor.id, name: actor.name, role: actor.role });
-  } catch { /* optional */ }
-  if (!isFirebaseConfigured()) return;
-  try {
-    await addDoc(collection(getFirebaseFirestore(), 'notifications'), {
-      title: `Utility ${record.status}`,
-      message: `${record.utilitySystemName}: ${record.parameterName} ${record.status}`,
-      module: UTILITY_MODULE_NAME,
-      record_id: record.id,
-      target_roles: ['qa', 'engineering', 'qc'],
-      read: false,
-      created_at: new Date().toISOString(),
-    });
-  } catch { /* optional */ }
-}
-
 export async function createUtilityRecord(
   data: UtilityMonitoringFormData,
-  actor: UtilityActor,
+  _actor: UtilityActor,
+  qaOverride = false,
+  options?: { esignConfirmed?: boolean },
 ): Promise<{ result: UtilityMonitoringRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
+    if (!data.changeReason || data.changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
     const product = await fetchCpvProductById(data.cpvProductId);
-    if (product?.cpvStatus === 'Inactive') return { result: null, error: 'Inactive CPV product — entry not allowed.' };
-    const batches = await fetchUtilityBatchesForProduct(data.productName);
-    const batchMatch = batches.find((b) => b.batchNumber === data.batchNumber);
-    if (batches.length && !batchMatch) return { result: null, error: 'Batch does not belong to selected product.' };
-    if (batchMatch && ['Cancelled', 'Rejected'].includes(batchMatch.batchStatus)) {
-      return { result: null, error: 'Cancelled or rejected batch — entry not allowed.' };
+    if (product && !isCpvProductOperational(product.cpvStatus)) {
+      return { result: null, error: 'Selected CPV product is not operational for utility entry.' };
     }
-
-    const existing = await fetchUtilityRecords(1000);
-    const duplicate = existing.find(
-      (r) => r.batchNumber === data.batchNumber
-        && r.parameterCode === data.parameterCode
-        && r.samplingPoint === data.samplingPoint
-        && r.monitoringDate === data.monitoringDate
-        && !r.isDeleted,
+    if (qaOverride && options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminUtilityRecord',
     );
-    if (duplicate) return { result: null, error: 'Utility record already exists for this batch, parameter, sampling point and date.' };
-
-    const status = evaluateUtilityStatus(
-      data.observedValue,
-      data.lowerLimit,
-      data.upperLimit,
-      data.resultType,
-      data.alertLimitLow,
-      data.alertLimitHigh,
-      data.actionLimitLow,
-      data.actionLimitHigh,
-    );
-    const failures = await countUtilityFailures(data.batchNumber, data.parameterCode, data.samplingPoint);
-    const riskLevel = evaluateUtilityRisk({ ...data, status }, failures);
-    const capaRequired = failures >= 3;
-    const autoDev = data.autoDeviationRequired;
-
-    const payload = {
+    const result = await fn({
       ...data,
-      utilityMonitoringId: buildUtilityMonitoringId(data.batchNumber, data.parameterCode, data.samplingPoint),
-      status,
-      riskLevel,
-      deviationRequired: autoDev && status !== 'Complies',
-      capaRequired,
-      linkedDeviationNumber: '',
-      linkedCapaNumber: '',
-      reviewStatus: 'Draft' as const,
-      isLocked: false,
-      createdByName: actor.name,
-      updatedByName: actor.name,
-    };
-
-    const created = await createRecord(
-      UTILITY_MONITORING_COLLECTION,
-      payload as Omit<UtilityMonitoringRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
-    );
-    let result = normalizeUtilityRecord(created as unknown as Record<string, unknown>);
-
-    const devNo = await maybeCreateDeviation(result, actor, autoDev);
-    if (devNo) {
-      const updated = await updateRecord(UTILITY_MONITORING_COLLECTION, result.id, {
-        linkedDeviationNumber: devNo,
-        deviationRequired: true,
-      }, actorCtx(actor));
-      if (updated) result = normalizeUtilityRecord(updated as unknown as Record<string, unknown>);
-      await logUtilityAudit('deviation auto-created', result.id, actor, null, devNo, result.utilityMonitoringId);
-    }
-
-    if (status !== 'Complies') {
-      await maybeCreateAlertAndNotification(result, actor);
-      if (capaRequired) await logUtilityAudit('CAPA suggested', result.id, actor, null, { parameter: data.parameterCode }, result.utilityMonitoringId);
-    }
-
-    await logUtilityAudit('create utility record', result.id, actor, null, result, result.utilityMonitoringId);
-    await logUtilityAudit('status calculation', result.id, actor, null, status, result.utilityMonitoringId);
-    await logUtilityAudit('risk calculation', result.id, actor, null, riskLevel, result.utilityMonitoringId);
-    return { result, error: null };
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
+      changeReason: data.changeReason,
+    });
+    return { result: normalizeUtilityRecord(result.data), error: null };
   } catch (e) {
     console.error('createUtilityRecord failed', e);
-    return { result: null, error: 'Failed to create utility record.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to create utility record.') };
   }
 }
 
 export async function updateUtilityRecord(
   id: string,
   data: Partial<UtilityMonitoringFormData>,
-  actor: UtilityActor,
+  _actor: UtilityActor,
   existing: UtilityMonitoringRecord,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean },
 ): Promise<{ result: UtilityMonitoringRecord | null; error: string | null }> {
-  if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Approved utility record is locked. QA override required.' };
-  }
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    const merged = { ...existing, ...data };
-    const status = evaluateUtilityStatus(
-      merged.observedValue,
-      merged.lowerLimit,
-      merged.upperLimit,
-      merged.resultType,
-      merged.alertLimitLow,
-      merged.alertLimitHigh,
-      merged.actionLimitLow,
-      merged.actionLimitHigh,
+    const changeReason = data.changeReason || existing.changeReason || '';
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) {
+      return { result: null, error: 'Approved utility record is locked. QA override required.' };
+    }
+    if (qaOverride && options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'updateAdminUtilityRecord',
     );
-    const failures = await countUtilityFailures(merged.batchNumber, merged.parameterCode, merged.samplingPoint);
-    const riskLevel = evaluateUtilityRisk({ ...merged, status }, failures);
-    const updates = {
+    const result = await fn({
+      ...existing,
       ...data,
-      status,
-      riskLevel,
-      capaRequired: failures >= 3,
-      updatedByName: actor.name,
-    };
-    const updated = await updateRecord(UTILITY_MONITORING_COLLECTION, id, updates as Partial<UtilityMonitoringRecord>, actorCtx(actor));
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeUtilityRecord(updated as unknown as Record<string, unknown>);
-    await logUtilityAudit(qaOverride ? 'QA override' : 'edit utility record', id, actor, existing, result, result.utilityMonitoringId);
-    await logUtilityAudit('status calculation', id, actor, existing.status, status, result.utilityMonitoringId);
-    await logUtilityAudit('risk calculation', id, actor, existing.riskLevel, riskLevel, result.utilityMonitoringId);
-    return { result, error: null };
+      id,
+      changeReason,
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
+    });
+    return { result: normalizeUtilityRecord(result.data), error: null };
   } catch (e) {
     console.error('updateUtilityRecord failed', e);
-    return { result: null, error: 'Failed to update utility record.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to update utility record.') };
   }
 }
 
-export async function reviewUtilityRecord(id: string, actor: UtilityActor, existing: UtilityMonitoringRecord) {
-  const updated = await updateRecord(UTILITY_MONITORING_COLLECTION, id, {
-    reviewStatus: 'Under Review',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeUtilityRecord(updated as unknown as Record<string, unknown>);
-  await logUtilityAudit('review utility record', id, actor, existing.reviewStatus, 'Under Review', result.utilityMonitoringId);
-  return { result, error: null };
+export async function reviewUtilityRecord(
+  id: string,
+  _actor: UtilityActor,
+  changeReason = 'Submitted for QA review',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'reviewAdminUtilityRecord',
+    );
+    const result = await fn({ id, changeReason });
+    return { result: normalizeUtilityRecord(result.data), error: null };
+  } catch (e) {
+    console.error('reviewUtilityRecord failed', e);
+    return { result: null, error: cfErrorMessage(e, 'Failed to submit review.') };
+  }
 }
 
-export async function approveUtilityRecord(id: string, actor: UtilityActor, existing: UtilityMonitoringRecord) {
-  const updated = await updateRecord(UTILITY_MONITORING_COLLECTION, id, {
-    reviewStatus: 'Approved',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    isLocked: true,
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeUtilityRecord(updated as unknown as Record<string, unknown>);
-  await logUtilityAudit('approve utility record', id, actor, existing.reviewStatus, 'Approved', result.utilityMonitoringId);
-  return { result, error: null };
+export async function approveUtilityRecord(
+  id: string,
+  _actor: UtilityActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'approveAdminUtilityRecord',
+    );
+    const result = await fn({ id, changeReason, esignConfirmed: true });
+    return { result: normalizeUtilityRecord(result.data), error: null };
+  } catch (e) {
+    console.error('approveUtilityRecord failed', e);
+    return { result: null, error: cfErrorMessage(e, 'Failed to approve utility record.') };
+  }
+}
+
+export async function softDeleteUtilityRecord(
+  id: string,
+  _actor: UtilityActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+): Promise<{ error: string | null }> {
+  if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminUtilityRecord');
+    await fn({ id, changeReason, esignConfirmed: true });
+    return { error: null };
+  } catch (e) {
+    console.error('softDeleteUtilityRecord failed', e);
+    return { error: cfErrorMessage(e, 'Failed to soft-delete utility record.') };
+  }
 }
 
 export async function bulkCreateUtilityRecords(
   rows: UtilityMonitoringFormData[],
-  actor: UtilityActor,
+  _actor: UtilityActor,
+  changeReason = 'Bulk utility entry',
 ): Promise<{ created: number; errors: string[] }> {
-  let created = 0;
-  const errors: string[] = [];
-  for (const row of rows) {
-    const { error } = await createUtilityRecord(row, actor);
-    if (error) errors.push(`${row.parameterName}: ${error}`);
-    else created += 1;
+  if (!isFirebaseConfigured()) return { created: 0, errors: ['Firebase is not configured.'] };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { created: 0, errors: ['Change reason (min 5 characters) is required.'] };
+    }
+    const fn = httpsCallable<Record<string, unknown>, { created: number; errors: string[] }>(
+      getFirebaseFunctions(),
+      'bulkCreateAdminUtilityRecords',
+    );
+    const result = await fn({ rows, changeReason });
+    return result.data;
+  } catch (e) {
+    console.error('bulkCreateUtilityRecords failed', e);
+    return { created: 0, errors: [cfErrorMessage(e, 'Bulk create failed.')] };
   }
-  if (created) await logUtilityAudit('bulk utility entry', 'bulk', actor, null, { count: created });
-  return { created, errors };
 }
 
 export async function fetchUtilityAuditTrail(recordId: string) {
   if (!isFirebaseConfigured()) return [];
   try {
     const snap = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('documentId', '==', recordId), limit(50)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (!snap.empty) return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap2 = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('recordId', '==', recordId), limit(50)));
+    return snap2.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch {
     return [];
   }
 }
 
 export async function logUtilityExport(actor: UtilityActor, count: number) {
-  await logUtilityAudit('export utility list', 'export', actor, null, { count });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminUtilityExport');
+    await fn({ count, format: 'CSV', changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logUtilityExport CF failed (non-blocking)', e);
+  }
 }
 
 export function utilityParameterTrendData(
@@ -526,4 +465,50 @@ export function utilityParameterTrendData(
       usl: r.upperLimit,
       date: r.monitoringDate,
     }));
+}
+
+export function buildUtilityExportRows(records: UtilityMonitoringRecord[]): {
+  headers: string[];
+  rows: (string | number)[][];
+} {
+  const headers = [
+    'Utility ID', 'Product Code', 'Product', 'Batch', 'Utility Type', 'System', 'Sampling Point',
+    'Parameter', 'Observed', 'Target', 'LSL', 'USL', 'Alert Low', 'Alert High', 'Action Low', 'Action High',
+    'Unit', 'Status', 'Risk', 'Review Status', 'Building', 'Area/Room', 'Department', 'Shift',
+    'Data Source', 'Sensor ID', 'Alarm', 'Monitoring Date', 'Deviation', 'CAPA', 'OOS',
+  ];
+  const rows = records.map((r) => [
+    r.utilityMonitoringId,
+    r.productCode,
+    r.productName,
+    r.batchNumber,
+    r.utilityType,
+    r.utilitySystemName,
+    r.samplingPoint,
+    r.parameterName,
+    r.observedValue,
+    r.targetValue ?? '',
+    r.lowerLimit,
+    r.upperLimit,
+    r.alertLimitLow ?? '',
+    r.alertLimitHigh ?? '',
+    r.actionLimitLow ?? '',
+    r.actionLimitHigh ?? '',
+    r.unit,
+    r.status,
+    r.riskLevel,
+    r.reviewStatus,
+    r.building || '',
+    r.areaRoomNo || '',
+    r.department || '',
+    r.shift || '',
+    r.dataSource || 'Manual',
+    r.sensorId || '',
+    r.alarmStatus || '',
+    `${r.monitoringDate} ${r.monitoringTime}`,
+    r.linkedDeviationNumber || '',
+    r.linkedCapaNumber || '',
+    r.linkedOosNumber || (r.oosRequired ? 'Yes' : ''),
+  ]);
+  return { headers, rows };
 }

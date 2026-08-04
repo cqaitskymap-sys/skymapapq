@@ -54,25 +54,53 @@ function EditApprovalMatrixContent({ id }: { id: string }) {
       setInitial({
         matrixCode: m.matrixCode,
         matrixName: m.matrixName,
+        description: m.description || '',
         moduleName: m.moduleName as ApprovalMatrixFormData['moduleName'],
+        subModule: m.subModule || '',
         department: m.department,
         siteLocation: m.siteLocation || '',
+        businessUnit: m.businessUnit || '',
+        workflowCode: m.workflowCode || '',
+        documentType: m.documentType || '',
+        category: m.category || '',
+        priority: m.priority || 'Medium',
         productOptional: m.productOptional || '',
         processOptional: m.processOptional || '',
         riskLevel: m.riskLevel,
+        approvalMode: (m.approvalMode as ApprovalMatrixFormData['approvalMode']) || 'Sequential',
+        matrixVersion: m.matrixVersion || '1.0',
+        effectiveDate: m.effectiveDate || '',
+        reviewDate: m.reviewDate || '',
         preparedByRole: m.preparedByRole || '',
         reviewedByRole: m.reviewedByRole || '',
         verifiedByRole: m.verifiedByRole || '',
         approvedByRole: m.approvedByRole || '',
         finalApproverRole: m.finalApproverRole || '',
         escalationRole: m.escalationRole || '',
+        approvalGroup: m.approvalGroup || '',
+        quorumCount: m.quorumCount,
         minimumApprovalLevel: Number(m.minimumApprovalLevel ?? 1),
+        slaHours: m.slaHours,
+        reminderHours: m.reminderHours,
+        autoEscalationEnabled: m.autoEscalationEnabled ?? false,
+        autoEscalationHours: m.autoEscalationHours,
+        autoApproveEnabled: m.autoApproveEnabled ?? false,
+        allowReject: m.allowReject ?? true,
+        allowReturn: m.allowReturn ?? true,
+        allowRework: m.allowRework ?? true,
+        allowResubmit: m.allowResubmit ?? true,
+        allowCancel: m.allowCancel ?? false,
+        allowSkip: m.allowSkip ?? false,
         eSignatureRequired: m.eSignatureRequired ?? true,
+        digitalSignatureRequired: m.digitalSignatureRequired ?? false,
         approvalCommentRequired: m.approvalCommentRequired ?? true,
         parallelApprovalAllowed: m.parallelApprovalAllowed ?? false,
         sequentialApprovalRequired: m.sequentialApprovalRequired ?? true,
+        conditionalApprovalEnabled: m.conditionalApprovalEnabled ?? false,
+        conditionExpression: m.conditionExpression || '',
         delegationAllowed: m.delegationAllowed ?? false,
         remarks: m.remarks || '',
+        changeReason: '',
       });
       setLoading(false);
     });
@@ -105,6 +133,7 @@ function EditApprovalMatrixContent({ id }: { id: string }) {
       <PageHeader title="Edit Approval Matrix" description={existing.matrixName} basePath="/admin" />
       <ApprovalMatrixForm
         initial={initial}
+        isEdit
         roles={roles}
         sites={sites}
         products={products}

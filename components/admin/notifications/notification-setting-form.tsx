@@ -56,6 +56,8 @@ export function NotificationSettingForm({
       enableEmailNotification: true,
       enableSmsNotification: false,
       remarks: '',
+      eventAliases: '',
+      changeReason: '',
       ...initial,
     },
   });
@@ -95,6 +97,17 @@ export function NotificationSettingForm({
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{NOTIFICATION_EVENT_TRIGGERS.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Event Aliases (comma-separated)</Label>
+              <Input
+                {...form.register('eventAliases')}
+                disabled={readOnly}
+                placeholder="e.g. CAPA Overdue, CAPA Due Soon"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Extra trigger names that match this rule (placeholders: {'{{UserName}}'}, {'{{DocumentNo}}'}, {'{{DueDate}}'}, {'{{Status}}'}, …)
+              </p>
             </div>
             <div className="space-y-2">
               <Label>Notification Type</Label>
@@ -222,6 +235,19 @@ export function NotificationSettingForm({
             <Label>Remarks</Label>
             <Textarea {...form.register('remarks')} rows={2} disabled={readOnly} />
           </div>
+          {!readOnly && (
+            <div className="space-y-2">
+              <Label>Change Reason *</Label>
+              <Textarea
+                {...form.register('changeReason')}
+                rows={2}
+                placeholder="Reason for creating or updating this rule (min 5 characters)"
+              />
+              {form.formState.errors.changeReason && (
+                <p className="text-xs text-red-500">{form.formState.errors.changeReason.message}</p>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 

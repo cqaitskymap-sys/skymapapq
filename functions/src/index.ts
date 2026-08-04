@@ -67,7 +67,7 @@ const ADMIN_USER_ROLES = [
   'regulatory', 'head_qa', 'qa_manager', 'qa_executive',
   'qc_manager', 'qc_executive', 'production_manager', 'production_executive',
   'warehouse_manager', 'warehouse_executive', 'engineering_manager',
-  'engineering_executive', 'regulatory_affairs', 'hr', 'training_coordinator',
+  'engineering_executive', 'regulatory_affairs', 'hr',
   'document_controller', 'department_head', 'employee', 'auditor', 'vendor', 'viewer',
   'maintenance', 'validation', 'it_administrator',
 ] as const;
@@ -1016,31 +1016,6 @@ export const scheduledPeriodicReviewJobs = onSchedule(
   },
 );
 
-const dtlCronSecret = defineSecret('TRAINING_LINKAGE_CRON_SECRET');
-const dtlApiUrl = defineSecret('TRAINING_LINKAGE_API_URL');
-
-export const scheduledTrainingLinkageJobs = onSchedule(
-  {
-    schedule: 'every day 07:00',
-    timeZone: 'UTC',
-    secrets: [dtlCronSecret, dtlApiUrl],
-  },
-  async () => {
-    const url = dtlApiUrl.value() || process.env.TRAINING_LINKAGE_API_URL;
-    const secret = dtlCronSecret.value() || process.env.TRAINING_LINKAGE_CRON_SECRET;
-    if (!url) {
-      logger.error('TRAINING_LINKAGE_API_URL not configured');
-      return;
-    }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
-    });
-    const body = await res.json();
-    logger.info('Training linkage scheduler completed', body);
-  },
-);
-
 const ciaCronSecret = defineSecret('CHANGE_IMPACT_CRON_SECRET');
 const ciaApiUrl = defineSecret('CHANGE_IMPACT_API_URL');
 
@@ -1216,106 +1191,9 @@ export const scheduledDocumentAuditJobs = onSchedule(
   },
 );
 
-export const scheduledTrainingAutomationJobs = onSchedule(
-  {
-    schedule: 'every day 05:00',
-    timeZone: 'UTC',
-  },
-  async () => {
-    if (getApps().length === 0) initializeApp();
-    const firestore = getFirestore();
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    const reminderDate = new Date(now);
-    reminderDate.setUTCDate(reminderDate.getUTCDate() + 30);
-    const threshold = reminderDate.toISOString().slice(0, 10);
-    let retrainingUpdated = 0;
-    let certificatesUpdated = 0;
-
-    const retraining = await firestore.collection('retraining_records')
-      .where('due_date', '<=', threshold)
-      .get();
-    for (const snapshot of retraining.docs) {
-      const record = snapshot.data();
-      if (['Completed', 'Closed', 'Cancelled'].includes(String(record.retraining_status))) continue;
-      const overdue = String(record.due_date) < today;
-      const status = overdue ? 'Overdue' : String(record.retraining_status || 'Scheduled');
-      const notificationId = `retraining-${snapshot.id}-${overdue ? 'overdue' : today}`;
-      const batch = firestore.batch();
-      if (overdue && record.retraining_status !== 'Overdue') {
-        batch.update(snapshot.ref, {
-          retraining_status: 'Overdue',
-          status: 'Overdue',
-          updated_at: now.toISOString(),
-          updated_by: 'system',
-          updated_by_name: 'Training Automation',
-        });
-        retrainingUpdated++;
-      }
-      batch.set(firestore.collection('notifications').doc(notificationId), {
-        userId: String(record.employee_id || ''),
-        recipientRole: 'training_coordinator',
-        title: overdue ? 'Retraining Overdue' : 'Retraining Reminder',
-        message: `${String(record.training_topic || 'Training')} is ${overdue ? 'overdue' : `due ${String(record.due_date)}`}`,
-        type: overdue ? 'warning' : 'info',
-        module: 'training',
-        recordId: snapshot.id,
-        isRead: false,
-        createdAt: now.toISOString(),
-        dedupeKey: notificationId,
-        status,
-      }, { merge: false });
-      await batch.commit();
-    }
-
-    const certificates = await firestore.collection('training_certificates')
-      .where('expiry_date', '<=', threshold)
-      .get();
-    for (const snapshot of certificates.docs) {
-      const certificate = snapshot.data();
-      if (certificate.certificate_status === 'Revoked') continue;
-      const expired = String(certificate.expiry_date) < today;
-      const status = expired ? 'Expired' : 'Expiring Soon';
-      if (certificate.certificate_status === status) continue;
-      const notificationId = `certificate-${snapshot.id}-${status.toLowerCase().replace(' ', '-')}`;
-      const batch = firestore.batch();
-      batch.update(snapshot.ref, {
-        certificate_status: status,
-        updated_at: now.toISOString(),
-        updated_by: 'system',
-        updated_by_name: 'Training Automation',
-      });
-      batch.set(firestore.collection('notifications').doc(notificationId), {
-        userId: String(certificate.employee_id || ''),
-        recipientRole: 'training_coordinator',
-        title: `Certificate ${status}`,
-        message: `${String(certificate.certificate_number || snapshot.id)} ${expired ? 'has expired' : `expires ${String(certificate.expiry_date)}`}`,
-        type: expired ? 'warning' : 'info',
-        module: 'training',
-        recordId: snapshot.id,
-        isRead: false,
-        createdAt: now.toISOString(),
-        dedupeKey: notificationId,
-      }, { merge: false });
-      await batch.commit();
-      certificatesUpdated++;
-    }
-
-    await firestore.collection('training_automation_log').add({
-      job: 'daily_training_automation',
-      started_at: now.toISOString(),
-      completed_at: new Date().toISOString(),
-      status: 'Completed',
-      retraining_updated: retrainingUpdated,
-      certificates_updated: certificatesUpdated,
-    });
-    logger.info('Training automation completed', { retrainingUpdated, certificatesUpdated });
-  },
-);
-
 const ROLE_MATRIX_MODULES = [
   'Dashboard', 'Admin', 'CPV', 'PQR', 'Deviation', 'OOS', 'CAPA', 'Change Control',
-  'Risk Management', 'Stability', 'Complaint', 'Recall', 'DMS', 'Training', 'Audit',
+  'Risk Management', 'Stability', 'Complaint', 'Recall', 'DMS', 'Audit',
   'Vendor', 'Supplier', 'Validation', 'CSV', 'Equipment', 'Calibration', 'Maintenance',
   'Monitoring', 'Warehouse', 'Inventory', 'eBMR', 'Reports', 'Analytics', 'Settings',
   'Notifications', 'Audit Trail', 'Electronic Signature',
@@ -1329,7 +1207,7 @@ const ROLE_MATRIX_ACTIONS = [
 
 const SYSTEM_ROLE_IDS = new Set([
   'super_admin', 'admin', 'qa', 'qc', 'production', 'engineering', 'warehouse',
-  'regulatory', 'auditor', 'department_head', 'hr', 'training_coordinator',
+  'regulatory', 'auditor', 'department_head', 'hr',
   'document_controller', 'employee', 'vendor', 'viewer', 'maintenance',
   'validation', 'it_administrator', 'head_qa', 'qa_manager', 'qc_manager',
   'production_manager', 'warehouse_manager', 'engineering_manager', 'regulatory_affairs',
@@ -2888,4 +2766,449 @@ export {
   importAdminDesignations,
   logAdminDesignationExport,
 } from './designation-admin';
+
+export {
+  createAdminCompanySite,
+  updateAdminCompanySite,
+  setAdminCompanySiteStatus,
+  setDefaultAdminCompanySite,
+  softDeleteAdminCompanySite,
+  restoreAdminCompanySite,
+  bulkUpdateAdminCompanySites,
+  bulkSoftDeleteAdminCompanySites,
+  importAdminCompanySites,
+  logAdminCompanySiteExport,
+} from './company-site-admin';
+
+export {
+  createAdminProduct,
+  updateAdminProduct,
+  setAdminProductStatus,
+  setAdminProductLifecycle,
+  archiveAdminProduct,
+  softDeleteAdminProduct,
+  restoreAdminProduct,
+  bulkUpdateAdminProducts,
+  bulkSoftDeleteAdminProducts,
+  importAdminProducts,
+  logAdminProductExport,
+  registerAdminProductAttachment,
+  softDeleteAdminProductAttachment,
+} from './product-admin';
+
+export {
+  createAdminBatch,
+  updateAdminBatch,
+  setAdminBatchStatus,
+  softDeleteAdminBatch,
+  restoreAdminBatch,
+  bulkUpdateAdminBatches,
+  bulkSoftDeleteAdminBatches,
+  importAdminBatches,
+  logAdminBatchExport,
+  registerAdminBatchAttachment,
+  softDeleteAdminBatchAttachment,
+  previewAdminBatchNumber,
+} from './batch-admin';
+
+export {
+  createAdminParameter,
+  updateAdminParameter,
+  setAdminParameterStatus,
+  archiveAdminParameter,
+  softDeleteAdminParameter,
+  restoreAdminParameter,
+  bulkUpdateAdminParameters,
+  bulkSoftDeleteAdminParameters,
+  importAdminParameters,
+  logAdminParameterExport,
+  seedAdminDefaultParameters,
+} from './parameter-admin';
+
+export {
+  createAdminWorkflow,
+  updateAdminWorkflow,
+  setAdminWorkflowStatus,
+  archiveAdminWorkflow,
+  softDeleteAdminWorkflow,
+  restoreAdminWorkflow,
+  cloneAdminWorkflow,
+  bulkUpdateAdminWorkflows,
+  bulkSoftDeleteAdminWorkflows,
+  importAdminWorkflows,
+  logAdminWorkflowExport,
+  seedAdminDefaultWorkflows,
+  validateAdminWorkflowDesign,
+} from './workflow-admin';
+
+export {
+  createAdminApprovalMatrix,
+  updateAdminApprovalMatrix,
+  setAdminApprovalMatrixStatus,
+  archiveAdminApprovalMatrix,
+  softDeleteAdminApprovalMatrix,
+  restoreAdminApprovalMatrix,
+  cloneAdminApprovalMatrix,
+  bulkUpdateAdminApprovalMatrices,
+  bulkSoftDeleteAdminApprovalMatrices,
+  importAdminApprovalMatrices,
+  logAdminApprovalMatrixExport,
+  seedAdminDefaultApprovalMatrices,
+} from './approval-matrix-admin';
+
+export {
+  createAdminDocumentNumbering,
+  updateAdminDocumentNumbering,
+  setAdminDocumentNumberingStatus,
+  archiveAdminDocumentNumbering,
+  softDeleteAdminDocumentNumbering,
+  restoreAdminDocumentNumbering,
+  cloneAdminDocumentNumbering,
+  bulkUpdateAdminDocumentNumberings,
+  bulkSoftDeleteAdminDocumentNumberings,
+  generateAdminDocumentNumber,
+  resetAdminDocumentNumberingSequence,
+  previewAdminDocumentNumber,
+  listAdminDocumentNumberHistory,
+  importAdminDocumentNumberings,
+  logAdminDocumentNumberingExport,
+  seedAdminDefaultDocumentNumberings,
+} from './document-numbering-admin';
+
+export {
+  appendAdminAuditTrail,
+  logAdminAuditTrailExport,
+  archiveAdminAuditTrail,
+  verifyAdminAuditIntegrity,
+  getAdminAuditIntegrityStatus,
+} from './audit-trail-admin';
+
+export {
+  recordAdminLoginSuccess,
+  recordAdminLoginFailure,
+  recordAdminLogout,
+  terminateAdminSession,
+  terminateAllAdminSessionsForUser,
+  unlockAdminAccount,
+  recordAdminSecurityEvent,
+  archiveAdminLoginActivity,
+  logAdminLoginActivityExport,
+} from './login-activity-admin';
+
+export {
+  createAdminAccessReview,
+  updateAdminAccessReview,
+  transitionAdminAccessReview,
+  completeAdminAccessReview,
+  generateAdminAccessReviewCampaign,
+  analyzeAdminAccessRisks,
+  archiveAdminAccessReviews,
+  markAdminAccessReviewsOverdue,
+  logAdminAccessReviewExport,
+} from './access-review-admin';
+
+export {
+  createAdminEsignSetting,
+  updateAdminEsignSetting,
+  setAdminEsignSettingStatus,
+  softDeleteAdminEsignSetting,
+  seedAdminEsignSettings,
+  resolveAdminEsignSetting,
+  recordAdminEsignAttestation,
+  logAdminEsignSettingsExport,
+} from './esign-settings-admin';
+
+export {
+  createAdminNotificationSetting,
+  updateAdminNotificationSetting,
+  setAdminNotificationSettingStatus,
+  softDeleteAdminNotificationSetting,
+  seedAdminNotificationSettings,
+  dispatchAdminNotificationEvent,
+  processAdminNotificationQueue,
+  broadcastAdminNotification,
+  archiveAdminNotifications,
+  logAdminNotificationSettingsExport,
+} from './notification-settings-admin';
+
+export {
+  createAdminEmailSmsTemplate,
+  updateAdminEmailSmsTemplate,
+  setAdminEmailSmsTemplateStatus,
+  transitionAdminEmailSmsTemplate,
+  softDeleteAdminEmailSmsTemplate,
+  seedAdminEmailSmsTemplates,
+  resolveAdminEmailSmsTemplate,
+  previewAdminEmailSmsTemplate,
+  logAdminEmailSmsTemplatesExport,
+} from './email-sms-templates-admin';
+
+export {
+  createAdminModuleConfiguration,
+  updateAdminModuleConfiguration,
+  setAdminModuleEnabled,
+  setAdminModuleVisibility,
+  setAdminModuleFeatureFlag,
+  softDeleteAdminModuleConfiguration,
+  seedAdminModuleConfigurations,
+  resolveAdminModuleConfiguration,
+  logAdminModuleConfigurationExport,
+} from './module-configuration-admin';
+
+export {
+  exportAdminMasterData,
+  validateAdminMasterDataImport,
+  importAdminMasterData,
+  softDeleteAdminMasterDataOperation,
+} from './master-data-import-export-admin';
+
+export {
+  createAdminBackup,
+  verifyAdminBackup,
+  getAdminBackupDownloadUrl,
+  updateAdminBackupSettings,
+  requestAdminRestore,
+  approveAdminRestore,
+  rejectAdminRestore,
+  softDeleteAdminBackup,
+  purgeExpiredAdminBackups,
+  logAdminBackupExport,
+  archiveAdminBackupHistory,
+  archiveAdminRestoreHistory,
+  scheduledAdminBackup,
+} from './backup-admin';
+
+export {
+  runAdminFirebaseHealthCheck,
+  fetchAdminFirebaseHealthHistory,
+  logAdminFirebaseStatusExport,
+  scheduledFirebaseHealthCheck,
+} from './firebase-health-admin';
+
+export {
+  runAdminSystemHealthCheck,
+  fetchAdminSystemHealthHistory,
+  acknowledgeAdminSystemHealthAlert,
+  logAdminSystemHealthExport,
+  scheduledSystemHealthCheck,
+} from './system-health-admin';
+
+export {
+  updateAdminSystemSettings,
+  resetAdminSystemSettings,
+  publishAdminSystemSettings,
+  rollbackAdminSystemSettings,
+  fetchAdminSystemSettingsVersions,
+  importAdminSystemSettings,
+  logAdminSystemSettingsExport,
+} from './system-settings-admin';
+
+export {
+  getAdminCpvDashboardSnapshot,
+  logAdminCpvDashboardAudit,
+} from './cpv-dashboard-admin';
+
+export {
+  createAdminCpvProduct,
+  updateAdminCpvProduct,
+  setAdminCpvProductStatus,
+  linkAdminCpvParameter,
+  unlinkAdminCpvParameter,
+  importAdminCpvProduct,
+  softDeleteAdminCpvProduct,
+  logAdminCpvProductExport,
+} from './cpv-product-admin';
+
+export {
+  createAdminCpvBatch,
+  updateAdminCpvBatch,
+  setAdminCpvBatchStatus,
+  importAdminCpvBatch,
+  softDeleteAdminCpvBatch,
+  logAdminCpvBatchExport,
+} from './cpv-batch-admin';
+
+export {
+  createAdminCppResult,
+  updateAdminCppResult,
+  reviewAdminCppResult,
+  approveAdminCppResult,
+  bulkCreateAdminCppResults,
+  softDeleteAdminCppResult,
+  logAdminCppExport,
+} from './cpv-cpp-admin';
+
+export {
+  createAdminCqaResult,
+  updateAdminCqaResult,
+  reviewAdminCqaResult,
+  approveAdminCqaResult,
+  bulkCreateAdminCqaResults,
+  softDeleteAdminCqaResult,
+  logAdminCqaExport,
+} from './cpv-cqa-admin';
+
+export {
+  createAdminRawMaterialRecord,
+  updateAdminRawMaterialRecord,
+  reviewAdminRawMaterialRecord,
+  approveAdminRawMaterialRecord,
+  bulkCreateAdminRawMaterialRecords,
+  softDeleteAdminRawMaterialRecord,
+  logAdminRawMaterialExport,
+} from './cpv-raw-material-admin';
+
+export {
+  createAdminPackingMaterialRecord,
+  updateAdminPackingMaterialRecord,
+  reviewAdminPackingMaterialRecord,
+  approveAdminPackingMaterialRecord,
+  bulkCreateAdminPackingMaterialRecords,
+  softDeleteAdminPackingMaterialRecord,
+  logAdminPackingMaterialExport,
+} from './cpv-packing-material-admin';
+
+export {
+  createAdminUtilityRecord,
+  updateAdminUtilityRecord,
+  reviewAdminUtilityRecord,
+  approveAdminUtilityRecord,
+  bulkCreateAdminUtilityRecords,
+  softDeleteAdminUtilityRecord,
+  logAdminUtilityExport,
+} from './cpv-utility-admin';
+
+export {
+  createAdminEnvironmentalRecord,
+  updateAdminEnvironmentalRecord,
+  reviewAdminEnvironmentalRecord,
+  approveAdminEnvironmentalRecord,
+  bulkCreateAdminEnvironmentalRecords,
+  softDeleteAdminEnvironmentalRecord,
+  logAdminEnvironmentalExport,
+} from './cpv-environmental-admin';
+
+export {
+  createAdminYieldRecord,
+  updateAdminYieldRecord,
+  reviewAdminYieldRecord,
+  approveAdminYieldRecord,
+  bulkCreateAdminYieldRecords,
+  softDeleteAdminYieldRecord,
+  logAdminYieldExport,
+} from './cpv-yield-admin';
+
+export {
+  createAdminStabilityStudy,
+  updateAdminStabilityStudy,
+  generateAdminStabilitySchedule,
+  updateAdminStabilityPull,
+  refreshAdminStabilitySchedules,
+  createAdminStabilityResult,
+  updateAdminStabilityResult,
+  reviewAdminStabilityResult,
+  approveAdminStabilityResult,
+  bulkCreateAdminStabilityResults,
+  softDeleteAdminStabilityResult,
+  updateAdminStabilityAttachments,
+  logAdminStabilityExport,
+} from './cpv-stability-admin';
+
+export {
+  createAdminHoldTimeRecord,
+  updateAdminHoldTimeRecord,
+  reviewAdminHoldTimeRecord,
+  approveAdminHoldTimeRecord,
+  bulkCreateAdminHoldTimeRecords,
+  softDeleteAdminHoldTimeRecord,
+  logAdminHoldTimeExport,
+} from './cpv-hold-time-admin';
+
+export {
+  createAdminProcessCapability,
+  recalculateAdminProcessCapability,
+  reviewAdminProcessCapability,
+  approveAdminProcessCapability,
+  rejectAdminProcessCapability,
+  softDeleteAdminProcessCapability,
+  logAdminProcessCapabilityExport,
+} from './cpv-process-capability-admin';
+
+export {
+  createAdminTrendAnalysis,
+  regenerateAdminTrendAnalysis,
+  reviewAdminTrendAnalysis,
+  approveAdminTrendAnalysis,
+  rejectAdminTrendAnalysis,
+  softDeleteAdminTrendAnalysis,
+  logAdminTrendAnalysisExport,
+} from './cpv-trend-analysis-admin';
+
+export {
+  createAdminSpcRecord,
+  regenerateAdminSpcRecord,
+  reviewAdminSpcRecord,
+  approveAdminSpcRecord,
+  rejectAdminSpcRecord,
+  softDeleteAdminSpcRecord,
+  logAdminSpcExport,
+} from './cpv-spc-admin';
+
+export {
+  createAdminRiskAssessment,
+  updateAdminRiskAssessment,
+  reviewAdminRiskAssessment,
+  approveAdminRiskAssessment,
+  rejectAdminRiskAssessment,
+  addControlAdminRiskAssessment,
+  recordEffectivenessAdminRiskAssessment,
+  closeAdminRiskAssessment,
+  softDeleteAdminRiskAssessment,
+  logAdminRiskAssessmentExport,
+} from './cpv-risk-assessment-admin';
+
+export {
+  createAdminCpvAnnualReview,
+  updateAdminCpvAnnualReview,
+  submitAdminCpvAnnualReview,
+  approveAdminCpvAnnualReview,
+  rejectAdminCpvAnnualReview,
+  archiveAdminCpvAnnualReview,
+  softDeleteAdminCpvAnnualReview,
+  logAdminCpvAnnualReviewExport,
+} from './cpv-annual-review-admin';
+
+export {
+  createAdminCpvReport,
+  exportAdminCpvReport,
+  archiveAdminCpvReport,
+  softDeleteAdminCpvReport,
+  logAdminCpvReportExport,
+} from './cpv-reports-admin';
+
+export {
+  createAdminCpvAlert,
+  acknowledgeAdminCpvAlert,
+  assignAdminCpvAlert,
+  linkAdminCpvAlert,
+  investigateAdminCpvAlert,
+  closeAdminCpvAlert,
+  rejectAdminCpvAlert,
+  escalateAdminCpvAlert,
+  saveAdminAlertRule,
+  deactivateAdminAlertRule,
+  softDeleteAdminCpvAlert,
+  logAdminCpvAlertExport,
+} from './cpv-alert-admin';
+
+export {
+  saveAdminCpvConfigSingleton,
+  createAdminCpvConfigListRecord,
+  updateAdminCpvConfigListRecord,
+  softDeleteAdminCpvConfigListRecord,
+  resetAdminCpvConfigurationDefaults,
+  importAdminCpvConfiguration,
+  logAdminCpvConfigurationExport,
+  approveAdminCpvConfiguration,
+} from './cpv-configuration-admin';
 

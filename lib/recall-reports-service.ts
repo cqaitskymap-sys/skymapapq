@@ -17,6 +17,7 @@ import {
   type RecallReportFilterInput,
   type RecallReportFormData,
 } from '@/lib/recall-reports-records';
+import { polishQmsReportTexts } from '@/lib/ai/client';
 import {
   RECALL_COLLECTIONS,
   type RecallClosure,
@@ -148,9 +149,25 @@ export async function generateRecallReport(
   };
   const ctx = await loadReportContext();
   const analytics = computeRecallReportAnalytics(ctx.records, filters, ctx, actor.role, actor.id);
+  const polished = await polishQmsReportTexts({
+    module: 'Recall Reports',
+    summary: analytics.summary,
+    recommendations: analytics.recommendations,
+    management_summary: analytics.managementReview.narrative,
+    context: { reportType: form.report_type, metrics: analytics.metrics, filters },
+  });
+  const enrichedAnalytics = {
+    ...analytics,
+    summary: polished.summary,
+    recommendations: polished.recommendations,
+    managementReview: {
+      ...analytics.managementReview,
+      narrative: polished.management_summary || analytics.managementReview.narrative,
+    },
+  };
   const year = new Date(form.review_period_to).getFullYear();
   const reportNumber = generateRecallReportNumber(year, existingCount);
-  const payload = mapRecallReportToRecord(form, analytics, actor, reportNumber);
+  const payload = mapRecallReportToRecord(form, enrichedAnalytics, actor, reportNumber);
   try {
     const ref = await addDoc(collection(getFirebaseFirestore(), RECALL_COLLECTIONS.reports), payload);
     const record = { ...payload, id: ref.id };

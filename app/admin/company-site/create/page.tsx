@@ -11,7 +11,7 @@ import { useAuth } from '@/contexts/auth-context';
 import { useAdminPermissions } from '@/hooks/use-admin-permissions';
 import { canEditCompanySites } from '@/lib/permissions';
 import {
-  createCompanySite, uploadCompanyLogo, updateCompanyLogo,
+  createCompanySite, uploadCompanyLogo, updateCompanyLogoViaCallable,
 } from '@/lib/admin/company-site-service';
 import type { CompanySiteFormData } from '@/lib/admin/schemas';
 
@@ -43,7 +43,13 @@ function CreateCompanySiteContent() {
     if (logoFile) {
       const upload = await uploadCompanyLogo(result.site.id, logoFile, auditMeta);
       if (upload.url) {
-        await updateCompanyLogo(result.site.id, upload.url, result.site, auditMeta);
+        const logoResult = await updateCompanyLogoViaCallable(
+          result.site.id,
+          upload.url,
+          result.site,
+          data.changeReason || 'Company logo uploaded on create',
+        );
+        if (!logoResult.success) toast.warning(`Site created but logo update failed: ${logoResult.error}`);
       } else if (upload.error) {
         toast.warning(`Site created but logo upload failed: ${upload.error}`);
       }
@@ -56,7 +62,7 @@ function CreateCompanySiteContent() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Create Company / Site" description="Add company and site details for document headers" basePath="/admin" />
+      <PageHeader title="Create Company / Site" description="Add company and site details for document headers and multi-site QMS configuration" basePath="/admin" />
       <CompanySiteForm
         onSubmit={onSubmit}
         onCancel={() => router.push('/admin/company-site')}

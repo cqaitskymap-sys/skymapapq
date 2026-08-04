@@ -28,10 +28,10 @@ export const DEFAULT_SIGNATURE_MEANINGS = [
 ] as const;
 
 export const SUPPORTED_ESIG_MODULES = [
-  'Document Approval', 'Document Acknowledgement', 'Training Completion', 'Training Approval',
+  'Document Approval', 'Document Acknowledgement',
   'CAPA Approval', 'Deviation Approval', 'OOS Approval', 'Change Control Approval',
   'Risk Approval', 'Validation Approval', 'Batch Release', 'DMS', 'PQR', 'Deviation',
-  'OOS', 'CAPA', 'Change Control', 'Complaint', 'Recall', 'Training',
+  'OOS', 'CAPA', 'Change Control', 'Complaint', 'Recall',
 ] as const;
 
 export interface ElectronicSignatureRecord {

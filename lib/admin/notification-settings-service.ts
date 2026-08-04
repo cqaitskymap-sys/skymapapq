@@ -1,4 +1,9 @@
-import { writeAuditTrail, createAuditLog } from '@/lib/audit-trail';
+import {
+  collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query,
+  type Unsubscribe,
+} from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import {
   applyTemplateVariables,
   sendInAppNotification,
@@ -6,10 +11,6 @@ import {
   getAllNotifications,
   getNotificationStats,
 } from '@/lib/notification-service';
-import {
-  getAdminRecords, createAdminRecord, updateAdminRecord,
-  checkUniqueField, logAuditEvent,
-} from './admin-service';
 import { ADMIN_COLLECTIONS } from './constants';
 import type { NotificationSetting, NotificationSettingFormData } from './schemas';
 
@@ -18,37 +19,17 @@ export interface NotificationSettingAuditMeta {
   userName: string;
 }
 
-async function logNotificationSettingAudit(
-  action: string,
-  recordId: string,
-  meta: NotificationSettingAuditMeta,
-  oldValue: unknown,
-  newValue: unknown,
-) {
-  await logAuditEvent({
-    userId: meta.userId,
-    userName: meta.userName,
-    module: 'Notification Settings',
-    recordId,
-    action,
-    oldValue: typeof oldValue === 'string' ? oldValue : JSON.stringify(oldValue ?? ''),
-    newValue: typeof newValue === 'string' ? newValue : JSON.stringify(newValue ?? ''),
-    reason: '',
-    ipAddress: 'client',
-    device: typeof navigator !== 'undefined' ? navigator.userAgent : 'browser',
-    status: 'Success',
-  });
+function callableErrorMessage(error: unknown, fallback: string): string {
+  const err = error as { message?: string };
+  return (err.message || fallback)
+    .replace(/^Firebase:\s*/i, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim() || fallback;
+}
 
-  await writeAuditTrail({
-    collectionName: ADMIN_COLLECTIONS.notificationSettings,
-    documentId: recordId,
-    action,
-    oldValue,
-    newValue,
-    userId: meta.userId,
-    userName: meta.userName,
-    moduleName: 'Notification Settings',
-  });
+function parseCsvList(value?: string): string[] {
+  if (!value?.trim()) return [];
+  return value.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
 }
 
 export function buildNotificationSettingId(code: string): string {
@@ -61,6 +42,7 @@ export function normalizeNotificationSetting(s: NotificationSetting): Notificati
   return {
     ...s,
     notificationSettingId: s.notificationSettingId || buildNotificationSettingId(s.notificationCode || 'NTS'),
+    eventAliases: Array.isArray(s.eventAliases) ? s.eventAliases : [],
     notifyBeforeDueDays: beforeDue,
     beforeDueDays: beforeDue,
     escalationAfterDays: escalation,
@@ -76,6 +58,8 @@ export function normalizeNotificationSetting(s: NotificationSetting): Notificati
     repeatReminder: s.repeatReminder ?? false,
     reminderFrequency: (s.reminderFrequency as NotificationSetting['reminderFrequency']) || 'None',
     priority: (s.priority as NotificationSetting['priority']) || 'Medium',
+    preventDuplicates: s.preventDuplicates ?? true,
+    duplicateWindowMinutes: Number(s.duplicateWindowMinutes ?? 60),
   };
 }
 
@@ -84,17 +68,57 @@ export function isNotificationSettingActive(s: NotificationSetting): boolean {
 }
 
 export async function fetchNotificationSettings(): Promise<NotificationSetting[]> {
+  if (!isFirebaseConfigured()) return [];
   try {
-    const records = await getAdminRecords<NotificationSetting>(ADMIN_COLLECTIONS.notificationSettings);
-    return records.filter((s) => !s.isDeleted).map(normalizeNotificationSetting);
+    const snap = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.notificationSettings),
+      orderBy('updatedAt', 'desc'),
+      limit(400),
+    ));
+    return snap.docs
+      .map((d) => normalizeNotificationSetting({ id: d.id, ...d.data() } as NotificationSetting))
+      .filter((s) => !s.isDeleted);
   } catch {
-    return [];
+    try {
+      const snap = await getDocs(collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.notificationSettings));
+      return snap.docs
+        .map((d) => normalizeNotificationSetting({ id: d.id, ...d.data() } as NotificationSetting))
+        .filter((s) => !s.isDeleted);
+    } catch {
+      return [];
+    }
   }
 }
 
+export function subscribeToNotificationSettings(
+  onData: (rows: NotificationSetting[]) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
+  if (!isFirebaseConfigured()) {
+    onData([]);
+    return () => undefined;
+  }
+  return onSnapshot(
+    query(collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.notificationSettings), limit(400)),
+    (snapshot) => {
+      onData(snapshot.docs
+        .map((d) => normalizeNotificationSetting({ id: d.id, ...d.data() } as NotificationSetting))
+        .filter((s) => !s.isDeleted)
+        .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))));
+    },
+    (error) => onError?.(new Error(error.message)),
+  );
+}
+
 export async function fetchNotificationSettingById(id: string): Promise<NotificationSetting | null> {
-  const all = await fetchNotificationSettings();
-  return all.find((s) => s.id === id) ?? null;
+  if (!isFirebaseConfigured() || !id) return null;
+  try {
+    const snap = await getDoc(doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.notificationSettings, id));
+    if (!snap.exists() || snap.data().isDeleted === true) return null;
+    return normalizeNotificationSetting({ id: snap.id, ...snap.data() } as NotificationSetting);
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchActiveNotificationRules(
@@ -102,11 +126,18 @@ export async function fetchActiveNotificationRules(
   eventTrigger: string,
 ): Promise<NotificationSetting | null> {
   const settings = await fetchNotificationSettings();
-  return settings.find((s) =>
-    isNotificationSettingActive(s) &&
-    s.moduleName === moduleName &&
-    s.eventTrigger === eventTrigger,
-  ) ?? null;
+  const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const m = norm(moduleName);
+  const e = norm(eventTrigger);
+  return settings.find((s) => {
+    if (!isNotificationSettingActive(s)) return false;
+    if (!norm(s.moduleName).includes(m) && !m.includes(norm(s.moduleName))) return false;
+    const triggers = [s.eventTrigger, ...(s.eventAliases || [])];
+    return triggers.some((t) => {
+      const nt = norm(t);
+      return nt === e || nt.includes(e) || e.includes(nt);
+    });
+  }) ?? null;
 }
 
 export function getNotificationSettingsSummary(settings: NotificationSetting[]) {
@@ -129,14 +160,13 @@ export async function getNotificationDeliveryStats() {
   };
 }
 
-function formToPayload(data: NotificationSettingFormData, meta: NotificationSettingAuditMeta, status = 'Active') {
-  const notificationSettingId = buildNotificationSettingId(data.notificationCode);
+function formToCallable(data: NotificationSettingFormData, changeReason: string) {
   return {
-    notificationSettingId,
     notificationCode: data.notificationCode,
     eventName: data.eventName,
     moduleName: data.moduleName,
     eventTrigger: data.eventTrigger,
+    eventAliases: parseCsvList(data.eventAliases),
     notificationType: data.notificationType,
     recipientRole: data.recipientRole,
     recipientUserOptional: data.recipientUserOptional,
@@ -144,24 +174,17 @@ function formToPayload(data: NotificationSettingFormData, meta: NotificationSett
     ccRoleOptional: data.ccRoleOptional,
     escalationRole: data.escalationRole,
     notifyBeforeDueDays: data.notifyBeforeDueDays,
-    beforeDueDays: data.notifyBeforeDueDays,
     escalationAfterDays: data.escalationAfterDays,
-    escalationDays: data.escalationAfterDays,
     repeatReminder: data.repeatReminder,
     reminderFrequency: data.reminderFrequency,
     templateSubject: data.templateSubject,
     templateBody: data.templateBody,
-    template: data.templateBody,
     priority: data.priority,
     enableInAppNotification: data.enableInAppNotification,
-    inAppEnabled: data.enableInAppNotification,
     enableEmailNotification: data.enableEmailNotification,
-    emailEnabled: data.enableEmailNotification,
     enableSmsNotification: data.enableSmsNotification,
-    smsEnabled: data.enableSmsNotification,
     remarks: data.remarks,
-    status,
-    updatedBy: meta.userId,
+    changeReason,
   };
 }
 
@@ -170,49 +193,31 @@ export async function createNotificationSetting(
   meta: NotificationSettingAuditMeta,
 ): Promise<{ setting: NotificationSetting | null; error: string | null }> {
   try {
-    const unique = await checkUniqueField(ADMIN_COLLECTIONS.notificationSettings, 'notificationCode', data.notificationCode);
-    if (!unique) return { setting: null, error: 'Notification code already exists' };
-
-    const payload = { ...formToPayload(data, meta), createdBy: meta.userId };
-    const created = await createAdminRecord(
-      ADMIN_COLLECTIONS.notificationSettings,
-      payload as Omit<NotificationSetting, 'id'>,
-      { userId: meta.userId, userName: meta.userName, module: 'Notification Settings', action: 'CREATE_NOTIFICATION_RULE' },
-    );
-
-    await logNotificationSettingAudit('CREATE_NOTIFICATION_RULE', created.id || payload.notificationSettingId, meta, null, payload);
-    return { setting: normalizeNotificationSetting(created as NotificationSetting), error: null };
+    const reason = data.changeReason || `Created by ${meta.userName}`;
+    if (reason.trim().length < 5) return { setting: null, error: 'Change reason is required (min 5 characters)' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'createAdminNotificationSetting');
+    const result = await fn(formToCallable(data, reason));
+    const id = (result.data as { id?: string })?.id;
+    return { setting: id ? await fetchNotificationSettingById(id) : null, error: null };
   } catch (e) {
-    return { setting: null, error: (e as Error).message };
+    return { setting: null, error: callableErrorMessage(e, 'Unable to create notification rule') };
   }
 }
 
 export async function updateNotificationSetting(
   id: string,
   data: NotificationSettingFormData,
-  existing: NotificationSetting,
+  _existing: NotificationSetting,
   meta: NotificationSettingAuditMeta,
 ): Promise<{ setting: NotificationSetting | null; error: string | null }> {
   try {
-    if (data.notificationCode !== existing.notificationCode) {
-      const unique = await checkUniqueField(ADMIN_COLLECTIONS.notificationSettings, 'notificationCode', data.notificationCode, id);
-      if (!unique) return { setting: null, error: 'Notification code already exists' };
-    }
-
-    const updates = formToPayload(data, meta, existing.status);
-    delete (updates as { createdBy?: string }).createdBy;
-
-    const updated = await updateAdminRecord(ADMIN_COLLECTIONS.notificationSettings, id, updates, {
-      userId: meta.userId,
-      userName: meta.userName,
-      module: 'Notification Settings',
-      oldValue: JSON.stringify(existing),
-    });
-
-    await logNotificationSettingAudit('EDIT_NOTIFICATION_RULE', id, meta, existing, updates);
-    return { setting: normalizeNotificationSetting(updated as NotificationSetting), error: null };
+    const reason = data.changeReason || `Updated by ${meta.userName}`;
+    if (reason.trim().length < 5) return { setting: null, error: 'Change reason is required (min 5 characters)' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'updateAdminNotificationSetting');
+    await fn({ id, ...formToCallable(data, reason) });
+    return { setting: await fetchNotificationSettingById(id), error: null };
   } catch (e) {
-    return { setting: null, error: (e as Error).message };
+    return { setting: null, error: callableErrorMessage(e, 'Unable to update notification rule') };
   }
 }
 
@@ -221,19 +226,30 @@ export async function setNotificationSettingStatus(
   setting: NotificationSetting,
   status: 'Active' | 'Inactive',
   meta: NotificationSettingAuditMeta,
+  changeReason = '',
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    await updateAdminRecord(ADMIN_COLLECTIONS.notificationSettings, id, { status }, {
-      userId: meta.userId,
-      userName: meta.userName,
-      module: 'Notification Settings',
-      oldValue: JSON.stringify(setting),
-    });
-    const action = status === 'Active' ? 'ACTIVATE_NOTIFICATION_RULE' : 'DEACTIVATE_NOTIFICATION_RULE';
-    await logNotificationSettingAudit(action, id, meta, setting.status, status);
+    const reason = changeReason || `${status === 'Active' ? 'Activated' : 'Deactivated'} by ${meta.userName}`;
+    const fn = httpsCallable(getFirebaseFunctions(), 'setAdminNotificationSettingStatus');
+    await fn({ id, status, changeReason: reason });
     return { success: true };
   } catch (e) {
-    return { success: false, error: (e as Error).message };
+    return { success: false, error: callableErrorMessage(e, 'Unable to update status') };
+  }
+}
+
+export async function softDeleteNotificationSetting(
+  id: string,
+  meta: NotificationSettingAuditMeta,
+  changeReason = '',
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const reason = changeReason || `Soft-deleted by ${meta.userName}`;
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminNotificationSetting');
+    await fn({ id, changeReason: reason });
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: callableErrorMessage(e, 'Unable to delete rule') };
   }
 }
 
@@ -243,14 +259,24 @@ export function previewNotificationTemplate(
 ): { subject: string; body: string } {
   const sample: Record<string, string> = {
     documentNumber: 'DOC-2026-0001',
+    DocumentNo: 'DOC-2026-0001',
     moduleName: setting.moduleName || 'PQR',
+    Module: setting.moduleName || 'PQR',
+    eventName: setting.eventName || 'Event',
     productName: 'Amoxicillin 500mg',
     batchNumber: 'BTH-2026-0042',
     assignedTo: 'QA Executive',
     dueDate: '2026-03-15',
+    DueDate: '2026-03-15',
     status: 'Pending Approval',
+    Status: 'Pending Approval',
     createdBy: 'Admin User',
     siteName: 'HMF Plant',
+    UserName: 'Jane Doe',
+    EmployeeName: 'Jane Doe',
+    Department: 'QA',
+    Approver: 'Head QA',
+    Workflow: 'CAPA Approval',
     ...vars,
   };
   const subject = applyTemplateVariables(setting.templateSubject || '[{{moduleName}}] {{eventName}}', sample);
@@ -262,157 +288,172 @@ export async function sendTestNotification(
   setting: NotificationSetting,
   meta: NotificationSettingAuditMeta,
 ): Promise<{ success: boolean; error?: string }> {
-  const { subject, body } = previewNotificationTemplate(setting);
-  const input = {
-    userId: meta.userId,
-    moduleName: setting.moduleName,
-    eventName: setting.eventName,
-    recordId: setting.id || 'test',
-    documentNumber: 'TEST-0001',
-    title: subject || `Test: ${setting.eventName}`,
-    message: body,
-    type: 'info' as const,
-    priority: setting.priority,
-    recipientRole: setting.recipientRole,
-    actionLink: '/notifications',
-  };
-
-  if (setting.enableInAppNotification) {
-    await sendInAppNotification(input);
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'dispatchAdminNotificationEvent');
+    await fn({
+      moduleName: setting.moduleName,
+      eventTrigger: setting.eventTrigger,
+      recordId: setting.id || 'test',
+      documentNumber: 'TEST-0001',
+      title: `Test: ${setting.eventName}`,
+      message: setting.templateBody,
+      fallbackUserId: meta.userId,
+      userName: meta.userName,
+      createdBy: meta.userName,
+      status: 'Test',
+    });
+    // Also send direct in-app for immediate feedback
+    const { subject, body } = previewNotificationTemplate(setting);
+    if (setting.enableInAppNotification) {
+      await sendInAppNotification({
+        userId: meta.userId,
+        moduleName: setting.moduleName,
+        eventName: setting.eventName,
+        recordId: setting.id || 'test',
+        documentNumber: 'TEST-0001',
+        title: subject || `Test: ${setting.eventName}`,
+        message: body,
+        type: 'info',
+        priority: setting.priority,
+        recipientRole: setting.recipientRole,
+        actionLink: '/notifications',
+      });
+    }
+    if (setting.enableEmailNotification) {
+      await sendEmailNotificationPlaceholder({
+        userId: meta.userId,
+        moduleName: setting.moduleName,
+        eventName: setting.eventName,
+        recordId: setting.id || 'test',
+        title: subject || `Test: ${setting.eventName}`,
+        message: body,
+        subject: subject || `Test: ${setting.eventName}`,
+      });
+    }
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: callableErrorMessage(e, 'Test notification failed') };
   }
-  if (setting.enableEmailNotification) {
-    await sendEmailNotificationPlaceholder({ ...input, subject: subject || input.title });
-  }
-
-  await logNotificationSettingAudit('SEND_TEST_NOTIFICATION', setting.id || setting.notificationSettingId, meta, null, { subject, body });
-  await createAuditLog({
-    moduleName: 'Admin',
-    collectionName: ADMIN_COLLECTIONS.notificationSettings,
-    recordId: setting.id || setting.notificationSettingId,
-    actionType: 'Update',
-    actionDescription: 'Test notification sent',
-    user: { id: meta.userId, name: meta.userName },
-    status: 'Success',
-  });
-
-  return { success: true };
 }
 
 export function exportNotificationSettingsCsv(settings: NotificationSetting[]): string {
   const headers = [
-    'Code', 'Event', 'Module', 'Trigger', 'Type', 'Recipient Role', 'Priority',
-    'In-App', 'Email', 'SMS', 'Before Due Days', 'Escalation Days', 'Status',
+    'Code', 'Event', 'Module', 'Trigger', 'Role', 'Priority', 'In-App', 'Email', 'SMS', 'Status',
   ];
   const rows = settings.map((s) => [
-    s.notificationCode, s.eventName, s.moduleName, s.eventTrigger, s.notificationType,
-    s.recipientRole, s.priority,
+    s.notificationCode, s.eventName, s.moduleName, s.eventTrigger, s.recipientRole,
+    s.priority,
     s.enableInAppNotification ? 'Yes' : 'No',
     s.enableEmailNotification ? 'Yes' : 'No',
     s.enableSmsNotification ? 'Yes' : 'No',
-    String(s.notifyBeforeDueDays), String(s.escalationAfterDays), s.status,
+    s.status,
   ].map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','));
-  return [headers.join(','), ...rows].join('\n');
+  return `\uFEFF${[headers.join(','), ...rows].join('\n')}`;
 }
 
-export async function logNotificationSettingsExport(meta: NotificationSettingAuditMeta, count: number): Promise<void> {
-  await logNotificationSettingAudit('EXPORT_NOTIFICATION_SETTINGS', 'export', meta, null, { count });
-  await createAuditLog({
-    moduleName: 'Admin',
-    collectionName: ADMIN_COLLECTIONS.notificationSettings,
-    recordId: 'export',
-    actionType: 'Export',
-    actionDescription: `Exported ${count} notification settings`,
-    user: { id: meta.userId, name: meta.userName },
-    status: 'Success',
-  });
+export async function logNotificationSettingsExport(
+  meta: NotificationSettingAuditMeta,
+  count: number,
+): Promise<void> {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminNotificationSettingsExport');
+    await fn({ format: 'Excel', count, userName: meta.userName });
+  } catch (error) {
+    console.error('NOTIFICATION_SETTINGS_FAILURE: export log', error);
+  }
 }
-
-const DEFAULT_RULES: Array<NotificationSettingFormData & { notificationCode: string }> = [
-  {
-    notificationCode: 'PQR-APPROVAL',
-    eventName: 'PQR Approval Pending',
-    moduleName: 'PQR',
-    eventTrigger: 'Approval Pending',
-    notificationType: 'In-App + Email',
-    recipientRole: 'head_qa',
-    recipientUserOptional: '',
-    recipientDepartmentOptional: 'QA',
-    ccRoleOptional: '',
-    escalationRole: 'admin',
-    notifyBeforeDueDays: 3,
-    escalationAfterDays: 7,
-    repeatReminder: true,
-    reminderFrequency: 'Daily',
-    templateSubject: '[{{moduleName}}] Approval pending — {{documentNumber}}',
-    templateBody: 'Record {{documentNumber}} in {{moduleName}} requires your approval. Status: {{status}}. Due: {{dueDate}}.',
-    priority: 'High',
-    enableInAppNotification: true,
-    enableEmailNotification: true,
-    enableSmsNotification: false,
-    remarks: 'Default PQR approval notification',
-  },
-  {
-    notificationCode: 'OOS-DETECTED',
-    eventName: 'OOS Detected',
-    moduleName: 'OOS',
-    eventTrigger: 'OOS Detected',
-    notificationType: 'In-App + Email',
-    recipientRole: 'head_qa',
-    recipientUserOptional: '',
-    recipientDepartmentOptional: 'QC',
-    ccRoleOptional: 'qc_manager',
-    escalationRole: 'head_qa',
-    notifyBeforeDueDays: 0,
-    escalationAfterDays: 1,
-    repeatReminder: false,
-    reminderFrequency: 'None',
-    templateSubject: 'OOS Detected — {{documentNumber}}',
-    templateBody: 'OOS {{documentNumber}} detected for batch {{batchNumber}}. Immediate review required.',
-    priority: 'Critical',
-    enableInAppNotification: true,
-    enableEmailNotification: true,
-    enableSmsNotification: false,
-    remarks: '',
-  },
-  {
-    notificationCode: 'CAPA-OVERDUE',
-    eventName: 'CAPA Overdue',
-    moduleName: 'CAPA',
-    eventTrigger: 'CAPA Overdue',
-    notificationType: 'In-App + Email',
-    recipientRole: 'qa_manager',
-    recipientUserOptional: '',
-    recipientDepartmentOptional: 'QA',
-    ccRoleOptional: 'head_qa',
-    escalationRole: 'head_qa',
-    notifyBeforeDueDays: 3,
-    escalationAfterDays: 5,
-    repeatReminder: true,
-    reminderFrequency: 'Daily',
-    templateSubject: 'CAPA Overdue — {{documentNumber}}',
-    templateBody: 'CAPA {{documentNumber}} is overdue. Assigned to {{assignedTo}}.',
-    priority: 'High',
-    enableInAppNotification: true,
-    enableEmailNotification: true,
-    enableSmsNotification: false,
-    remarks: '',
-  },
-];
 
 export async function seedDefaultNotificationSettings(
   meta: NotificationSettingAuditMeta,
 ): Promise<{ created: number; skipped: number }> {
-  let created = 0;
-  let skipped = 0;
-  for (const def of DEFAULT_RULES) {
-    const exists = await checkUniqueField(ADMIN_COLLECTIONS.notificationSettings, 'notificationCode', def.notificationCode);
-    if (!exists) {
-      skipped += 1;
-      continue;
-    }
-    const result = await createNotificationSetting(def, meta);
-    if (result.setting) created += 1;
-    else skipped += 1;
+  try {
+    const fn = httpsCallable<
+      { changeReason: string },
+      { created: number; skipped: number }
+    >(getFirebaseFunctions(), 'seedAdminNotificationSettings');
+    const result = await fn({ changeReason: `Seeded by ${meta.userName}` });
+    return { created: result.data.created || 0, skipped: result.data.skipped || 0 };
+  } catch {
+    return { created: 0, skipped: 0 };
   }
-  return { created, skipped };
+}
+
+export async function dispatchNotificationEvent(payload: Record<string, unknown>) {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'dispatchAdminNotificationEvent');
+    const result = await fn(payload);
+    return { data: result.data as { delivered: number; queued: number }, error: null as string | null };
+  } catch (e) {
+    return { data: null, error: callableErrorMessage(e, 'Unable to dispatch notification') };
+  }
+}
+
+export async function processNotificationQueue() {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'processAdminNotificationQueue');
+    const result = await fn({});
+    return { data: result.data as { processed: number; failed: number }, error: null as string | null };
+  } catch (e) {
+    return { data: null, error: callableErrorMessage(e, 'Unable to process queue') };
+  }
+}
+
+export async function broadcastNotification(payload: Record<string, unknown>) {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'broadcastAdminNotification');
+    const result = await fn(payload);
+    return { data: result.data as { delivered: number }, error: null as string | null };
+  } catch (e) {
+    return { data: null, error: callableErrorMessage(e, 'Unable to broadcast') };
+  }
+}
+
+export async function archiveNotifications(beforeDate: string, changeReason: string) {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'archiveAdminNotifications');
+    const result = await fn({ beforeDate, changeReason });
+    return { data: result.data as { archived: number }, error: null as string | null };
+  } catch (e) {
+    return { data: null, error: callableErrorMessage(e, 'Unable to archive notifications') };
+  }
+}
+
+export async function fetchNotificationQueue(): Promise<Array<Record<string, unknown>>> {
+  if (!isFirebaseConfigured()) return [];
+  try {
+    const snap = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.notificationQueue),
+      orderBy('createdAt', 'desc'),
+      limit(200),
+    ));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch {
+    try {
+      const snap = await getDocs(collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.notificationQueue));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch {
+      return [];
+    }
+  }
+}
+
+export async function fetchNotificationDeliveryLog(): Promise<Array<Record<string, unknown>>> {
+  if (!isFirebaseConfigured()) return [];
+  try {
+    const snap = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.notificationDeliveryLog),
+      orderBy('createdAt', 'desc'),
+      limit(300),
+    ));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch {
+    try {
+      const snap = await getDocs(collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.notificationDeliveryLog));
+      return snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as Record<string, unknown>))
+        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+    } catch {
+      return [];
+    }
+  }
 }

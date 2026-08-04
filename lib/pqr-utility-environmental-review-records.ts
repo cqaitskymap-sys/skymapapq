@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeRole } from '@/lib/permissions';
 import { CLEANROOM_GRADES } from '@/lib/cpv-environmental-monitoring';
 import { UTILITY_TYPES } from '@/lib/cpv-utility-monitoring';
 
@@ -6,6 +7,7 @@ export const PQR_UTILITY_ENV_MODULE = 'PQR Utility & Environmental Review';
 
 export const PQR_UTILITY_ENV_COLLECTIONS = {
   review: 'pqr_utility_environmental_review',
+  batchReview: 'pqr_batch_review',
   sections: 'pqr_sections',
   records: 'pqr_records',
   utilityMonitoring: 'utility_monitoring',
@@ -14,6 +16,7 @@ export const PQR_UTILITY_ENV_COLLECTIONS = {
   utilityMaster: 'utility_master',
   equipmentMaster: 'equipment_master',
   deviations: 'deviations',
+  oos: 'oos_records',
   capaRecords: 'capa_records',
   changeControls: 'change_controls',
   riskAssessment: 'risk_assessment',
@@ -70,6 +73,13 @@ export interface PqrUtilityEnvironmentalReviewRecord {
   impactOnProductQuality: string;
   conclusion: string;
   remarks: string;
+  batchNumbers?: string[];
+  unit?: string;
+  sampleCount?: number;
+  stdDeviation?: number | null;
+  oosCount?: number;
+  criticality?: string;
+  attachmentUrls?: string[];
   sourceType?: 'manual' | 'pull';
   sourceIds?: string[];
   createdAt: string;
@@ -93,7 +103,20 @@ export interface PqrUtilityEnvSummary {
   hvacExcursions: number;
   deviationCount: number;
   capaCount: number;
+  changeControlCount: number;
+  oosCount: number;
   openCriticalRisks: number;
+}
+
+export interface PqrUtilityEnvReviewFilters {
+  reviewType?: string;
+  utilityType?: string;
+  cleanroomGrade?: string;
+  complianceStatus?: string;
+  riskLevel?: string;
+  parameter?: string;
+  system?: string;
+  search?: string;
 }
 
 export interface PqrUtilityEnvCharts {
@@ -226,24 +249,45 @@ export function computeUtilityEnvSummary(records: PqrUtilityEnvironmentalReviewR
     hvacExcursions: active.filter((r) => r.excursionCount > 0 && r.utilityType === 'HVAC').length,
     deviationCount: active.reduce((s, r) => s + r.deviationCount, 0),
     capaCount: active.reduce((s, r) => s + r.capaCount, 0),
+    changeControlCount: active.reduce((s, r) => s + (r.changeControlCount || 0), 0),
+    oosCount: active.reduce((s, r) => s + (r.oosCount || 0), 0),
     openCriticalRisks: active.filter((r) => r.riskLevel === 'Critical').length,
   };
 }
 
 export function generateUtilityEnvNarrative(summary: PqrUtilityEnvSummary, records: PqrUtilityEnvironmentalReviewRecord[]): string {
   const parts: string[] = [];
-  if (records.length === 0) return 'No utility or environmental monitoring data was reviewed for the selected PQR period.';
-  const allUtilityComply = records.filter((r) => r.reviewType === 'Utility Review').every((r) => r.complianceStatus === 'Complies');
-  if (allUtilityComply && summary.totalUtilityRecords > 0) {
+  const active = records.filter((r) => !r.isDeleted);
+  if (active.length === 0) return 'No utility or environmental monitoring data was reviewed for the selected PQR period.';
+
+  const utilityRecords = active.filter((r) => r.reviewType === 'Utility Review');
+  if (summary.totalUtilityRecords > 0 && utilityRecords.every((r) => r.complianceStatus === 'Complies')) {
     parts.push('All utilities reviewed during the period were found within the approved acceptance criteria.');
   }
+
   if (summary.excursionRecords === 0) {
-    parts.push('No significant environmental monitoring excursion impacting product quality was observed during the review period.');
+    parts.push('No significant utility or environmental monitoring excursion was observed during the review period.');
   } else {
-    parts.push('Environmental/utility excursions were observed during the review period and were evaluated for impact on product quality.');
+    parts.push(`${summary.excursionRecords} utility/environmental excursion(s) were observed during the review period and were evaluated for impact on product quality.`);
+    if (summary.gradeAExcursions > 0) {
+      parts.push(`${summary.gradeAExcursions} excursion(s) were associated with Grade A/B classified areas and reviewed for sterility assurance impact.`);
+    }
+    if (summary.wfiExcursions > 0) {
+      parts.push(`${summary.wfiExcursions} Water for Injection related excursion(s) were reviewed for microbial/endotoxin impact.`);
+    }
   }
-  const anyImpact = records.some((r) => r.impactOnProductQuality.toLowerCase() === 'yes');
-  if (!anyImpact) parts.push('Based on the review, no adverse impact on product quality was identified.');
+
+  const anyImpact = active.some((r) => (r.impactOnProductQuality || '').toLowerCase() === 'yes');
+  if (anyImpact) {
+    parts.push('At least one excursion was assessed as having a potential impact on product quality and was escalated through the quality system.');
+  } else {
+    parts.push('Based on the available monitoring records, no adverse impact on product quality was identified.');
+  }
+
+  if (summary.deviationCount > 0 || summary.oosCount > 0 || summary.capaCount > 0 || summary.changeControlCount > 0) {
+    parts.push(`Linked quality events: ${summary.deviationCount} deviation(s), ${summary.oosCount} OOS, ${summary.capaCount} CAPA, ${summary.changeControlCount} change control(s).`);
+  }
+
   parts.push(`Reviewed ${summary.totalUtilityRecords} utility and ${summary.totalEnvironmentalRecords} environmental parameter summaries.`);
   return parts.join(' ');
 }
@@ -299,21 +343,39 @@ export function buildUtilityEnvCharts(records: PqrUtilityEnvironmentalReviewReco
   };
 }
 
+const VIEW_ROLES = new Set([
+  'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive',
+  'qc_manager', 'qc_executive', 'engineering_manager', 'maintenance',
+  'production_manager', 'production_executive', 'validation', 'auditor', 'viewer',
+]);
+
+const MANAGE_ROLES = new Set([
+  'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive',
+  'engineering_manager', 'maintenance', 'validation',
+]);
+
+const ADD_ROLES = new Set([
+  ...Array.from(MANAGE_ROLES), 'production_manager', 'qc_manager',
+]);
+
+const EXPORT_ROLES = new Set([
+  'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive', 'auditor',
+]);
+
 export function canViewUtilityEnvReview(role?: string): boolean {
-  return [
-    'super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'qa_executive',
-    'engineering', 'maintenance', 'qc', 'qc_manager', 'qc_executive',
-    'production', 'production_manager', 'production_executive',
-    'auditor', 'viewer',
-  ].includes(role || '');
+  return VIEW_ROLES.has(normalizeRole(role));
 }
 
 export function canManageUtilityEnvReview(role?: string): boolean {
-  return ['super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'qa_executive', 'engineering', 'maintenance'].includes(role || '');
+  return MANAGE_ROLES.has(normalizeRole(role));
+}
+
+export function canAddUtilityEnvReview(role?: string): boolean {
+  return ADD_ROLES.has(normalizeRole(role));
 }
 
 export function canExportUtilityEnvReview(role?: string): boolean {
-  return ['super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'auditor'].includes(role || '');
+  return EXPORT_ROLES.has(normalizeRole(role));
 }
 
 export function complianceStatusColor(status: string): string {
@@ -341,4 +403,115 @@ export function excursionBadgeColor(count: number): string {
   if (count === 0) return 'bg-green-50 text-green-700 border-green-200';
   if (count <= 2) return 'bg-amber-50 text-amber-800 border-amber-200';
   return 'bg-red-50 text-red-700 border-red-200';
+}
+
+const S = (v: unknown, fb = ''): string => (v === null || v === undefined ? fb : String(v));
+const N = (v: unknown, fb = 0): number => { const n = Number(v); return Number.isFinite(n) ? n : fb; };
+const NOrNull = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+export function normalizeUtilityEnvReviewRecord(raw: Record<string, unknown>): PqrUtilityEnvironmentalReviewRecord {
+  const partial: Partial<PqrUtilityEnvironmentalReviewRecord> = {
+    reviewType: S(raw.reviewType, 'Utility Review'),
+    cleanroomGrade: S(raw.cleanroomGrade, 'Unclassified'),
+    utilityType: S(raw.utilityType, 'Other'),
+    monitoringParameter: S(raw.monitoringParameter),
+    impactOnProductQuality: S(raw.impactOnProductQuality, 'No'),
+    alertCount: N(raw.alertCount),
+    actionCount: N(raw.actionCount),
+    excursionCount: N(raw.excursionCount),
+  };
+  const hasComputed = raw.complianceStatus && Array.isArray(raw.complianceReasons) && raw.riskLevel;
+  const computed = hasComputed
+    ? {
+      complianceStatus: S(raw.complianceStatus) as PqrComplianceStatus,
+      complianceReasons: raw.complianceReasons as string[],
+      riskLevel: S(raw.riskLevel, 'Low'),
+    }
+    : computeUtilityEnvCompliance(partial);
+
+  const batchNumbers = Array.isArray(raw.batchNumbers)
+    ? (raw.batchNumbers as unknown[]).map((b) => String(b)).filter(Boolean)
+    : [];
+
+  return {
+    id: S(raw.id) || undefined,
+    reviewId: S(raw.reviewId, `UER-${S(raw.id, 'X')}`),
+    pqrId: S(raw.pqrId),
+    pqrNumber: S(raw.pqrNumber),
+    product: S(raw.product || raw.productName),
+    productCode: S(raw.productCode),
+    reviewPeriodFrom: S(raw.reviewPeriodFrom).slice(0, 10),
+    reviewPeriodTo: S(raw.reviewPeriodTo).slice(0, 10),
+    reviewType: S(raw.reviewType, 'Utility Review'),
+    systemAreaName: S(raw.systemAreaName),
+    systemAreaCode: S(raw.systemAreaCode),
+    utilityType: S(raw.utilityType, 'Other'),
+    cleanroomGrade: S(raw.cleanroomGrade, 'Unclassified'),
+    roomNumber: S(raw.roomNumber),
+    monitoringParameter: S(raw.monitoringParameter),
+    observedMinimum: NOrNull(raw.observedMinimum),
+    observedMaximum: NOrNull(raw.observedMaximum),
+    observedAverage: NOrNull(raw.observedAverage),
+    lowerLimit: N(raw.lowerLimit),
+    upperLimit: N(raw.upperLimit),
+    alertCount: N(raw.alertCount),
+    actionCount: N(raw.actionCount),
+    excursionCount: N(raw.excursionCount),
+    deviationCount: N(raw.deviationCount),
+    capaCount: N(raw.capaCount),
+    changeControlCount: N(raw.changeControlCount),
+    complianceStatus: computed.complianceStatus,
+    complianceReasons: computed.complianceReasons,
+    riskLevel: computed.riskLevel,
+    impactOnProductQuality: S(raw.impactOnProductQuality, 'No'),
+    conclusion: S(raw.conclusion),
+    remarks: S(raw.remarks),
+    batchNumbers,
+    unit: S(raw.unit),
+    sampleCount: N(raw.sampleCount),
+    stdDeviation: NOrNull(raw.stdDeviation),
+    oosCount: N(raw.oosCount),
+    criticality: S(raw.criticality),
+    attachmentUrls: Array.isArray(raw.attachmentUrls) ? raw.attachmentUrls as string[] : [],
+    sourceType: (raw.sourceType as PqrUtilityEnvironmentalReviewRecord['sourceType']) || 'manual',
+    sourceIds: Array.isArray(raw.sourceIds) ? (raw.sourceIds as unknown[]).map((s) => String(s)) : [],
+    createdAt: S(raw.createdAt),
+    updatedAt: S(raw.updatedAt),
+    createdBy: S(raw.createdBy),
+    updatedBy: S(raw.updatedBy),
+    createdByName: S(raw.createdByName),
+    updatedByName: S(raw.updatedByName),
+    isDeleted: Boolean(raw.isDeleted),
+  };
+}
+
+export function filterUtilityEnvReviewRecords(
+  records: PqrUtilityEnvironmentalReviewRecord[],
+  filters: PqrUtilityEnvReviewFilters,
+): PqrUtilityEnvironmentalReviewRecord[] {
+  const search = (filters.search || '').trim().toLowerCase();
+  return records.filter((r) => {
+    if (r.isDeleted) return false;
+    if (filters.reviewType && filters.reviewType !== 'all' && r.reviewType !== filters.reviewType) return false;
+    if (filters.utilityType && filters.utilityType !== 'all' && r.utilityType !== filters.utilityType) return false;
+    if (filters.cleanroomGrade && filters.cleanroomGrade !== 'all' && r.cleanroomGrade !== filters.cleanroomGrade) return false;
+    if (filters.complianceStatus && filters.complianceStatus !== 'all' && r.complianceStatus !== filters.complianceStatus) return false;
+    if (filters.riskLevel && filters.riskLevel !== 'all' && r.riskLevel !== filters.riskLevel) return false;
+    if (filters.parameter && filters.parameter !== 'all'
+      && !r.monitoringParameter.toLowerCase().includes(filters.parameter.toLowerCase())) return false;
+    if (filters.system && filters.system !== 'all'
+      && !r.systemAreaName.toLowerCase().includes(filters.system.toLowerCase())) return false;
+    if (search) {
+      const hay = [
+        r.systemAreaName, r.systemAreaCode, r.monitoringParameter, r.utilityType,
+        r.cleanroomGrade, r.roomNumber, r.product, r.productCode, r.remarks, r.conclusion,
+      ].join(' ').toLowerCase();
+      if (!hay.includes(search)) return false;
+    }
+    return true;
+  });
 }

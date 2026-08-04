@@ -1,13 +1,13 @@
 import {
-  addDoc, collection, getDocs, limit, orderBy, query, where,
+  collection, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
+import { isCpvProductOperational } from '@/lib/cpv-product-master';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
-import { createAlert } from '@/lib/cpv-module-service';
 import { fetchCppResults } from '@/lib/cpv-cpp-monitoring-service';
 import { fetchCqaResults } from '@/lib/cpv-cqa-monitoring-service';
 import { fetchYieldRecords } from '@/lib/cpv-yield-monitoring-service';
@@ -20,7 +20,6 @@ import { fetchHoldTimeRecords } from '@/lib/cpv-hold-time-monitoring-service';
 import {
   TREND_ANALYSIS_COLLECTION,
   TREND_ANALYSIS_LEGACY,
-  TREND_ANALYSIS_MODULE,
   buildTrendId,
   calculateTrendAnalysis,
   dataSourceForParameterType,
@@ -31,6 +30,7 @@ import {
   type TrendCalculationResult,
   type TrendSourcePoint,
 } from '@/lib/cpv-trend-records';
+import { polishRecommendationText } from '@/lib/ai/client';
 
 export interface TrendAnalysisActor {
   id: string;
@@ -38,39 +38,16 @@ export interface TrendAnalysisActor {
   role?: string;
 }
 
-function actorCtx(actor: TrendAnalysisActor) {
-  return { moduleName: TREND_ANALYSIS_MODULE, actor: { id: actor.id, name: actor.name } as DocumentActor };
-}
-
-async function logTrendAudit(
-  actionType: string,
-  recordId: string,
-  actor: TrendAnalysisActor,
-  oldVal?: unknown,
-  newVal?: unknown,
-  docNo?: string,
-) {
-  await createAuditLog({
-    moduleName: TREND_ANALYSIS_MODULE,
-    collectionName: TREND_ANALYSIS_COLLECTION,
-    recordId,
-    documentNumber: docNo,
-    actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-  await writeAuditTrail({
-    collectionName: TREND_ANALYSIS_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: TREND_ANALYSIS_MODULE,
-  });
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string') {
+    const msg = (e as { message: string }).message;
+    if (msg.includes('FirebaseError:') || msg.includes('functions/')) {
+      const cleaned = msg.replace(/^FirebaseError:\s*/i, '').replace(/^functions\/[\w-]+:\s*/i, '');
+      return cleaned || fallback;
+    }
+    return msg || fallback;
+  }
+  return fallback;
 }
 
 function str(v: unknown, fb = ''): string {
@@ -90,6 +67,9 @@ function normalizeRecord(raw: Record<string, unknown>): TrendAnalysisRecord {
   const rawStatus = str(raw.status);
   const chartData = Array.isArray(raw.chartData) ? raw.chartData as TrendAnalysisRecord['chartData'] : [];
   const sourcePreview = Array.isArray(raw.sourcePreview) ? raw.sourcePreview as TrendSourcePoint[] : [];
+  const forecastSeries = Array.isArray(raw.forecastSeries)
+    ? (raw.forecastSeries as unknown[]).map(Number).filter(Number.isFinite)
+    : [];
 
   return {
     id: str(raw.id),
@@ -107,9 +87,42 @@ function normalizeRecord(raw: Record<string, unknown>): TrendAnalysisRecord {
     batchCount: num(raw.batchCount ?? raw.batch_count),
     dataPointsCount: num(raw.dataPointsCount ?? raw.data_points_count ?? raw.count),
     mean: num(raw.mean),
+    median: num(raw.median),
+    mode: raw.mode == null || raw.mode === '' ? null : num(raw.mode),
     minimumValue: num(raw.minimumValue ?? raw.minimum_value ?? raw.min),
     maximumValue: num(raw.maximumValue ?? raw.maximum_value ?? raw.max),
+    range: num(raw.range),
+    variance: num(raw.variance),
     standardDeviation: num(raw.standardDeviation ?? raw.standard_deviation ?? raw.stdDev),
+    movingAverage: num(raw.movingAverage),
+    weightedAverage: num(raw.weightedAverage),
+    rollingAverage: num(raw.rollingAverage),
+    regressionSlope: num(raw.regressionSlope),
+    regressionIntercept: num(raw.regressionIntercept),
+    regressionR2: num(raw.regressionR2),
+    correlation: num(raw.correlation),
+    covariance: num(raw.covariance),
+    zScoreMean: num(raw.zScoreMean),
+    sigmaLevel: num(raw.sigmaLevel),
+    cp: num(raw.cp),
+    cpk: num(raw.cpk),
+    pp: num(raw.pp),
+    ppk: num(raw.ppk),
+    ucl: num(raw.ucl),
+    lcl: num(raw.lcl),
+    ewmaLast: num(raw.ewmaLast),
+    cusumHighLast: num(raw.cusumHighLast),
+    cusumLowLast: num(raw.cusumLowLast),
+    outlierCount: num(raw.outlierCount),
+    forecastNext: num(raw.forecastNext),
+    forecastSeries,
+    processDriftDetected: Boolean(raw.processDriftDetected),
+    qualityDegradation: Boolean(raw.qualityDegradation),
+    healthScore: num(raw.healthScore),
+    confidenceScore: num(raw.confidenceScore),
+    aiRecommendation: str(raw.aiRecommendation),
+    goldenBatchNumber: str(raw.goldenBatchNumber),
+    goldenBatchDelta: num(raw.goldenBatchDelta),
     trendDirection: (str(raw.trendDirection || raw.trend_direction, 'No Data') as TrendAnalysisRecord['trendDirection']),
     trendStatus: (str(raw.trendStatus || raw.trend_status, 'Insufficient Data') as TrendAnalysisRecord['trendStatus']),
     riskLevel: str(raw.riskLevel || raw.risk_level, 'Low') as TrendAnalysisRecord['riskLevel'],
@@ -118,17 +131,23 @@ function normalizeRecord(raw: Record<string, unknown>): TrendAnalysisRecord {
     alertCount: num(raw.alertCount ?? raw.alert_count),
     actionCount: num(raw.actionCount ?? raw.action_count),
     capaSuggested: Boolean(raw.capaSuggested || raw.capa_suggested),
+    deviationRequired: Boolean(raw.deviationRequired),
     conclusion: str(raw.conclusion),
     recommendation: str(raw.recommendation),
+    changeReason: str(raw.changeReason),
     generatedBy: str(raw.generatedBy || raw.generated_by),
     generatedDate: str(raw.generatedDate || raw.generated_date || raw.createdAt),
     reviewedBy: str(raw.reviewedBy || raw.reviewed_by),
     reviewDate: str(raw.reviewDate || raw.review_date),
+    approvedBy: str(raw.approvedBy),
+    approvalDate: str(raw.approvalDate),
     status: (workflowStatuses.includes(rawStatus)
       ? rawStatus
       : str(raw.workflowStatus || raw.workflow_status, 'Generated')) as TrendAnalysisRecord['status'],
     remarks: str(raw.remarks),
     linkedRiskId: str(raw.linkedRiskId || raw.linked_risk_id),
+    linkedDeviationNumber: str(raw.linkedDeviationNumber),
+    linkedCapaNumber: str(raw.linkedCapaNumber),
     isLocked: Boolean(raw.isLocked || raw.is_locked),
     chartData,
     sourcePreview,
@@ -388,239 +407,223 @@ export function previewTrendCalculation(
   return calculateTrendAnalysis(sourceData, form.parameterName);
 }
 
-async function maybeCreateRiskAndAlert(
-  record: TrendAnalysisRecord,
-  actor: TrendAnalysisActor,
-): Promise<string> {
-  let riskId = '';
-  const needsRisk = ['Alert', 'OOT', 'OOS', 'Action Required'].includes(record.trendStatus);
-  if (needsRisk) {
-    try {
-      const { createRisk } = await import('@/lib/cpv-service');
-      const risk = await createRisk({
-        productName: record.productName,
-        batchNo: '',
-        factor: record.parameterName,
-        riskDescription: `Trend ${record.trendStatus} for ${record.parameterName} (${record.trendDirection})`,
-        occurrence: record.trendStatus === 'OOS' ? 4 : 3,
-        severity: record.riskLevel === 'Critical' ? 5 : record.riskLevel === 'High' ? 4 : 3,
-        detectability: 3,
-        mitigation: 'Review trend analysis and implement corrective actions.',
-        owner: actor.name,
-        dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      }, { id: actor.id, name: actor.name, role: actor.role || 'qa' }, 0);
-      if (risk) riskId = String((risk as { id?: string }).id || '');
-      await logTrendAudit('risk created', record.id, actor, null, riskId, record.trendId);
-    } catch { /* optional */ }
-  }
-  if (record.oosCount > 0 || record.capaSuggested) {
-    try {
-      await createAlert({
-        alertType: record.oosCount > 0 ? 'OOT' : 'Trend Deteriorating',
-        severity: record.riskLevel === 'Critical' ? 'Critical' : 'High',
-        module: TREND_ANALYSIS_MODULE,
-        productName: record.productName,
-        batchNo: '',
-        parameterName: record.parameterName,
-        message: `${record.trendStatus} trend for ${record.parameterName}`,
-        observedValue: record.mean,
-        recordId: record.id,
-      }, { id: actor.id, name: actor.name, role: actor.role });
-      await logTrendAudit('CAPA suggested', record.id, actor, null, { trendStatus: record.trendStatus }, record.trendId);
-    } catch { /* optional */ }
-    if (isFirebaseConfigured()) {
-      try {
-        await addDoc(collection(getFirebaseFirestore(), 'notifications'), {
-          title: 'Trend Analysis Alert',
-          message: `${record.parameterName}: ${record.trendStatus}`,
-          module: TREND_ANALYSIS_MODULE,
-          record_id: record.id,
-          target_roles: ['qa', 'cpv'],
-          read: false,
-          created_at: new Date().toISOString(),
-        });
-      } catch { /* optional */ }
-    }
-  }
-  return riskId;
-}
-
 export async function createTrendAnalysis(
   form: TrendAnalysisFormData,
   sourceData: TrendSourcePoint[],
-  actor: TrendAnalysisActor,
+  _actor: TrendAnalysisActor,
 ): Promise<{ result: TrendAnalysisRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    const product = await fetchCpvProductById(form.cpvProductId);
-    if (product?.cpvStatus === 'Inactive') return { result: null, error: 'Inactive product — trend generation not allowed.' };
-
-    const calc = previewTrendCalculation(form, sourceData);
-    if (calc.dataPointsCount < 3) return { result: null, error: 'At least 3 numeric data points required for trend analysis.' };
-
-    const today = new Date().toISOString().split('T')[0];
-    const payload = {
-      ...form,
-      trendId: buildTrendId(form.productCode, form.parameterCode),
-      batchCount: calc.batchCount,
-      dataPointsCount: calc.dataPointsCount,
-      mean: calc.mean,
-      minimumValue: calc.minimumValue,
-      maximumValue: calc.maximumValue,
-      standardDeviation: calc.standardDeviation,
-      trendDirection: calc.trendDirection,
-      trendStatus: calc.trendStatus,
-      riskLevel: calc.riskLevel,
-      ootCount: calc.ootCount,
-      oosCount: calc.oosCount,
-      alertCount: calc.alertCount,
-      actionCount: calc.actionCount,
-      capaSuggested: calc.capaSuggested,
-      generatedBy: actor.name,
-      generatedDate: today,
-      status: 'Generated' as const,
-      isLocked: false,
-      linkedRiskId: '',
-      chartData: calc.chartData.slice(0, 100),
-      sourcePreview: sourceData.slice(0, 50),
-      reviewedBy: '',
-      reviewDate: '',
-      createdByName: actor.name,
-      updatedByName: actor.name,
-    };
-
-    const created = await createRecord(
-      TREND_ANALYSIS_COLLECTION,
-      payload as Omit<TrendAnalysisRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
-    );
-    let result = normalizeRecord(created as unknown as Record<string, unknown>);
-
-    const riskId = await maybeCreateRiskAndAlert(result, actor);
-    if (riskId) {
-      const updated = await updateRecord(TREND_ANALYSIS_COLLECTION, result.id, { linkedRiskId: riskId }, actorCtx(actor));
-      if (updated) result = normalizeRecord(updated as unknown as Record<string, unknown>);
+    if (!form.changeReason || form.changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
     }
-
-    await logTrendAudit('generate trend', result.id, actor, null, result, result.trendId);
-    await logTrendAudit('trend status calculation', result.id, actor, null, calc, result.trendId);
-    return { result, error: null };
+    const product = await fetchCpvProductById(form.cpvProductId);
+    if (product && !isCpvProductOperational(product.cpvStatus)) {
+      return { result: null, error: 'Selected CPV product is not operational.' };
+    }
+    if (sourceData.length < 3) {
+      return { result: null, error: 'At least 3 numeric data points required for trend analysis.' };
+    }
+    const preview = previewTrendCalculation(form, sourceData);
+    const aiRecommendation = await polishRecommendationText(preview.aiRecommendation, {
+      module: 'Trend Analysis',
+      parameterName: form.parameterName,
+      trendStatus: preview.trendStatus,
+      trendDirection: preview.trendDirection,
+    });
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminTrendAnalysis',
+    );
+    const result = await fn({
+      ...form,
+      points: sourceData,
+      changeReason: form.changeReason,
+      aiRecommendation,
+    });
+    return { result: normalizeRecord(result.data), error: null };
   } catch (e) {
     console.error('createTrendAnalysis failed', e);
-    return { result: null, error: 'Failed to save trend analysis.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to save trend analysis.') };
   }
 }
 
 export async function regenerateTrendAnalysis(
   id: string,
-  actor: TrendAnalysisActor,
+  _actor: TrendAnalysisActor,
   existing: TrendAnalysisRecord,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean; changeReason?: string; sourceData?: TrendSourcePoint[] },
 ): Promise<{ result: TrendAnalysisRecord | null; error: string | null }> {
-  if (existing.isLocked && existing.status === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Approved record is locked. QA override required.' };
-  }
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    const sourceData = await fetchTrendSourceData(
-      existing.dataSource,
-      existing.productName,
-      existing.parameterName,
-      existing.reviewPeriodFrom,
-      existing.reviewPeriodTo,
-    );
-    const calc = previewTrendCalculation(existing as TrendAnalysisFormData, sourceData);
-    if (calc.dataPointsCount < 3) {
-      return { result: null, error: 'At least 3 numeric data points required for trend analysis.' };
+    const changeReason = options?.changeReason || existing.changeReason || '';
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
     }
-    const {
-      batchCount, dataPointsCount, mean, minimumValue, maximumValue, standardDeviation,
-      trendDirection, trendStatus, riskLevel, ootCount, oosCount, alertCount, actionCount, capaSuggested,
-    } = calc;
-    const updates = {
-      batchCount,
-      dataPointsCount,
-      mean,
-      minimumValue,
-      maximumValue,
-      standardDeviation,
-      trendDirection,
-      trendStatus,
-      riskLevel,
-      ootCount,
-      oosCount,
-      alertCount,
-      actionCount,
-      capaSuggested,
-      chartData: calc.chartData.slice(0, 100),
-      sourcePreview: sourceData.slice(0, 50),
-      status: 'Generated' as const,
-      isLocked: qaOverride ? false : existing.isLocked,
-      generatedBy: actor.name,
-      generatedDate: new Date().toISOString().split('T')[0],
-      updatedByName: actor.name,
-    };
-    const updated = await updateRecord(TREND_ANALYSIS_COLLECTION, id, updates as Partial<TrendAnalysisRecord>, actorCtx(actor));
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-    await logTrendAudit(qaOverride ? 'QA override' : 're-generate trend', id, actor, existing, result, result.trendId);
-    return { result, error: null };
+    if (existing.isLocked && existing.status === 'Approved' && !qaOverride) {
+      return { result: null, error: 'Approved record is locked. QA override required.' };
+    }
+    if (qaOverride && options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    }
+    let sourceData = options?.sourceData;
+    if (!sourceData?.length) {
+      sourceData = await fetchTrendSourceData(
+        existing.dataSource,
+        existing.productName,
+        existing.parameterName,
+        existing.reviewPeriodFrom,
+        existing.reviewPeriodTo,
+      );
+    }
+    if ((sourceData?.length || 0) < 3 && existing.sourcePreview.length < 3) {
+      return { result: null, error: 'Insufficient source data to regenerate.' };
+    }
+    const points = sourceData && sourceData.length >= 3 ? sourceData : existing.sourcePreview;
+    const preview = previewTrendCalculation(
+      { ...existing, changeReason } as TrendAnalysisFormData,
+      points,
+    );
+    const aiRecommendation = await polishRecommendationText(preview.aiRecommendation, {
+      module: 'Trend Analysis',
+      parameterName: existing.parameterName,
+      trendStatus: preview.trendStatus,
+      trendDirection: preview.trendDirection,
+    });
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'regenerateAdminTrendAnalysis',
+    );
+    const result = await fn({
+      ...existing,
+      id,
+      points,
+      changeReason,
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
+      aiRecommendation,
+    });
+    return { result: normalizeRecord(result.data), error: null };
   } catch (e) {
     console.error('regenerateTrendAnalysis failed', e);
-    return { result: null, error: 'Regeneration failed.' };
+    return { result: null, error: cfErrorMessage(e, 'Regeneration failed.') };
   }
 }
 
-export async function reviewTrendAnalysis(id: string, actor: TrendAnalysisActor, existing: TrendAnalysisRecord) {
-  const updated = await updateRecord(TREND_ANALYSIS_COLLECTION, id, {
-    status: 'Under Review',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-  await logTrendAudit('review trend', id, actor, existing.status, 'Under Review', result.trendId);
-  return { result, error: null };
-}
-
-export async function approveTrendAnalysis(id: string, actor: TrendAnalysisActor, existing: TrendAnalysisRecord, qaOverride = false) {
-  if (existing.isLocked && existing.status === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Already approved.' };
+export async function reviewTrendAnalysis(
+  id: string,
+  _actor: TrendAnalysisActor,
+  _existing: TrendAnalysisRecord,
+  changeReason = 'Submitted for QA review',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'reviewAdminTrendAnalysis',
+    );
+    const result = await fn({ id, changeReason });
+    return { result: normalizeRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to submit review.') };
   }
-  const updated = await updateRecord(TREND_ANALYSIS_COLLECTION, id, {
-    status: 'Approved',
-    isLocked: true,
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-  await logTrendAudit(qaOverride ? 'QA override' : 'approve trend', id, actor, existing.status, 'Approved', result.trendId);
-  return { result, error: null };
 }
 
-export async function rejectTrendAnalysis(id: string, actor: TrendAnalysisActor, existing: TrendAnalysisRecord) {
-  const updated = await updateRecord(TREND_ANALYSIS_COLLECTION, id, {
-    status: 'Rejected',
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-  await logTrendAudit('reject trend', id, actor, existing.status, 'Rejected', result.trendId);
-  return { result, error: null };
+export async function approveTrendAnalysis(
+  id: string,
+  _actor: TrendAnalysisActor,
+  _existing: TrendAnalysisRecord,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'approveAdminTrendAnalysis',
+    );
+    const result = await fn({ id, changeReason, esignConfirmed: true });
+    return { result: normalizeRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to approve.') };
+  }
+}
+
+export async function rejectTrendAnalysis(
+  id: string,
+  _actor: TrendAnalysisActor,
+  _existing: TrendAnalysisRecord,
+  changeReason = 'Rejected by QA',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'rejectAdminTrendAnalysis',
+    );
+    const result = await fn({ id, changeReason });
+    return { result: normalizeRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to reject.') };
+  }
+}
+
+export async function softDeleteTrendAnalysis(
+  id: string,
+  _actor: TrendAnalysisActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+): Promise<{ error: string | null }> {
+  if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminTrendAnalysis');
+    await fn({ id, changeReason, esignConfirmed: true });
+    return { error: null };
+  } catch (e) {
+    return { error: cfErrorMessage(e, 'Failed to archive.') };
+  }
 }
 
 export async function fetchTrendAnalysisAuditTrail(recordId: string) {
   if (!isFirebaseConfigured()) return [];
   try {
-    const snap = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('documentId', '==', recordId), limit(50)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap = await getDocs(query(
+      collection(getFirebaseFirestore(), 'audit_trail'),
+      where('documentId', '==', recordId),
+      limit(50),
+    ));
+    if (!snap.empty) return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap2 = await getDocs(query(
+      collection(getFirebaseFirestore(), 'audit_trail'),
+      where('recordId', '==', recordId),
+      limit(50),
+    ));
+    return snap2.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch {
     return [];
   }
 }
 
 export async function logTrendExport(actor: TrendAnalysisActor, type: string, count: number) {
-  await logTrendAudit(`export trend ${type}`, 'export', actor, null, { type, count });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminTrendAnalysisExport');
+    await fn({ count, format: type || 'CSV', changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logTrendExport CF failed (non-blocking)', e);
+  }
 }
 
 export async function fetchParametersForTrend(
@@ -666,21 +669,15 @@ export async function fetchParametersForTrend(
 
 export async function previewTrendSourceData(
   form: TrendAnalysisFormData,
-  actor: TrendAnalysisActor,
+  _actor: TrendAnalysisActor,
 ): Promise<TrendSourcePoint[]> {
-  const data = await fetchTrendSourceData(
+  return fetchTrendSourceData(
     form.dataSource,
     form.productName,
     form.parameterName,
     form.reviewPeriodFrom,
     form.reviewPeriodTo,
   );
-  await logTrendAudit('source data preview', 'preview', actor, null, {
-    product: form.productName,
-    parameter: form.parameterName,
-    count: data.length,
-  }, form.productCode);
-  return data;
 }
 
 export {

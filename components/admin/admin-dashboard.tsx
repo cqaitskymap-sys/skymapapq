@@ -280,9 +280,13 @@ export function AdminDashboard({ basePath = '/admin' }: AdminDashboardProps) {
       </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Login Activity */}
         <Card>
-          <CardHeader><CardTitle className="text-base">User Activity — Recent Logins</CardTitle></CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <CardTitle className="text-base">User Activity — Recent Logins</CardTitle>
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/admin/login-activity">View all</Link>
+            </Button>
+          </CardHeader>
           <CardContent className="overflow-x-auto">
             {data.loginActivity.length === 0 ? (
               <EmptyState title="No login activity" message="Login events will appear here once users sign in." />
@@ -369,7 +373,11 @@ export function AdminDashboard({ basePath = '/admin' }: AdminDashboardProps) {
         {/* System Health */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-base">System Health</CardTitle>
+            <CardTitle className="text-base">
+              <Link href="/admin/system-health" className="hover:text-blue-600 hover:underline">
+                System Health
+              </Link>
+            </CardTitle>
             <StatusBadge status={data.systemHealth.overall} />
           </CardHeader>
           <CardContent className="space-y-3">

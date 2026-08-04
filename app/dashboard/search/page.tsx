@@ -21,7 +21,6 @@ const SEARCHABLE_ROUTES: ReadonlyArray<readonly [string, string, string, AppModu
   ['Audit Trail', '/admin/audit-trail', 'Administrative audit records', 'admin'],
   ['Notifications', '/notifications', 'Workflow alerts and reminders', 'qms'],
   ['Document Management', '/qms/documents/master', 'Controlled documents and SOPs', 'dms'],
-  ['Training Management', '/training', 'Training assignments, matrix and effectiveness', 'training'],
   ['CAPA', '/qms/capa', 'Corrective and preventive actions', 'capa'],
   ['Deviation', '/qms/deviation', 'Deviation investigation and closure', 'deviation'],
   ['Change Control', '/qms/change-control', 'Change assessment and implementation', 'change_control'],
@@ -88,7 +87,7 @@ export default function GlobalSearchPage() {
       {!query ? (
         <EmptyState title="Enter a search" message="Use the search field in the header to find a module or workflow." />
       ) : results.length === 0 ? (
-        <EmptyState title="No matching modules" message="Try a broader term such as training, document, user, or audit." />
+        <EmptyState title="No matching modules" message="Try a broader term such as document, user, or audit." />
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {results.map(([label, href, description]) => (

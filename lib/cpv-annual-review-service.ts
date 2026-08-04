@@ -1,10 +1,10 @@
 import {
-  addDoc, collection, getDocs, limit, orderBy, query, where,
+  collection, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { ref, uploadString } from 'firebase/storage';
-import { getFirebaseFirestore, isFirebaseConfigured, getFirebaseStorage } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { uploadTextToStorage } from '@/lib/storage-text-upload';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS, CppRecord, CqaRecord, RiskRecord } from '@/lib/cpv';
 import { fetchStabilityResults } from '@/lib/cpv-stability-monitoring-service';
@@ -19,6 +19,7 @@ import { fetchEnvironmentalRecords } from '@/lib/cpv-environmental-monitoring-se
 import { fetchYieldRecords } from '@/lib/cpv-yield-monitoring-service';
 import { fetchRiskAssessmentRecords } from '@/lib/cpv-risk-assessment-service';
 import { fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
+import { enrichAiClient } from '@/lib/ai/client';
 import {
   AnnualCpvDocument,
   AnnualCpvSignature,
@@ -29,15 +30,14 @@ import {
   generateAnnualCpvNumber,
 } from '@/lib/cpv-annual-review';
 import {
-  CPV_REVIEW_APPROVALS_COLLECTION,
   CPV_REVIEW_COLLECTION,
   CPV_REVIEW_LEGACY,
-  CPV_REVIEW_MODULE,
   CPV_REVIEW_SECTIONS_COLLECTION,
-  REPORT_SECTION_KEYS,
-  REPORT_SECTION_LABELS,
-  buildCpvReviewId,
+  computeAiInsights,
+  computeOverallAssessment,
+  enrichCpvReviewMetrics,
   generateCpvReviewNumber,
+  buildCpvReviewId,
   type CpvAnnualReviewRecord,
   type CpvReviewApprovalRecord,
   type CpvReviewFormData,
@@ -47,43 +47,17 @@ import {
 
 export type AnnualReviewActor = { id: string; name: string; role?: string };
 
-function actorCtx(actor: AnnualReviewActor) {
-  return { moduleName: CPV_REVIEW_MODULE, actor: { id: actor.id, name: actor.name } as DocumentActor };
+function callableErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const msg = String((e as { message?: string }).message || '');
+    if (msg) return msg.replace(/^Firebase:\s*/i, '').replace(/\s*\([^)]*\)\.?$/, '').trim() || fallback;
+  }
+  return fallback;
 }
 
-async function logReviewAudit(
-  actionType: string,
-  recordId: string,
-  actor: AnnualReviewActor,
-  oldVal?: unknown,
-  newVal?: unknown,
-  docNo?: string,
-) {
-  try {
-    await createAuditLog({
-      moduleName: CPV_REVIEW_MODULE,
-      collectionName: CPV_REVIEW_COLLECTION,
-      recordId,
-      documentNumber: docNo,
-      actionType,
-      oldValue: oldVal,
-      newValue: newVal,
-      user: { id: actor.id, name: actor.name },
-      status: 'Success',
-    });
-    await writeAuditTrail({
-      collectionName: CPV_REVIEW_COLLECTION,
-      documentId: recordId,
-      action: actionType,
-      oldValue: oldVal,
-      newValue: newVal,
-      userId: actor.id,
-      userName: actor.name,
-      moduleName: CPV_REVIEW_MODULE,
-    });
-  } catch (e) {
-    console.error('logReviewAudit failed', e);
-  }
+function resolveChangeReason(primary?: string | null, fallback?: string | null, defaultReason?: string): string | null {
+  const candidate = (primary || fallback || defaultReason || '').trim();
+  return candidate.length >= 5 ? candidate : null;
 }
 
 async function readFirstAvailable(candidates: string[], max = 500): Promise<Record<string, unknown>[]> {
@@ -118,70 +92,53 @@ function mapLegacyStatus(status: string): CpvReviewStatus {
     under_review: 'Under Review',
     approved: 'Approved',
     archived: 'Archived',
+    generated: 'Generated',
+    rejected: 'Rejected',
   };
   return map[status] || (status as CpvReviewStatus) || 'Draft';
 }
 
-function buildSectionsFromSnapshot(reviewId: string, snap: AnnualCpvSnapshot): CpvReviewSectionRecord[] {
-  const sectionData: Record<string, { summary: string; content?: string }> = {
-    executiveSummary: { summary: snap.executiveSummary, content: snap.executiveSummary },
-    productBatchSummary: { summary: snap.batches.summary, content: snap.batches.summary },
-    cppReview: { summary: snap.cpp.summary },
-    cqaReview: { summary: snap.cqa.summary },
-    rawMaterialReview: { summary: snap.rawMaterial.summary },
-    packingMaterialReview: { summary: snap.packingMaterial.summary },
-    utilityReview: { summary: snap.utility.summary },
-    environmentalReview: { summary: snap.environmental.summary },
-    yieldReview: { summary: snap.yield.summary },
-    stabilityReview: { summary: snap.stability.summary },
-    holdTimeReview: { summary: snap.holdTime.summary },
-    processCapabilityReview: { summary: snap.processCapability.summary },
-    trendAnalysisReview: { summary: snap.trendAnalysis.summary },
-    spcReview: { summary: snap.spc.summary },
-    riskAssessmentSummary: { summary: snap.risk.summary },
-    deviationReview: { summary: snap.deviations.summary },
-    oosReview: { summary: snap.oos.summary },
-    capaReview: { summary: snap.capa.summary },
-    changeControlReview: { summary: snap.changeControl.summary },
-    recommendations: { summary: snap.recommendations, content: snap.recommendations },
-    finalConclusion: { summary: snap.conclusion, content: snap.conclusion },
-    approvalPage: { summary: 'Electronic signatures and approval page.' },
-  };
-
-  return REPORT_SECTION_KEYS.map((key) => ({
-    cpvReviewId: reviewId,
-    sectionKey: key,
-    sectionTitle: REPORT_SECTION_LABELS[key],
-    content: sectionData[key]?.content || sectionData[key]?.summary || '',
-    summary: sectionData[key]?.summary || '',
-  }));
-}
-
 export function normalizeCpvReviewRecord(raw: Record<string, unknown>): CpvAnnualReviewRecord {
   const snap = (raw.snapshot || {}) as AnnualCpvSnapshot;
-  const metrics = snap.metrics || {
+  const metrics = enrichCpvReviewMetrics({
     totalBatchesReviewed: num(raw.totalBatchesReviewed, snap.batches?.total),
-    releasedBatches: num(snap.batches?.released),
-    rejectedBatches: num(snap.batches?.rejected),
-    holdBatches: 0,
-    cppCompliancePct: snap.cpp?.total ? ((snap.cpp.complies || 0) / snap.cpp.total) * 100 : 100,
-    cqaCompliancePct: snap.cqa?.total ? ((snap.cqa.complies || 0) / snap.cqa.total) * 100 : 100,
-    yieldAverage: num(snap.yield?.averageYield),
-    ootCount: num(snap.trend?.oot),
-    oosCount: num(snap.trend?.oos),
-    deviationCount: num(snap.deviations?.total),
-    capaCount: num(snap.capa?.total),
-    openRiskCount: 0,
-    highRiskCount: num(snap.risk?.high),
-    criticalOpenRiskCount: num(snap.risk?.critical),
-    criticalOosOpen: 0,
-    repeatedOot: false,
-    sterilityEndotoxinFailure: false,
-    averageCp: num(snap.capability?.averageCpk),
-    averageCpk: num(raw.averageCpk, snap.capability?.averageCpk),
-    averagePp: num(snap.capability?.averagePpk),
-    averagePpk: num(raw.averagePpk, snap.capability?.averagePpk),
-  };
+    releasedBatches: num(snap.batches?.released ?? (snap.metrics as { releasedBatches?: number } | undefined)?.releasedBatches),
+    rejectedBatches: num(snap.batches?.rejected ?? (snap.metrics as { rejectedBatches?: number } | undefined)?.rejectedBatches),
+    holdBatches: num((snap.metrics as { holdBatches?: number } | undefined)?.holdBatches),
+    cppCompliancePct: snap.cpp?.total ? ((snap.cpp.complies || 0) / snap.cpp.total) * 100 : num((snap.metrics as { cppCompliancePct?: number } | undefined)?.cppCompliancePct, 100),
+    cqaCompliancePct: snap.cqa?.total ? ((snap.cqa.complies || 0) / snap.cqa.total) * 100 : num((snap.metrics as { cqaCompliancePct?: number } | undefined)?.cqaCompliancePct, 100),
+    yieldAverage: num(snap.yield?.averageYield ?? (snap.metrics as { yieldAverage?: number } | undefined)?.yieldAverage),
+    ootCount: num((snap.metrics as { ootCount?: number } | undefined)?.ootCount ?? snap.trendAnalysis?.oot),
+    oosCount: num((snap.metrics as { oosCount?: number } | undefined)?.oosCount ?? snap.oos?.total),
+    deviationCount: num((snap.metrics as { deviationCount?: number } | undefined)?.deviationCount ?? snap.deviations?.total),
+    capaCount: num((snap.metrics as { capaCount?: number } | undefined)?.capaCount ?? snap.capa?.total),
+    changeControlCount: num((snap.metrics as { changeControlCount?: number } | undefined)?.changeControlCount ?? snap.changeControl?.total),
+    openRiskCount: num((snap.metrics as { openRiskCount?: number } | undefined)?.openRiskCount),
+    highRiskCount: num((snap.metrics as { highRiskCount?: number } | undefined)?.highRiskCount ?? snap.risk?.high),
+    criticalOpenRiskCount: num((snap.metrics as { criticalOpenRiskCount?: number } | undefined)?.criticalOpenRiskCount ?? snap.risk?.critical),
+    criticalOosOpen: num((snap.metrics as { criticalOosOpen?: number } | undefined)?.criticalOosOpen),
+    repeatedOot: Boolean((snap.metrics as { repeatedOot?: boolean } | undefined)?.repeatedOot),
+    repeatedDeviation: Boolean((snap.metrics as { repeatedDeviation?: boolean } | undefined)?.repeatedDeviation),
+    sterilityEndotoxinFailure: Boolean((snap.metrics as { sterilityEndotoxinFailure?: boolean } | undefined)?.sterilityEndotoxinFailure),
+    averageCp: num((snap.metrics as { averageCp?: number } | undefined)?.averageCp ?? snap.capability?.averageCpk),
+    averageCpk: num(raw.averageCpk, snap.capability?.averageCpk ?? (snap.metrics as { averageCpk?: number } | undefined)?.averageCpk),
+    averagePp: num((snap.metrics as { averagePp?: number } | undefined)?.averagePp ?? snap.capability?.averagePpk),
+    averagePpk: num(raw.averagePpk, snap.capability?.averagePpk ?? (snap.metrics as { averagePpk?: number } | undefined)?.averagePpk),
+    ...(typeof raw.metrics === 'object' && raw.metrics ? raw.metrics as Record<string, unknown> : {}),
+  });
+
+  const assessment = computeOverallAssessment(metrics);
+  const overallProcessStatus = (str(
+    raw.overallProcessStatus || snap.overallProcessStatus,
+    assessment.overallProcessStatus,
+  ) as CpvAnnualReviewRecord['overallProcessStatus']);
+  const overallRiskLevel = (str(
+    raw.overallRiskLevel || snap.overallRiskLevel,
+    assessment.overallRiskLevel,
+  ) as CpvAnnualReviewRecord['overallRiskLevel']);
+  const aiInsights = (raw.aiInsights && typeof raw.aiInsights === 'object')
+    ? raw.aiInsights as CpvAnnualReviewRecord['aiInsights']
+    : computeAiInsights(metrics, { overallProcessStatus, overallRiskLevel });
 
   return {
     id: str(raw.id),
@@ -189,12 +146,26 @@ export function normalizeCpvReviewRecord(raw: Record<string, unknown>): CpvAnnua
     cpvReviewNumber: str(raw.cpvReviewNumber || raw.cpv_review_number || raw.documentNumber, 'CPV/DRAFT/0001'),
     productName: str(raw.productName || raw.product_name, snap.productFilter || 'All Products'),
     productCode: str(raw.productCode || raw.product_code),
+    productFamily: str(raw.productFamily || raw.product_family),
+    productVersion: str(raw.productVersion || raw.product_version),
     genericName: str(raw.genericName || raw.generic_name),
     strength: str(raw.strength),
     dosageForm: str(raw.dosageForm || raw.dosage_form),
+    site: str(raw.site),
+    plant: str(raw.plant),
+    department: str(raw.department),
+    batchRange: str(raw.batchRange || raw.batch_range),
+    manufacturingCampaign: str(raw.manufacturingCampaign || raw.manufacturing_campaign),
     reviewPeriodFrom: str(raw.reviewPeriodFrom || raw.review_period_from, `${raw.reviewYear || snap.reviewYear}-01-01`),
     reviewPeriodTo: str(raw.reviewPeriodTo || raw.review_period_to, `${raw.reviewYear || snap.reviewYear}-12-31`),
     reviewYear: num(raw.reviewYear || snap.reviewYear, new Date().getFullYear()),
+    reviewOwner: str(raw.reviewOwner || raw.review_owner || raw.preparedBy),
+    effectiveDate: str(raw.effectiveDate || raw.effective_date),
+    approvalDate: str(raw.approvalDate || raw.approval_date),
+    nextReviewDate: str(raw.nextReviewDate || raw.next_review_date),
+    version: str(raw.version, '1.0'),
+    description: str(raw.description),
+    changeReason: str(raw.changeReason || raw.change_reason),
     totalBatchesReviewed: num(raw.totalBatchesReviewed, metrics.totalBatchesReviewed),
     totalCppParametersReviewed: num(raw.totalCppParametersReviewed, snap.cpp?.total),
     totalCqaParametersReviewed: num(raw.totalCqaParametersReviewed, snap.cqa?.total),
@@ -204,15 +175,22 @@ export function normalizeCpvReviewRecord(raw: Record<string, unknown>): CpvAnnua
     totalChangeControls: num(raw.totalChangeControls, snap.changeControl?.total),
     averageCpk: num(raw.averageCpk, metrics.averageCpk),
     averagePpk: num(raw.averagePpk, metrics.averagePpk),
-    overallProcessStatus: (str(raw.overallProcessStatus || snap.overallProcessStatus, 'Under Control With Monitoring') as CpvAnnualReviewRecord['overallProcessStatus']),
-    overallRiskLevel: (str(raw.overallRiskLevel || snap.overallRiskLevel, 'Medium') as CpvAnnualReviewRecord['overallRiskLevel']),
-    executiveSummary: str(raw.executiveSummary, snap.executiveSummary),
+    overallProcessStatus,
+    overallRiskLevel,
+    processHealthScore: num(raw.processHealthScore, aiInsights.processHealthScore),
+    productHealthScore: num(raw.productHealthScore, aiInsights.productHealthScore),
+    complianceScore: num(raw.complianceScore, aiInsights.complianceScore),
+    confidenceScore: num(raw.confidenceScore, aiInsights.confidenceScore),
+    riskScore: num(raw.riskScore, aiInsights.riskScore),
+    aiInsights,
+    executiveSummary: str(raw.executiveSummary, snap.executiveSummary || aiInsights.aiExecutiveSummary),
     conclusion: str(raw.conclusion, snap.conclusion),
-    recommendations: str(raw.recommendations, snap.recommendations),
+    recommendations: str(raw.recommendations, snap.recommendations || aiInsights.aiPreventiveRecommendations),
     preparedBy: str(raw.preparedBy),
     reviewedBy: str(raw.reviewedBy),
     approvedBy: str(raw.approvedBy),
     reviewStatus: mapLegacyStatus(str(raw.reviewStatus || raw.status, 'Draft')),
+    isLocked: Boolean(raw.isLocked) || ['Approved', 'Archived'].includes(mapLegacyStatus(str(raw.reviewStatus || raw.status, 'Draft'))),
     metrics,
     snapshot: snap as unknown as Record<string, unknown>,
     sections: Array.isArray(raw.sections) ? raw.sections as CpvReviewSectionRecord[] : [],
@@ -242,7 +220,7 @@ export function toAnnualCpvDocument(record: CpvAnnualReviewRecord): AnnualCpvDoc
     snapshot: record.snapshot as unknown as AnnualCpvSnapshot,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
-    version: 1,
+    version: Number(record.version) || 1,
   };
 }
 
@@ -350,14 +328,19 @@ export async function fetchCpvReviewRecords(max = 100): Promise<CpvAnnualReviewR
     } catch {
       rows = await getRecords<CpvAnnualReviewRecord>(CPV_REVIEW_COLLECTION, [limit(max)]);
     }
-    if (rows.length) return rows.map((r) => normalizeCpvReviewRecord(r as unknown as Record<string, unknown>));
-    for (const legacy of CPV_REVIEW_LEGACY) {
-      try {
-        const legacyRows = await getRecords<Record<string, unknown>>(legacy, [limit(max)]);
-        if (legacyRows.length) return legacyRows.map(normalizeCpvReviewRecord);
-      } catch { /* continue */ }
-    }
-    return [];
+    const normalized = (rows.length
+      ? rows
+      : await (async () => {
+        for (const legacy of CPV_REVIEW_LEGACY) {
+          try {
+            const legacyRows = await getRecords<Record<string, unknown>>(legacy, [limit(max)]);
+            if (legacyRows.length) return legacyRows;
+          } catch { /* continue */ }
+        }
+        return [] as Record<string, unknown>[];
+      })()
+    ).map((r) => normalizeCpvReviewRecord(r as unknown as Record<string, unknown>));
+    return normalized.filter((r) => !r.isDeleted);
   } catch (e) {
     console.error('fetchCpvReviewRecords failed', e);
     return [];
@@ -417,204 +400,199 @@ export async function fetchCpvReviewAuditTrail(reviewId: string) {
   }
 }
 
-async function saveReviewSections(reviewId: string, sections: CpvReviewSectionRecord[], actor: AnnualReviewActor) {
-  for (const section of sections) {
-    try {
-      await addDoc(collection(getFirebaseFirestore(), CPV_REVIEW_SECTIONS_COLLECTION), {
-        ...section,
-        cpvReviewId: reviewId,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        createdBy: actor.id,
-        updatedBy: actor.id,
-        isDeleted: false,
-      });
-    } catch (e) {
-      console.error('saveReviewSections failed', e);
-    }
-  }
-}
-
 export async function createCpvReview(
   form: CpvReviewFormData,
   snapshot: AnnualCpvSnapshot,
-  actor: AnnualReviewActor,
-  existingCount = 0,
+  _actor: AnnualReviewActor,
+  _existingCount = 0,
 ): Promise<{ result: CpvAnnualReviewRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
-  if (snapshot.batches.total < 1 && snapshot.metrics.totalBatchesReviewed < 1) {
-    return { result: null, error: 'At least one batch is required for review.' };
-  }
+  const changeReason = resolveChangeReason(form.changeReason, null, 'Initial annual CPV review generation');
+  if (!changeReason) return { result: null, error: 'Change reason must be at least 5 characters.' };
   try {
-    const year = new Date(form.reviewPeriodTo).getFullYear();
-    const cpvReviewNumber = generateCpvReviewNumber(year, existingCount);
-    const cpvReviewId = buildCpvReviewId(form.productCode || form.productName);
-    const sections = buildSectionsFromSnapshot(cpvReviewId, snapshot);
-
-    const payload = {
-      cpvReviewId,
-      cpvReviewNumber,
-      productName: form.productName,
-      productCode: form.productCode,
-      genericName: form.genericName,
-      strength: form.strength,
-      dosageForm: form.dosageForm,
-      reviewPeriodFrom: form.reviewPeriodFrom,
-      reviewPeriodTo: form.reviewPeriodTo,
-      reviewYear: year,
-      totalBatchesReviewed: snapshot.metrics.totalBatchesReviewed,
-      totalCppParametersReviewed: snapshot.cpp.total,
-      totalCqaParametersReviewed: snapshot.cqa.total,
-      totalDeviations: snapshot.deviations.total,
-      totalOos: snapshot.oos.total,
-      totalCapa: snapshot.capa.total,
-      totalChangeControls: snapshot.changeControl.total,
-      averageCpk: snapshot.metrics.averageCpk,
-      averagePpk: snapshot.metrics.averagePpk,
+    const assessment = {
       overallProcessStatus: snapshot.overallProcessStatus,
       overallRiskLevel: snapshot.overallRiskLevel,
-      executiveSummary: form.executiveSummary || snapshot.executiveSummary,
-      conclusion: form.conclusion || snapshot.conclusion,
-      recommendations: form.recommendations || snapshot.recommendations,
-      preparedBy: actor.name,
-      reviewedBy: '',
-      approvedBy: '',
-      reviewStatus: 'Generated' as const,
-      metrics: snapshot.metrics,
-      snapshot,
-      sections,
-      signatures: DEFAULT_ANNUAL_CPV_SIGNATURES.map((s, i) => ({
-        ...s,
-        name: i === 0 ? actor.name : '',
-        signatureText: i === 0 ? actor.name : '',
-        signedAt: i === 0 ? new Date().toISOString() : null,
-        ...(i === 0 ? { userId: actor.id } : {}),
-      })),
-      createdByName: actor.name,
-      updatedByName: actor.name,
     };
+    const baseAi = computeAiInsights(snapshot.metrics, assessment);
+    let aiInsights = baseAi;
+    try {
+      const enriched = await enrichAiClient({
+        task: 'annual_review',
+        context: {
+          productName: form.productName || snapshot.productFilter,
+          metrics: snapshot.metrics,
+          assessment,
+        },
+        fallback: { ...baseAi },
+      });
+      aiInsights = {
+        ...baseAi,
+        aiExecutiveSummary: String(enriched.data.aiExecutiveSummary || baseAi.aiExecutiveSummary),
+        aiQualityReview: String(enriched.data.aiQualityReview || baseAi.aiQualityReview),
+        aiRiskPrediction: String(enriched.data.aiRiskPrediction || baseAi.aiRiskPrediction),
+        aiPreventiveRecommendations: String(
+          enriched.data.aiPreventiveRecommendations || baseAi.aiPreventiveRecommendations,
+        ),
+      };
+    } catch {
+      aiInsights = baseAi;
+    }
 
-    const created = await createRecord(
-      CPV_REVIEW_COLLECTION,
-      payload as unknown as Omit<CpvAnnualReviewRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminCpvAnnualReview',
     );
-    const result = normalizeCpvReviewRecord(created as unknown as Record<string, unknown>);
-    await saveReviewSections(result.id, sections, actor);
-    await logReviewAudit('create CPV review', result.id, actor, null, result, result.cpvReviewNumber);
-    await logReviewAudit('collect data', result.id, actor, null, snapshot.metrics, result.cpvReviewNumber);
-    await logReviewAudit('generate review sections', result.id, actor, null, sections.length, result.cpvReviewNumber);
-    return { result, error: null };
+    const result = await fn({
+      ...form,
+      changeReason,
+      snapshot,
+      aiInsights,
+      executiveSummary: form.executiveSummary || aiInsights.aiExecutiveSummary,
+      recommendations: form.recommendations || aiInsights.aiPreventiveRecommendations,
+    });
+    return { result: normalizeCpvReviewRecord(result.data), error: null };
   } catch (e) {
     console.error('createCpvReview failed', e);
-    return { result: null, error: 'Failed to create CPV review.' };
+    return { result: null, error: callableErrorMessage(e, 'Failed to create CPV review.') };
   }
 }
 
 export async function updateCpvReview(
   id: string,
   updates: Partial<CpvReviewFormData & Pick<CpvAnnualReviewRecord, 'reviewStatus' | 'conclusion' | 'recommendations' | 'executiveSummary' | 'sections'>>,
-  actor: AnnualReviewActor,
+  _actor: AnnualReviewActor,
   existing: CpvAnnualReviewRecord,
+  options?: { esignConfirmed?: boolean; changeReason?: string; qaOverride?: boolean },
 ): Promise<{ result: CpvAnnualReviewRecord | null; error: string | null }> {
   try {
-    const payload = { ...updates, updatedByName: actor.name };
-    const updated = await updateRecord(CPV_REVIEW_COLLECTION, id, payload as Partial<CpvAnnualReviewRecord>, actorCtx(actor));
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeCpvReviewRecord(updated as unknown as Record<string, unknown>);
-    await logReviewAudit('edit section', id, actor, existing, result, result.cpvReviewNumber);
-    return { result, error: null };
+    const changeReason = resolveChangeReason(
+      options?.changeReason ?? updates.changeReason,
+      existing.changeReason,
+      'Annual CPV review section update',
+    );
+    if (!changeReason) return { result: null, error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'updateAdminCpvAnnualReview',
+    );
+    const result = await fn({
+      ...existing,
+      ...updates,
+      changeReason,
+      esignConfirmed: options?.esignConfirmed === true,
+      qaOverride: options?.qaOverride === true,
+      id,
+    });
+    return { result: normalizeCpvReviewRecord(result.data), error: null };
   } catch (e) {
     console.error('updateCpvReview failed', e);
-    return { result: null, error: 'Update failed.' };
+    return { result: null, error: callableErrorMessage(e, 'Update failed.') };
   }
 }
 
 export async function submitCpvReviewForApproval(
   id: string,
-  actor: AnnualReviewActor,
+  _actor: AnnualReviewActor,
   existing: CpvAnnualReviewRecord,
+  options?: { changeReason?: string; signatureText?: string; meaning?: string },
 ): Promise<{ error: string | null }> {
-  if (!existing.executiveSummary?.trim()) {
-    return { error: 'Executive summary is required before submission.' };
-  }
   try {
-    await updateRecord(CPV_REVIEW_COLLECTION, id, {
-      reviewStatus: 'Under Review',
-      reviewedBy: actor.name,
-      updatedByName: actor.name,
-    }, actorCtx(actor));
-    await logReviewAudit('submit for review', id, actor, existing.reviewStatus, 'Under Review', existing.cpvReviewNumber);
+    const changeReason = resolveChangeReason(
+      options?.changeReason,
+      existing.changeReason,
+      'Submitted for management approval',
+    );
+    if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'submitAdminCpvAnnualReview');
+    await fn({
+      id,
+      changeReason,
+      signatureText: options?.signatureText,
+      meaning: options?.meaning || 'review',
+    });
     return { error: null };
   } catch (e) {
     console.error('submitCpvReviewForApproval failed', e);
-    return { error: 'Submission failed.' };
+    return { error: callableErrorMessage(e, 'Submission failed.') };
   }
 }
 
 export async function approveCpvReview(
   id: string,
-  actor: AnnualReviewActor,
+  _actor: AnnualReviewActor,
   existing: CpvAnnualReviewRecord,
   signature: { signatureText: string; meaning: string; reason: string },
 ): Promise<{ error: string | null }> {
-  if (!existing.conclusion?.trim()) {
-    return { error: 'Conclusion is required before approval.' };
-  }
   try {
-    const signatures = (existing.signatures || DEFAULT_ANNUAL_CPV_SIGNATURES).map((s) =>
-      s.role === 'approved'
-        ? { ...s, name: actor.name, signatureText: signature.signatureText, meaning: signature.meaning, reason: signature.reason, signedAt: new Date().toISOString(), userId: actor.id }
-        : s,
-    );
-    await updateRecord(CPV_REVIEW_COLLECTION, id, {
-      reviewStatus: 'Approved',
-      approvedBy: actor.name,
-      signatures,
-      updatedByName: actor.name,
-    }, actorCtx(actor));
-    await addDoc(collection(getFirebaseFirestore(), CPV_REVIEW_APPROVALS_COLLECTION), {
-      cpvReviewId: id,
-      role: 'approved',
-      name: actor.name,
+    const changeReason = resolveChangeReason(signature.reason, existing.changeReason, 'Approved by QA management');
+    if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'approveAdminCpvAnnualReview');
+    await fn({
+      id,
+      changeReason,
+      reason: changeReason,
       signatureText: signature.signatureText,
       meaning: signature.meaning,
-      reason: signature.reason,
-      signedAt: new Date().toISOString(),
-      userId: actor.id,
-      status: 'Approved',
-      createdAt: new Date().toISOString(),
-      createdBy: actor.id,
-      isDeleted: false,
+      esignConfirmed: true,
     });
-    await logReviewAudit('approve', id, actor, existing.reviewStatus, 'Approved', existing.cpvReviewNumber);
-    await logReviewAudit('e-signature', id, actor, null, signature, existing.cpvReviewNumber);
     return { error: null };
   } catch (e) {
     console.error('approveCpvReview failed', e);
-    return { error: 'Approval failed.' };
+    return { error: callableErrorMessage(e, 'Approval failed.') };
   }
 }
 
-export async function rejectCpvReview(id: string, actor: AnnualReviewActor, existing: CpvAnnualReviewRecord) {
+export async function rejectCpvReview(
+  id: string,
+  _actor: AnnualReviewActor,
+  existing: CpvAnnualReviewRecord,
+  changeReason = 'Rejected by approver',
+) {
   try {
-    await updateRecord(CPV_REVIEW_COLLECTION, id, { reviewStatus: 'Rejected', updatedByName: actor.name }, actorCtx(actor));
-    await logReviewAudit('reject', id, actor, existing.reviewStatus, 'Rejected', existing.cpvReviewNumber);
+    const reason = resolveChangeReason(changeReason, existing.changeReason, 'Rejected by approver');
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'rejectAdminCpvAnnualReview');
+    await fn({ id, changeReason: reason });
     return { error: null };
   } catch (e) {
     console.error('rejectCpvReview failed', e);
-    return { error: 'Reject failed.' };
+    return { error: callableErrorMessage(e, 'Reject failed.') };
   }
 }
 
-export async function archiveCpvReview(id: string, actor: AnnualReviewActor, existing: CpvAnnualReviewRecord) {
+export async function archiveCpvReview(
+  id: string,
+  _actor: AnnualReviewActor,
+  existing: CpvAnnualReviewRecord,
+  options?: { changeReason?: string },
+) {
   try {
-    await updateRecord(CPV_REVIEW_COLLECTION, id, { reviewStatus: 'Archived', updatedByName: actor.name }, actorCtx(actor));
-    await logReviewAudit('archive', id, actor, existing.reviewStatus, 'Archived', existing.cpvReviewNumber);
+    const reason = resolveChangeReason(options?.changeReason, existing.changeReason, 'Archived after approval');
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'archiveAdminCpvAnnualReview');
+    await fn({ id, changeReason: reason, esignConfirmed: true });
     return { error: null };
   } catch (e) {
     console.error('archiveCpvReview failed', e);
-    return { error: 'Archive failed.' };
+    return { error: callableErrorMessage(e, 'Archive failed.') };
+  }
+}
+
+export async function softDeleteCpvReview(
+  id: string,
+  existing: CpvAnnualReviewRecord,
+  changeReason: string,
+) {
+  try {
+    const reason = resolveChangeReason(changeReason, existing.changeReason);
+    if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminCpvAnnualReview');
+    await fn({ id, changeReason: reason });
+    return { error: null };
+  } catch (e) {
+    console.error('softDeleteCpvReview failed', e);
+    return { error: callableErrorMessage(e, 'Delete failed.') };
   }
 }
 
@@ -622,8 +600,7 @@ export async function uploadCpvReviewPdfPlaceholder(reviewId: string, reviewNumb
   if (!isFirebaseConfigured()) return null;
   try {
     const path = `cpv-reviews/${reviewId}/${reviewNumber.replace(/\//g, '-')}.html`;
-    const fileRef = ref(getFirebaseStorage(), path);
-    await uploadString(fileRef, htmlContent, 'raw', { contentType: 'text/html' });
+    await uploadTextToStorage(path, htmlContent, 'text/html');
     return path;
   } catch (e) {
     console.error('uploadCpvReviewPdfPlaceholder failed', e);
@@ -631,8 +608,18 @@ export async function uploadCpvReviewPdfPlaceholder(reviewId: string, reviewNumb
   }
 }
 
-export async function logCpvReviewExport(actor: AnnualReviewActor, type: 'PDF' | 'Excel', reviewId: string, reviewNumber: string) {
-  await logReviewAudit(`export ${type}`, reviewId, actor, null, type, reviewNumber);
+export async function logCpvReviewExport(
+  _actor: AnnualReviewActor,
+  type: 'PDF' | 'Excel',
+  reviewId: string,
+  reviewNumber: string,
+) {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminCpvAnnualReviewExport');
+    await fn({ id: reviewId, exportType: type, documentNumber: reviewNumber });
+  } catch (e) {
+    console.error('logCpvReviewExport failed', e);
+  }
 }
 
 /* Legacy compatibility exports */
@@ -665,6 +652,7 @@ export async function saveAnnualCpvDraft(
         conclusion: input.conclusion || input.snapshot.conclusion,
         recommendations: input.recommendations || input.snapshot.recommendations,
         executiveSummary: input.snapshot.executiveSummary,
+        changeReason: 'Draft annual CPV review update',
       }, actorFull, existing);
       return toAnnualCpvDocument(result || existing);
     }
@@ -674,14 +662,27 @@ export async function saveAnnualCpvDraft(
   const { result, error } = await createCpvReview({
     productName: input.productName || 'All Products',
     productCode: '',
+    productFamily: '',
+    productVersion: '',
     genericName: '',
     strength: '',
     dosageForm: '',
+    site: '',
+    plant: '',
+    department: '',
+    batchRange: '',
+    manufacturingCampaign: '',
     reviewPeriodFrom: `${input.reviewYear}-01-01`,
     reviewPeriodTo: `${input.reviewYear}-12-31`,
+    reviewOwner: actorFull.name,
+    effectiveDate: '',
+    nextReviewDate: '',
+    version: '1.0',
+    description: '',
     executiveSummary: input.snapshot.executiveSummary,
     conclusion: input.conclusion || input.snapshot.conclusion,
     recommendations: input.recommendations || input.snapshot.recommendations,
+    changeReason: 'Draft annual CPV review creation',
   }, input.snapshot, actorFull, yearCount);
   if (error || !result) throw new Error(error || 'Save failed');
   return toAnnualCpvDocument(result);
@@ -692,19 +693,38 @@ export async function updateAnnualCpvWorkflow(
   status: AnnualCpvWorkflowStatus,
   updates?: Partial<Pick<AnnualCpvDocument, 'conclusion' | 'recommendations' | 'snapshot'>>,
 ) {
-  const statusMap: Partial<Record<AnnualCpvWorkflowStatus, CpvReviewStatus>> = {
-    draft: 'Draft',
-    under_review: 'Under Review',
-    approved: 'Approved',
-    archived: 'Archived',
-    generated: 'Generated',
-    rejected: 'Rejected',
-  };
-  await updateRecord(CPV_REVIEW_COLLECTION, documentId, {
-    reviewStatus: statusMap[status] || 'Draft',
-    status,
-    ...updates,
-  }, { moduleName: CPV_REVIEW_MODULE, actor: { id: 'system', name: 'System' } });
+  const existing = await fetchCpvReviewById(documentId);
+  if (!existing) throw new Error('Document not found');
+  const actor: AnnualReviewActor = { id: 'system', name: 'System' };
+  if (status === 'under_review') {
+    const { error } = await submitCpvReviewForApproval(documentId, actor, existing);
+    if (error) throw new Error(error);
+    return;
+  }
+  if (status === 'approved') {
+    const { error } = await approveCpvReview(documentId, actor, existing, {
+      signatureText: 'System',
+      meaning: 'approve',
+      reason: 'Workflow approval',
+    });
+    if (error) throw new Error(error);
+    return;
+  }
+  if (status === 'archived') {
+    const { error } = await archiveCpvReview(documentId, actor, existing);
+    if (error) throw new Error(error);
+    return;
+  }
+  if (status === 'rejected') {
+    const { error } = await rejectCpvReview(documentId, actor, existing, 'Workflow rejection');
+    if (error) throw new Error(error);
+    return;
+  }
+  await updateCpvReview(documentId, {
+    conclusion: updates?.conclusion,
+    recommendations: updates?.recommendations,
+    changeReason: 'Workflow status update',
+  }, actor, existing);
 }
 
 export async function signAnnualCpv(
@@ -720,17 +740,18 @@ export async function signAnnualCpv(
     if (error) throw new Error(error);
     return;
   }
-  const signatures = (existing.signatures || DEFAULT_ANNUAL_CPV_SIGNATURES).map((s) =>
-    s.role === role
-      ? { ...s, name: payload.name, signatureText: payload.signatureText, meaning: payload.meaning, reason: payload.reason, userId: payload.userId, signedAt: new Date().toISOString() }
-      : s,
-  );
-  await updateRecord(CPV_REVIEW_COLLECTION, documentId, {
-    signatures,
-    reviewStatus: role === 'reviewed' ? 'Under Review' : existing.reviewStatus,
-    reviewedBy: role === 'reviewed' ? payload.name : existing.reviewedBy,
-  }, actorCtx(actor));
-  await logReviewAudit('review', documentId, actor, existing.reviewStatus, role, existing.cpvReviewNumber);
+  if (role === 'reviewed') {
+    const { error } = await submitCpvReviewForApproval(documentId, actor, existing, {
+      changeReason: payload.reason,
+      signatureText: payload.signatureText,
+      meaning: payload.meaning,
+    });
+    if (error) throw new Error(error);
+    return;
+  }
+  await updateCpvReview(documentId, {
+    changeReason: payload.reason || 'Prepared signature recorded',
+  }, actor, existing);
 }
 
 export async function archiveAnnualCpv(documentId: string) {

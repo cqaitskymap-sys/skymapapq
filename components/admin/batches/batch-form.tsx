@@ -1,22 +1,24 @@
 'use client';
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Button } from '@/components/ui/button';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import {
-  BATCH_STATUSES, RELEASE_STATUSES, BATCH_SIZE_UNITS,
+  BATCH_STATUSES, RELEASE_STATUSES, BATCH_SIZE_UNITS, QC_STATUSES, QA_STATUSES,
 } from '@/lib/admin/constants';
 import { batchFormSchema, type BatchFormData, type AdminProduct } from '@/lib/admin/schemas';
-import { productToBatchAutofill } from '@/lib/admin/batch-service';
+import { previewBatchNumber, productToBatchAutofill } from '@/lib/admin/batch-service';
 
 interface BatchFormProps {
   initial?: Partial<BatchFormData>;
@@ -24,21 +26,26 @@ interface BatchFormProps {
   readOnly?: boolean;
   releasedLocked?: boolean;
   canQaOverride?: boolean;
+  isCreate?: boolean;
   onSubmit: (data: BatchFormData) => void;
   onCancel: () => void;
   submitting?: boolean;
 }
 
 export function BatchForm({
-  initial, products, readOnly, releasedLocked, canQaOverride,
+  initial, products, readOnly, releasedLocked, canQaOverride, isCreate,
   onSubmit, onCancel, submitting,
 }: BatchFormProps) {
+  const [previewLoading, setPreviewLoading] = useState(false);
+
   const normalizedInitial = useMemo(() => {
     if (!initial) return undefined;
     return {
       ...initial,
-      manufacturingDate: (initial.manufacturingDate || '').slice(0, 7),
-      expiryDate: (initial.expiryDate || '').slice(0, 7),
+      manufacturingDate: (initial.manufacturingDate || '').slice(0, 10),
+      expiryDate: (initial.expiryDate || '').slice(0, 10),
+      packagingDate: (initial.packagingDate || '').slice(0, 10),
+      retestDate: (initial.retestDate || '').slice(0, 10),
     };
   }, [initial]);
 
@@ -47,17 +54,35 @@ export function BatchForm({
     defaultValues: {
       productCode: '',
       batchNumber: '',
+      autoGenerateBatchNumber: false,
+      batchCode: '',
       productName: '',
+      productVersion: '',
+      productCategory: '',
       genericName: '',
       strength: '',
       dosageForm: '',
       market: '',
+      manufacturingOrder: '',
       batchSize: undefined,
       batchSizeUnit: 'Vials',
+      plannedQuantity: undefined,
+      actualQuantity: undefined,
       manufacturingDate: '',
+      packagingDate: '',
       expiryDate: '',
+      retestDate: '',
+      shelfLife: '',
+      batchPrefix: '',
       manufacturingSite: '',
+      businessUnit: '',
+      department: '',
+      warehouse: '',
+      storageLocation: '',
       manufacturingLine: '',
+      equipment: '',
+      processVersion: '',
+      recipeVersion: '',
       shift: '',
       mfrNumber: '',
       bmrNumber: '',
@@ -66,6 +91,8 @@ export function BatchForm({
       customerName: '',
       batchStatus: 'Planned',
       releaseStatus: 'Pending',
+      qcStatus: 'Pending',
+      qaStatus: 'Pending',
       releaseDate: '',
       qaReleasedBy: '',
       semiFinishedBatchNumber: '',
@@ -73,6 +100,7 @@ export function BatchForm({
       packingBatchNumber: '',
       statusChangeReason: '',
       remarks: '',
+      changeReason: isCreate ? 'Initial batch registration' : '',
       qaOverride: false,
       ...normalizedInitial,
     },
@@ -84,6 +112,7 @@ export function BatchForm({
 
   const batchStatus = form.watch('batchStatus');
   const productCode = form.watch('productCode');
+  const autoGenerate = form.watch('autoGenerateBatchNumber');
   const activeProducts = useMemo(
     () => products.filter((p) => p.productStatus === 'Active'),
     [products],
@@ -107,18 +136,35 @@ export function BatchForm({
     if (productCode && !initial?.productName) applyProductAutofill(productCode);
   }, [productCode]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const handlePreviewNumber = async () => {
+    const code = form.getValues('productCode');
+    if (!code) {
+      toast.error('Select a product first');
+      return;
+    }
+    setPreviewLoading(true);
+    const result = await previewBatchNumber(code, form.getValues('manufacturingSite'));
+    setPreviewLoading(false);
+    if (result.error) toast.error(result.error);
+    else if (result.batchNumber) {
+      form.setValue('batchNumber', result.batchNumber);
+      form.setValue('autoGenerateBatchNumber', true);
+      toast.success('Batch number generated');
+    }
+  };
+
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
       {releasedLocked && canQaOverride && !readOnly && (
-        <Card className="border-amber-200 bg-amber-50">
+        <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/30">
           <CardContent className="p-4 flex items-center gap-3">
             <Checkbox
               checked={form.watch('qaOverride')}
               onCheckedChange={(v) => form.setValue('qaOverride', Boolean(v))}
             />
             <div>
-              <p className="text-sm font-medium text-amber-900">QA Override</p>
-              <p className="text-xs text-amber-700">Released batch — enable override to edit critical fields</p>
+              <p className="text-sm font-medium text-amber-900 dark:text-amber-100">QA Override</p>
+              <p className="text-xs text-amber-700 dark:text-amber-300">Released batch — enable override to edit critical fields</p>
             </div>
           </CardContent>
         </Card>
@@ -150,8 +196,32 @@ export function BatchForm({
           </div>
           <div className="space-y-2">
             <Label>Batch Number *</Label>
-            <Input {...form.register('batchNumber')} disabled={locked} />
+            <div className="flex gap-2">
+              <Input {...form.register('batchNumber')} disabled={locked || autoGenerate} />
+              {isCreate && (
+                <Button type="button" variant="outline" size="icon" disabled={previewLoading || locked} onClick={handlePreviewNumber}>
+                  <RefreshCw className={cnIcon(previewLoading)} />
+                </Button>
+              )}
+            </div>
+            {isCreate && (
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  checked={autoGenerate}
+                  onCheckedChange={(v) => form.setValue('autoGenerateBatchNumber', Boolean(v))}
+                />
+                <span className="text-xs text-muted-foreground">Auto-generate on save</span>
+              </div>
+            )}
             {form.formState.errors.batchNumber && <p className="text-xs text-red-500">{form.formState.errors.batchNumber.message}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label>Batch Code</Label>
+            <Input {...form.register('batchCode')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Manufacturing Order</Label>
+            <Input {...form.register('manufacturingOrder')} disabled={readOnly} />
           </div>
         </CardContent>
       </Card>
@@ -161,6 +231,8 @@ export function BatchForm({
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           {[
             { key: 'productName', label: 'Product Name' },
+            { key: 'productVersion', label: 'Product Version' },
+            { key: 'productCategory', label: 'Product Category' },
             { key: 'genericName', label: 'Generic Name' },
             { key: 'strength', label: 'Strength' },
             { key: 'dosageForm', label: 'Dosage Form' },
@@ -168,6 +240,8 @@ export function BatchForm({
             { key: 'mfrNumber', label: 'MFR Number' },
             { key: 'bmrNumber', label: 'BMR Number' },
             { key: 'bprNumber', label: 'BPR Number' },
+            { key: 'batchPrefix', label: 'Batch Prefix' },
+            { key: 'shelfLife', label: 'Shelf Life' },
           ].map((f) => (
             <div key={f.key} className="space-y-2">
               <Label>{f.label}</Label>
@@ -199,22 +273,66 @@ export function BatchForm({
             </Select>
           </div>
           <div className="space-y-2">
+            <Label>Planned Quantity</Label>
+            <Input type="number" {...form.register('plannedQuantity', { valueAsNumber: true })} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Actual Quantity</Label>
+            <Input type="number" {...form.register('actualQuantity', { valueAsNumber: true })} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
             <Label>Manufacturing Date *</Label>
-            <Input type="month" {...form.register('manufacturingDate')} disabled={locked} />
+            <Input type="date" {...form.register('manufacturingDate')} disabled={locked} />
             {form.formState.errors.manufacturingDate && <p className="text-xs text-red-500">{form.formState.errors.manufacturingDate.message}</p>}
           </div>
           <div className="space-y-2">
+            <Label>Packaging Date</Label>
+            <Input type="date" {...form.register('packagingDate')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
             <Label>Expiry Date *</Label>
-            <Input type="month" {...form.register('expiryDate')} disabled={locked} />
+            <Input type="date" {...form.register('expiryDate')} disabled={locked} />
             {form.formState.errors.expiryDate && <p className="text-xs text-red-500">{form.formState.errors.expiryDate.message}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label>Retest Date</Label>
+            <Input type="date" {...form.register('retestDate')} disabled={readOnly} />
           </div>
           <div className="space-y-2">
             <Label>Manufacturing Site</Label>
             <Input {...form.register('manufacturingSite')} disabled={readOnly} />
           </div>
           <div className="space-y-2">
+            <Label>Business Unit</Label>
+            <Input {...form.register('businessUnit')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Department</Label>
+            <Input {...form.register('department')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Warehouse</Label>
+            <Input {...form.register('warehouse')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Storage Location</Label>
+            <Input {...form.register('storageLocation')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
             <Label>Manufacturing Line</Label>
             <Input {...form.register('manufacturingLine')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Equipment</Label>
+            <Input {...form.register('equipment')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Process Version</Label>
+            <Input {...form.register('processVersion')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Recipe Version</Label>
+            <Input {...form.register('recipeVersion')} disabled={readOnly} />
           </div>
           <div className="space-y-2">
             <Label>Shift</Label>
@@ -279,6 +397,32 @@ export function BatchForm({
             </Select>
           </div>
           <div className="space-y-2">
+            <Label>QC Status</Label>
+            <Select
+              value={form.watch('qcStatus')}
+              onValueChange={(v) => form.setValue('qcStatus', v as BatchFormData['qcStatus'])}
+              disabled={readOnly}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {QC_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>QA Status</Label>
+            <Select
+              value={form.watch('qaStatus')}
+              onValueChange={(v) => form.setValue('qaStatus', v as BatchFormData['qaStatus'])}
+              disabled={readOnly}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {QA_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
             <Label>Release Date</Label>
             <Input type="date" {...form.register('releaseDate')} disabled={readOnly} />
           </div>
@@ -301,6 +445,19 @@ export function BatchForm({
       </Card>
 
       {!readOnly && (
+        <Card>
+          <CardHeader><CardTitle className="text-base">ALCOA+ Change Reason</CardTitle></CardHeader>
+          <CardContent>
+            <Textarea
+              {...form.register('changeReason')}
+              rows={2}
+              placeholder="Document reason for this batch record change (min 5 characters for updates)"
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {!readOnly && (
         <div className="flex gap-3 justify-end">
           <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
           <Button type="submit" className="bg-blue-600 hover:bg-blue-700" disabled={submitting}>
@@ -310,4 +467,8 @@ export function BatchForm({
       )}
     </form>
   );
+}
+
+function cnIcon(loading: boolean) {
+  return loading ? 'h-4 w-4 animate-spin' : 'h-4 w-4';
 }

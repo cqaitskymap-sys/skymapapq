@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Archive, ChevronRight, Download, Eye, FileText, PenLine, Plus, RefreshCw, Send,
 } from 'lucide-react';
@@ -13,7 +14,7 @@ import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
 import type { AnnualCpvSnapshot } from '@/lib/cpv-annual-review';
 import {
-  buildCpvReviewCharts, generateCpvReviewNumber, processStatusColor,
+  buildCpvReviewCharts, computeAiInsights, generateCpvReviewNumber, processStatusColor,
   reviewStatusLabel, summarizeCpvReviews, riskLevelColor,
   type CpvAnnualReviewRecord,
 } from '@/lib/cpv-annual-review-records';
@@ -133,6 +134,8 @@ function SignDialog({
 
 export function AnnualReviewPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const productQuery = searchParams.get('product') || '';
   const { user, profile } = useAuth();
   const role = profile?.role;
   const canCreate = cpvPermissions.canCreateAnnualReview(role);
@@ -154,13 +157,40 @@ export function AnnualReviewPage() {
   const [executiveSummary, setExecutiveSummary] = useState('');
   const [conclusion, setConclusion] = useState('');
   const [recommendations, setRecommendations] = useState('');
+  const [changeReason, setChangeReason] = useState('');
+  const [site, setSite] = useState('');
+  const [department, setDepartment] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [yearFilter, setYearFilter] = useState('all');
+  const [search, setSearch] = useState('');
   const [wizardOpen, setWizardOpen] = useState(false);
 
   const actor = { id: user?.uid || 'system', name: profile?.full_name || 'System', role: profile?.role || '' };
   const selectedProduct = products.find((p) => p.id === productId);
-  const summary = useMemo(() => summarizeCpvReviews(records), [records]);
+  const filteredRecords = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return records.filter((r) => {
+      if (productQuery && r.productName !== productQuery && r.productCode !== productQuery) return false;
+      if (statusFilter !== 'all' && r.reviewStatus !== statusFilter) return false;
+      if (yearFilter !== 'all' && String(r.reviewYear) !== yearFilter) return false;
+      if (!q) return true;
+      return [r.cpvReviewNumber, r.productName, r.productCode, r.site, r.department, r.preparedBy, r.approvedBy]
+        .some((v) => String(v || '').toLowerCase().includes(q));
+    });
+  }, [records, productQuery, statusFilter, yearFilter, search]);
+  const summary = useMemo(() => summarizeCpvReviews(filteredRecords), [filteredRecords]);
   const charts = useMemo(() => (snapshot ? buildCpvReviewCharts(snapshot as unknown as Record<string, unknown>) : null), [snapshot]);
-
+  const previewAi = useMemo(() => {
+    if (!snapshot) return null;
+    return computeAiInsights(snapshot.metrics, {
+      overallProcessStatus: snapshot.overallProcessStatus,
+      overallRiskLevel: snapshot.overallRiskLevel,
+    });
+  }, [snapshot]);
+  const years = useMemo(
+    () => Array.from(new Set(records.map((r) => String(r.reviewYear)))).sort().reverse(),
+    [records],
+  );
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -179,6 +209,7 @@ export function AnnualReviewPage() {
 
   const collectData = async () => {
     if (!selectedProduct) return toast.error('Select a product');
+    if (changeReason.trim().length < 5) return toast.error('Change reason must be at least 5 characters');
     if (new Date(periodTo) < new Date(periodFrom)) return toast.error('Review end date must be after start date');
     setCollecting(true);
     setStep(2);
@@ -211,17 +242,31 @@ export function AnnualReviewPage() {
 
   const generateReview = async () => {
     if (!snapshot || !selectedProduct) return;
+    if (changeReason.trim().length < 5) return toast.error('Change reason must be at least 5 characters');
     const { result, error: err } = await createCpvReview({
       productName: selectedProduct.productName,
       productCode: selectedProduct.productCode,
+      productFamily: selectedProduct.productFamily || '',
+      productVersion: selectedProduct.version || '',
       genericName: selectedProduct.genericName || '',
       strength: selectedProduct.strength || '',
       dosageForm: selectedProduct.dosageForm || '',
+      site,
+      plant: site,
+      department,
+      batchRange: '',
+      manufacturingCampaign: '',
       reviewPeriodFrom: periodFrom,
       reviewPeriodTo: periodTo,
+      reviewOwner: actor.name,
+      effectiveDate: '',
+      nextReviewDate: `${new Date(periodTo).getFullYear() + 1}-01-01`,
+      version: '1.0',
+      description: `Annual CPV review for ${selectedProduct.productName}`,
       executiveSummary,
       conclusion,
       recommendations,
+      changeReason: changeReason.trim(),
     }, { ...snapshot, executiveSummary, conclusion, recommendations }, actor, records.length);
     if (err || !result) return toast.error(err || 'Generation failed');
     setActiveReview(result);
@@ -251,10 +296,10 @@ export function AnnualReviewPage() {
   const exportRegister = () => {
     downloadCsv(
       'cpv-annual-reviews.csv',
-      ['ReviewNumber', 'Product', 'From', 'To', 'Status', 'ProcessStatus', 'RiskLevel', 'AvgCpk'],
-      records.map((r) => [
-        r.cpvReviewNumber, r.productName, r.reviewPeriodFrom, r.reviewPeriodTo,
-        r.reviewStatus, r.overallProcessStatus, r.overallRiskLevel, r.averageCpk,
+      ['ReviewNumber', 'Product', 'Year', 'From', 'To', 'Status', 'ProcessStatus', 'RiskLevel', 'Health', 'AvgCpk'],
+      filteredRecords.map((r) => [
+        r.cpvReviewNumber, r.productName, r.reviewYear, r.reviewPeriodFrom, r.reviewPeriodTo,
+        r.reviewStatus, r.overallProcessStatus, r.overallRiskLevel, r.processHealthScore, r.averageCpk,
       ]),
     );
     if (activeReview) void logCpvReviewExport(actor, 'Excel', activeReview.id, activeReview.cpvReviewNumber);
@@ -268,7 +313,7 @@ export function AnnualReviewPage() {
     <div className="space-y-6 p-4 sm:p-6">
       <CpvPageHeader
         title="Annual CPV Review"
-        description="Generate annual Continued Process Verification review report"
+        description="Generate annual Continued Process Verification review report with Stage 3 analytics"
         trail={[
           { label: 'Dashboard', href: '/dashboard' },
           { label: 'Continued Process Verification', href: '/cpv/dashboard' },
@@ -285,7 +330,10 @@ export function AnnualReviewPage() {
               </>
             )}
             {canCreate && (
-              <Button size="sm" onClick={() => { setWizardOpen(true); setStep(0); setSnapshot(null); setActiveReview(null); }}>
+              <Button size="sm" onClick={() => {
+                setWizardOpen(true); setStep(0); setSnapshot(null); setActiveReview(null);
+                setChangeReason(''); setSite(''); setDepartment('');
+              }}>
                 <Plus className="h-4 w-4 mr-1" />Create Review
               </Button>
             )}
@@ -293,7 +341,36 @@ export function AnnualReviewPage() {
         )}
       />
 
-      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+      <div className="no-print flex flex-wrap gap-1.5">
+        {[
+          { href: productQuery ? `/cpv/cpp?product=${encodeURIComponent(productQuery)}` : '/cpv/cpp', label: 'CPP' },
+          { href: productQuery ? `/cpv/cqa?product=${encodeURIComponent(productQuery)}` : '/cpv/cqa', label: 'CQA' },
+          { href: '/cpv/yield-monitoring', label: 'Yield' },
+          { href: '/cpv/environmental-monitoring', label: 'Environmental' },
+          { href: '/cpv/utility-monitoring', label: 'Utility' },
+          { href: '/cpv/hold-time-monitoring', label: 'Hold Time' },
+          { href: '/cpv/stability-monitoring', label: 'Stability' },
+          { href: '/cpv/statistical-process-control', label: 'SPC' },
+          { href: '/cpv/process-capability', label: 'Process Capability' },
+          { href: productQuery ? `/cpv/trend-analysis?product=${encodeURIComponent(productQuery)}` : '/cpv/trend-analysis', label: 'Trend Analysis' },
+          { href: '/cpv/risk-assessment', label: 'Risk Assessment' },
+          { href: '/qms/deviation', label: 'Deviation' },
+          { href: '/qms/capa', label: 'CAPA' },
+          { href: '/qms/change-control', label: 'Change Control' },
+          { href: '/qms/equipment/calibration-records', label: 'Calibration' },
+          { href: '/qms/equipment/preventive-maintenance', label: 'Maintenance' },
+          { href: '/qms/oos', label: 'OOS' },
+          { href: '/admin/audit-trail', label: 'Audit Trail' },
+          { href: '/cpv/reports-analytics', label: 'Reports' },
+          { href: '/cpv/dashboard', label: 'Management Review' },
+        ].map((link) => (
+          <Link key={link.label} href={link.href} className="rounded-md border px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900">
+            {link.label}
+          </Link>
+        ))}
+      </div>
+
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
         <KpiCard label="Total Reviews" value={summary.total} tone="blue" />
         <KpiCard label="Draft" value={summary.draft} />
         <KpiCard label="Under Review" value={summary.underReview} tone="amber" />
@@ -302,13 +379,37 @@ export function AnnualReviewPage() {
         <KpiCard label="Due" value={summary.due} tone="amber" />
         <KpiCard label="High Risk" value={summary.highRisk} tone="red" />
         <KpiCard label="Health Score" value={`${summary.averageHealthScore}%`} tone="blue" />
+        <KpiCard label="Escalations" value={filteredRecords.filter((r) => r.aiInsights?.escalationRequired).length} tone="amber" />
       </div>
 
       <Card>
-        <CardHeader><CardTitle className="text-base">Annual CPV Review Register</CardTitle></CardHeader>
+        <CardHeader className="pb-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <CardTitle className="text-base">Annual CPV Review Register</CardTitle>
+            <div className="flex flex-wrap gap-2">
+              <Input className="w-48" placeholder="Search reviews…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-40"><SelectValue placeholder="Status" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  {['Draft', 'Generated', 'Under Review', 'Approved', 'Rejected', 'Archived'].map((s) => (
+                    <SelectItem key={s} value={s}>{s}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={yearFilter} onValueChange={setYearFilter}>
+                <SelectTrigger className="w-32"><SelectValue placeholder="Year" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Years</SelectItem>
+                  {years.map((y) => <SelectItem key={y} value={y}>{y}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </CardHeader>
         <CardContent>
-          {records.length ? (
-            <ResponsiveDataTable columns={columns} data={records} searchKeys={['cpvReviewNumber', 'productName']} />
+          {filteredRecords.length ? (
+            <ResponsiveDataTable columns={columns} data={filteredRecords} searchKeys={['cpvReviewNumber', 'productName']} />
           ) : (
             <EmptyState title="No reviews yet" message="Create an annual CPV review to generate the official report." />
           )}
@@ -346,12 +447,18 @@ export function AnnualReviewPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div><Label>Review Period From *</Label><Input type="date" className="mt-1" value={periodFrom} onChange={(e) => setPeriodFrom(e.target.value)} /></div>
               <div><Label>Review Period To *</Label><Input type="date" className="mt-1" value={periodTo} onChange={(e) => setPeriodTo(e.target.value)} /></div>
+              <div><Label>Site</Label><Input className="mt-1" value={site} onChange={(e) => setSite(e.target.value)} placeholder="Manufacturing site" /></div>
+              <div><Label>Department</Label><Input className="mt-1" value={department} onChange={(e) => setDepartment(e.target.value)} placeholder="QA / Production" /></div>
+              <div className="sm:col-span-2">
+                <Label>Change Reason (ALCOA+) *</Label>
+                <Textarea className="mt-1" rows={2} value={changeReason} onChange={(e) => setChangeReason(e.target.value)} placeholder="Why is this annual CPV review being created?" />
+              </div>
               <p className="sm:col-span-2 text-sm text-muted-foreground">
                 Preview number: {generateCpvReviewNumber(new Date(periodTo).getFullYear(), records.length)}
               </p>
               <div className="flex gap-2 sm:col-span-2">
                 <Button variant="outline" onClick={() => setStep(0)}>Back</Button>
-                <Button onClick={() => void collectData()} disabled={collecting}>
+                <Button onClick={() => void collectData()} disabled={collecting || changeReason.trim().length < 5}>
                   <RefreshCw className={`h-4 w-4 mr-1 ${collecting ? 'animate-spin' : ''}`} />Collect Data
                 </Button>
               </div>
@@ -371,14 +478,29 @@ export function AnnualReviewPage() {
               <TabsContent value="summary" className="space-y-4">
                 <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
                   <KpiCard label="Batches" value={snapshot.metrics.totalBatchesReviewed} />
+                  <KpiCard label="Acceptance %" value={`${snapshot.metrics.batchAcceptanceRate}%`} />
                   <KpiCard label="CPP Compliance" value={`${snapshot.metrics.cppCompliancePct}%`} tone={snapshot.metrics.cppCompliancePct >= 95 ? 'green' : 'amber'} />
                   <KpiCard label="CQA Compliance" value={`${snapshot.metrics.cqaCompliancePct}%`} tone={snapshot.metrics.cqaCompliancePct >= 95 ? 'green' : 'amber'} />
                   <KpiCard label="Avg Cpk" value={snapshot.metrics.averageCpk.toFixed(2)} tone={snapshot.metrics.averageCpk >= 1.33 ? 'green' : 'red'} />
+                  <KpiCard label="Sigma" value={snapshot.metrics.sigmaLevel.toFixed(1)} />
                   <KpiCard label="Process Status" value={snapshot.overallProcessStatus} tone={processStatusColor(snapshot.overallProcessStatus)} />
                   <KpiCard label="Risk Level" value={snapshot.overallRiskLevel} tone={snapshot.overallRiskLevel === 'Low' ? 'green' : 'red'} />
                   <KpiCard label="Deviations" value={snapshot.deviations.total} />
                   <KpiCard label="Open Risks" value={snapshot.metrics.openRiskCount} />
+                  {previewAi && (
+                    <>
+                      <KpiCard label="AI Health" value={`${previewAi.processHealthScore}%`} tone="blue" />
+                      <KpiCard label="AI Confidence" value={`${previewAi.confidenceScore}%`} />
+                    </>
+                  )}
                 </div>
+                {previewAi && (
+                  <Card><CardContent className="pt-4 space-y-2 text-sm">
+                    <p><span className="font-medium">AI Executive Summary:</span> {previewAi.aiExecutiveSummary}</p>
+                    <p><span className="font-medium">AI Risk Prediction:</span> {previewAi.aiRiskPrediction}</p>
+                    <p><span className="font-medium">Preventive:</span> {previewAi.aiPreventiveRecommendations}</p>
+                  </CardContent></Card>
+                )}
                 <Textarea value={executiveSummary} onChange={(e) => setExecutiveSummary(e.target.value)} rows={4} placeholder="Executive summary" />
                 {!activeReview && canCreate && (
                   <Button onClick={() => void generateReview()}>Generate Review Sections</Button>
@@ -433,9 +555,17 @@ export function AnnualReviewPage() {
               <TabsContent value="narrative" className="space-y-4">
                 <div><Label>Conclusion *</Label><Textarea className="mt-1" rows={4} value={conclusion} onChange={(e) => setConclusion(e.target.value)} /></div>
                 <div><Label>Recommendations</Label><Textarea className="mt-1" rows={4} value={recommendations} onChange={(e) => setRecommendations(e.target.value)} /></div>
+                <div><Label>Change Reason *</Label><Textarea className="mt-1" rows={2} value={changeReason} onChange={(e) => setChangeReason(e.target.value)} /></div>
                 {activeReview && canEdit && (
                   <Button variant="outline" onClick={async () => {
-                    const { error: err } = await updateCpvReview(activeReview.id, { conclusion, recommendations, executiveSummary }, actor, activeReview);
+                    if (changeReason.trim().length < 5) return toast.error('Change reason must be at least 5 characters');
+                    const { error: err } = await updateCpvReview(
+                      activeReview.id,
+                      { conclusion, recommendations, executiveSummary, changeReason: changeReason.trim() },
+                      actor,
+                      activeReview,
+                      { changeReason: changeReason.trim() },
+                    );
                     if (err) return toast.error(err);
                     toast.success('Narrative saved');
                     await load();

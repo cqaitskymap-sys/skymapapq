@@ -1,19 +1,6 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { PlaceholderPage } from '@/components/layout/placeholder-page';
-
-export default function PqrPackagingPage() {
-  return (
-    <PlaceholderPage
-      title="PQR Packaging Review"
-      description="Packaging review section for Product Quality Review."
-      breadcrumbs={[
-        { label: 'Dashboard', href: '/dashboard' },
-        { label: 'PQR', href: '/dashboard/pqr' },
-        { label: 'Packaging Review' },
-      ]}
-      backHref="/dashboard/packaging"
-      backLabel="Go to Packaging Module"
-    />
-  );
+export default async function PqrPackagingRedirect(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
+  redirect(`/dashboard/pqr/${params.id}/packaging`);
 }

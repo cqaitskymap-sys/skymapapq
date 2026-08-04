@@ -1,12 +1,9 @@
 import {
-  collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where,
+  collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
+  type Unsubscribe,
 } from 'firebase/firestore';
-import { writeAuditTrail } from '@/lib/audit-trail';
-import { getFirebaseFirestore } from '@/lib/firebase';
-import {
-  getAdminRecords, createAdminRecord, updateAdminRecord,
-  checkUniqueField, logAuditEvent,
-} from './admin-service';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseApp, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import { ADMIN_COLLECTIONS } from './constants';
 import type { DocumentNumbering, DocumentNumberingFormData } from './schemas';
 
@@ -23,7 +20,8 @@ export interface GenerateDocumentNumberOptions {
   manualNumber?: string;
   allowManualOverride?: boolean;
   increment?: boolean;
-  date?: Date;
+  preview?: boolean;
+  date?: Date | string;
 }
 
 export interface GenerateDocumentNumberResult {
@@ -31,41 +29,45 @@ export interface GenerateDocumentNumberResult {
   formatId?: string;
   error?: string;
   preview?: boolean;
+  nextRunningNumber?: number;
 }
 
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-async function logNumberingAudit(
-  action: string,
-  recordId: string,
-  meta: DocumentNumberingAuditMeta,
-  oldValue: unknown,
-  newValue: unknown,
-) {
-  await logAuditEvent({
-    userId: meta.userId,
-    userName: meta.userName,
-    module: 'Document Numbering',
-    recordId,
-    action,
-    oldValue: typeof oldValue === 'string' ? oldValue : JSON.stringify(oldValue ?? ''),
-    newValue: typeof newValue === 'string' ? newValue : JSON.stringify(newValue ?? ''),
-    reason: '',
-    ipAddress: 'client',
-    device: typeof navigator !== 'undefined' ? navigator.userAgent : 'browser',
-    status: 'Success',
-  });
+/** Set after first undeployed/CORS failure so we stop calling missing Cloud Functions. */
+let documentNumberingCallablesUnavailable = false;
+let warnedDocumentNumberingUnavailable = false;
 
-  await writeAuditTrail({
-    collectionName: ADMIN_COLLECTIONS.documentNumbering,
-    documentId: recordId,
-    action,
-    oldValue,
-    newValue,
-    userId: meta.userId,
-    userName: meta.userName,
-    moduleName: 'Document Numbering',
-  });
+function isCallableUnavailableError(error: unknown): boolean {
+  const code = String((error as { code?: string })?.code || '').toLowerCase();
+  const message = String((error as { message?: string })?.message || error || '').toLowerCase();
+  return (
+    code.includes('not-found')
+    || code.includes('internal')
+    || message.includes('not-found')
+    || message.includes('cors')
+    || message.includes('failed to fetch')
+    || message.includes('network')
+  );
+}
+
+function markDocumentNumberingUnavailable(context: string): void {
+  documentNumberingCallablesUnavailable = true;
+  if (!warnedDocumentNumberingUnavailable) {
+    warnedDocumentNumberingUnavailable = true;
+    console.warn(
+      `[document-numbering] Cloud Function unavailable (${context}). ` +
+        'Enable billing on apq-skymap and deploy generateAdminDocumentNumber. Using local fallbacks where available.',
+    );
+  }
+}
+
+function callableErrorMessage(error: unknown, fallback: string): string {
+  const err = error as { message?: string };
+  return (err.message || fallback)
+    .replace(/^Firebase:\s*/i, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim() || fallback;
 }
 
 export function buildNumberingId(code: string): string {
@@ -133,13 +135,15 @@ export function buildDocumentNumberPreview(
   const runLen = Number(format.runningNumberLength ?? format.runningNumber ?? 4);
   const runVal = options?.runningNumber ?? Number(format.currentRunningNumber ?? format.currentNumber ?? 0);
   const paddedRun = String(runVal).padStart(runLen, '0');
+  const suffix = format.suffix || '';
 
   const parts = tokens.map((token) => {
     switch (token) {
       case 'PREFIX': return format.prefix || '';
+      case 'SUFFIX': return suffix;
       case 'SITE_CODE': return options?.siteCode || format.siteCode || '';
       case 'DEPARTMENT_CODE': return options?.departmentCode || format.departmentCode || '';
-      case 'PRODUCT_CODE': return options?.productCode || format.productCodeOptional || '';
+      case 'PRODUCT_CODE': return options?.productCode || format.productCodeOptional || format.product || '';
       case 'DOCUMENT_TYPE': return documentTypeToken(format.documentType || '');
       case 'RUNNING_NUMBER': return paddedRun;
       case 'MONTH': return formatMonth(format.monthFormat || 'None', date);
@@ -148,6 +152,10 @@ export function buildDocumentNumberPreview(
       default: return '';
     }
   }).filter((p) => p !== '');
+
+  if (suffix && !tokens.includes('SUFFIX')) {
+    parts.push(suffix);
+  }
 
   if (!sep) return parts.join('');
   return parts.join(sep);
@@ -158,15 +166,15 @@ export function getPeriodKey(resetFrequency: string, date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   switch (resetFrequency) {
-    case 'Yearly': return `${y}`;
-    case 'Monthly': return `${y}-${m}`;
-    case 'Daily': return `${y}-${m}-${d}`;
-    default: return 'all';
+    case 'Yearly':
+      return `${y}`;
+    case 'Monthly':
+      return `${y}-${m}`;
+    case 'Daily':
+      return `${y}-${m}-${d}`;
+    default:
+      return 'all';
   }
-}
-
-function sequenceDocId(numberingId: string, periodKey: string): string {
-  return `${numberingId}__${periodKey}`;
 }
 
 export function normalizeDocumentNumbering(n: DocumentNumbering): DocumentNumbering {
@@ -174,54 +182,136 @@ export function normalizeDocumentNumbering(n: DocumentNumbering): DocumentNumber
   const runLen = Number(n.runningNumberLength ?? n.runningNumber ?? 4);
   const currentRun = Number(n.currentRunningNumber ?? n.currentNumber ?? 0);
   const moduleName = n.moduleName || n.module || '';
+  const numberingName = n.numberingName || n.numberingCode || numberingId;
   return {
     ...n,
     numberingId,
     numberingCode: n.numberingCode || numberingId.replace('NUM-', ''),
+    numberingName,
+    description: n.description || '',
     moduleName,
     module: moduleName,
+    documentCategory: n.documentCategory || '',
+    department: n.department || '',
+    site: n.site || '',
+    businessUnit: n.businessUnit || '',
+    company: n.company || '',
+    location: n.location || '',
+    product: n.product || '',
+    workflowCode: n.workflowCode || '',
+    suffix: n.suffix || '',
+    startingNumber: Number(n.startingNumber ?? 0),
     runningNumberLength: runLen,
     runningNumber: runLen,
     currentRunningNumber: currentRun,
     currentNumber: currentRun,
     exampleNumberPreview: n.exampleNumberPreview || n.exampleFormat || buildDocumentNumberPreview(n),
     exampleFormat: n.exampleNumberPreview || n.exampleFormat || buildDocumentNumberPreview(n),
+    numberingVersion: n.numberingVersion || '1.0',
     autoGenerateEnabled: n.autoGenerateEnabled ?? true,
     manualOverrideAllowed: n.manualOverrideAllowed ?? false,
+    allowSkipSequence: n.allowSkipSequence ?? false,
     formatTokens: n.formatTokens || 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
     monthFormat: (n.monthFormat as DocumentNumbering['monthFormat']) || 'None',
     revisionFormat: (n.revisionFormat as DocumentNumbering['revisionFormat']) || '00',
+    isArchived: n.isArchived ?? false,
+    isDeleted: Boolean(n.isDeleted),
   };
 }
 
-export function isNumberingActive(n: DocumentNumbering): boolean {
-  return n.status === 'Active' && !n.isDeleted;
+function mapNumberingDoc(snapshot: { id: string; data: () => Record<string, unknown> }): DocumentNumbering {
+  return normalizeDocumentNumbering({ id: snapshot.id, ...snapshot.data() } as DocumentNumbering);
 }
 
-export async function fetchDocumentNumberings(): Promise<DocumentNumbering[]> {
+export function isNumberingActive(n: DocumentNumbering): boolean {
+  return n.status === 'Active' && !n.isDeleted && !n.isArchived;
+}
+
+export async function fetchDocumentNumberings(includeDeleted = false): Promise<DocumentNumbering[]> {
+  if (!isFirebaseConfigured()) return [];
   try {
-    const records = await getAdminRecords<DocumentNumbering>(ADMIN_COLLECTIONS.documentNumbering);
-    return records.filter((n) => !n.isDeleted).map(normalizeDocumentNumbering);
-  } catch {
-    return [];
+    const snapshot = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.documentNumbering),
+      orderBy('createdAt', 'desc'),
+    ));
+    return snapshot.docs
+      .map((document) => mapNumberingDoc(document))
+      .filter((n) => includeDeleted || !n.isDeleted);
+  } catch (error) {
+    console.error('fetchDocumentNumberings failed:', error);
+    throw new Error('Unable to load document numbering rules. Check your connection and permissions.');
   }
 }
 
-export async function fetchDocumentNumberingById(id: string): Promise<DocumentNumbering | null> {
-  const all = await fetchDocumentNumberings();
-  return all.find((n) => n.id === id) ?? null;
+export function subscribeToDocumentNumberings(
+  includeDeleted: boolean,
+  onData: (formats: DocumentNumbering[]) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
+  if (!isFirebaseConfigured()) {
+    onData([]);
+    return () => undefined;
+  }
+  const numberingQuery = query(
+    collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.documentNumbering),
+    orderBy('createdAt', 'desc'),
+  );
+  return onSnapshot(
+    numberingQuery,
+    (snapshot) => {
+      const formats = snapshot.docs
+        .map((document) => mapNumberingDoc(document))
+        .filter((n) => includeDeleted || !n.isDeleted);
+      onData(formats);
+    },
+    (error) => {
+      console.error('subscribeToDocumentNumberings failed:', error);
+      onError?.(new Error(error.message || 'Unable to subscribe to document numbering'));
+    },
+  );
+}
+
+export async function fetchDocumentNumberingById(
+  id: string,
+  includeDeleted = false,
+): Promise<DocumentNumbering | null> {
+  if (!isFirebaseConfigured() || !id) return null;
+  try {
+    const snapshot = await getDoc(doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.documentNumbering, id));
+    if (!snapshot.exists()) return null;
+    const format = mapNumberingDoc(snapshot);
+    if (format.isDeleted && !includeDeleted) return null;
+    return format;
+  } catch (error) {
+    console.error('fetchDocumentNumberingById failed:', error);
+    throw new Error('Unable to load numbering rule details.');
+  }
 }
 
 export async function fetchActiveNumberingForModule(
   moduleName: string,
   documentType: string,
 ): Promise<DocumentNumbering | null> {
-  const list = await fetchDocumentNumberings();
-  return list.find((n) =>
-    isNumberingActive(n) &&
-    n.moduleName === moduleName &&
-    n.documentType === documentType,
-  ) ?? null;
+  if (!isFirebaseConfigured() || !moduleName) return null;
+  try {
+    const snapshot = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.documentNumbering),
+      where('moduleName', '==', moduleName),
+      where('status', '==', 'Active'),
+      limit(20),
+    ));
+    const formats = snapshot.docs
+      .map((document) => mapNumberingDoc(document))
+      .filter((n) => isNumberingActive(n));
+    return formats.find((n) => n.documentType === documentType) ?? formats[0] ?? null;
+  } catch {
+    const all = await fetchDocumentNumberings();
+    return all.find((n) =>
+      isNumberingActive(n)
+      && n.moduleName === moduleName
+      && n.documentType === documentType,
+    ) ?? null;
+  }
 }
 
 export async function hasDuplicateActiveNumbering(
@@ -231,224 +321,241 @@ export async function hasDuplicateActiveNumbering(
 ): Promise<boolean> {
   const list = await fetchDocumentNumberings();
   return list.some((n) =>
-    isNumberingActive(n) &&
-    n.moduleName === moduleName &&
-    n.documentType === documentType &&
-    n.id !== excludeId,
+    isNumberingActive(n)
+    && n.moduleName === moduleName
+    && n.documentType === documentType
+    && n.id !== excludeId,
   );
 }
 
 export function getDocumentNumberingSummaryCounts(formats: DocumentNumbering[]) {
+  const active = formats.filter((n) => !n.isDeleted);
   return {
-    total: formats.length,
-    active: formats.filter((n) => n.status === 'Active').length,
-    inactive: formats.filter((n) => n.status === 'Inactive').length,
-    autoGenerateEnabled: formats.filter((n) => n.autoGenerateEnabled).length,
-    manualOverrideEnabled: formats.filter((n) => n.manualOverrideAllowed).length,
-    yearlyReset: formats.filter((n) => n.resetFrequency === 'Yearly').length,
-    monthlyReset: formats.filter((n) => n.resetFrequency === 'Monthly').length,
+    total: active.length,
+    active: active.filter((n) => n.status === 'Active').length,
+    inactive: active.filter((n) => n.status === 'Inactive').length,
+    archived: active.filter((n) => n.isArchived).length,
+    autoGenerateEnabled: active.filter((n) => n.autoGenerateEnabled).length,
+    manualOverrideEnabled: active.filter((n) => n.manualOverrideAllowed).length,
+    yearlyReset: active.filter((n) => n.resetFrequency === 'Yearly').length,
+    monthlyReset: active.filter((n) => n.resetFrequency === 'Monthly').length,
+    deleted: formats.filter((n) => n.isDeleted).length,
   };
 }
 
-function formToPayload(
-  data: DocumentNumberingFormData,
-  meta: DocumentNumberingAuditMeta,
-  status = 'Active',
-) {
-  const numberingId = buildNumberingId(data.numberingCode);
-  const preview = buildDocumentNumberPreview({
-    ...data,
-    numberingCode: data.numberingCode,
-    documentType: data.documentType,
-  });
-  return {
-    numberingId,
-    numberingCode: data.numberingCode,
-    moduleName: data.moduleName,
-    module: data.moduleName,
-    documentType: data.documentType,
-    prefix: data.prefix,
-    siteCode: data.siteCode,
-    departmentCode: data.departmentCode,
-    productCodeOptional: data.productCodeOptional,
-    yearFormat: data.yearFormat,
-    monthFormat: data.monthFormat,
-    separator: data.separator,
-    runningNumberLength: data.runningNumberLength,
-    runningNumber: data.runningNumberLength,
-    currentRunningNumber: data.currentRunningNumber,
-    currentNumber: data.currentRunningNumber,
-    resetFrequency: data.resetFrequency,
-    revisionFormat: data.revisionFormat,
-    formatTokens: data.formatTokens,
-    exampleNumberPreview: preview,
-    exampleFormat: preview,
-    autoGenerateEnabled: data.autoGenerateEnabled,
-    manualOverrideAllowed: data.manualOverrideAllowed,
-    remarks: data.remarks,
-    status,
-    updatedBy: meta.userId,
-  };
+export function getExtendedSummaryCounts(formats: DocumentNumbering[]) {
+  return getDocumentNumberingSummaryCounts(formats);
+}
+
+export function getNumberingIntegrationModules(format: DocumentNumbering): string[] {
+  const modules = [
+    'PQR', 'CPV', 'Deviation', 'OOS', 'CAPA', 'Change Control', 'Stability',
+    'Complaint', 'Recall', 'DMS', 'Audit', 'Validation', 'CSV',
+    'Equipment', 'Warehouse', 'eBMR', 'Batch', 'Product', 'Risk Management',
+  ];
+  return modules.filter(
+    (mod) => mod === format.moduleName || format.moduleName?.includes(mod),
+  );
+}
+
+export function canDeleteNumberingRecord(format: DocumentNumbering): { allowed: boolean; reason?: string } {
+  if (format.isDeleted) return { allowed: false, reason: 'Rule is already deleted.' };
+  if (format.status === 'Active') {
+    return { allowed: false, reason: 'Deactivate rule before deleting.' };
+  }
+  return { allowed: true };
 }
 
 export async function createDocumentNumbering(
   data: DocumentNumberingFormData,
-  meta: DocumentNumberingAuditMeta,
+  _meta: DocumentNumberingAuditMeta,
 ): Promise<{ format: DocumentNumbering | null; error: string | null }> {
   try {
-    const unique = await checkUniqueField(ADMIN_COLLECTIONS.documentNumbering, 'numberingCode', data.numberingCode);
-    if (!unique) return { format: null, error: 'Numbering code already exists' };
-
-    if (await hasDuplicateActiveNumbering(data.moduleName, data.documentType)) {
-      return { format: null, error: 'An active numbering format already exists for this module and document type' };
-    }
-
-    const payload = { ...formToPayload(data, meta), createdBy: meta.userId };
-    const created = await createAdminRecord(
-      ADMIN_COLLECTIONS.documentNumbering,
-      payload as Omit<DocumentNumbering, 'id'>,
-      { userId: meta.userId, userName: meta.userName, module: 'Document Numbering', action: 'CREATE_NUMBERING_FORMAT' },
+    const createFn = httpsCallable<Record<string, unknown>, DocumentNumbering>(
+      getFirebaseFunctions(),
+      'createAdminDocumentNumbering',
     );
-
-    await logNumberingAudit('CREATE_NUMBERING_FORMAT', created.id || payload.numberingId, meta, null, payload);
-    return { format: normalizeDocumentNumbering(created as DocumentNumbering), error: null };
-  } catch (e) {
-    return { format: null, error: (e as Error).message };
+    const response = await createFn({
+      ...data,
+      reason: data.changeReason || 'Initial numbering rule registration',
+    });
+    return { format: normalizeDocumentNumbering(response.data), error: null };
+  } catch (error) {
+    return { format: null, error: callableErrorMessage(error, 'Unable to create numbering rule') };
   }
 }
 
 export async function updateDocumentNumbering(
   id: string,
   data: DocumentNumberingFormData,
-  existing: DocumentNumbering,
-  meta: DocumentNumberingAuditMeta,
+  _existing: DocumentNumbering,
+  _meta: DocumentNumberingAuditMeta,
 ): Promise<{ format: DocumentNumbering | null; error: string | null }> {
   try {
-    if (data.numberingCode !== existing.numberingCode) {
-      const unique = await checkUniqueField(ADMIN_COLLECTIONS.documentNumbering, 'numberingCode', data.numberingCode, id);
-      if (!unique) return { format: null, error: 'Numbering code already exists' };
-    }
-
-    const willBeActive = existing.status === 'Active';
-    if (willBeActive && await hasDuplicateActiveNumbering(data.moduleName, data.documentType, id)) {
-      return { format: null, error: 'An active numbering format already exists for this module and document type' };
-    }
-
-    const updates = formToPayload(data, meta, existing.status);
-    delete (updates as { createdBy?: string }).createdBy;
-
-    if (existing.manualOverrideAllowed !== data.manualOverrideAllowed) {
-      await logNumberingAudit(
-        'MANUAL_OVERRIDE_TOGGLE',
-        id,
-        meta,
-        existing.manualOverrideAllowed,
-        data.manualOverrideAllowed,
-      );
-    }
-
-    const updated = await updateAdminRecord(ADMIN_COLLECTIONS.documentNumbering, id, updates, {
-      userId: meta.userId,
-      userName: meta.userName,
-      module: 'Document Numbering',
-      oldValue: JSON.stringify(existing),
+    const updateFn = httpsCallable<
+      Record<string, unknown>,
+      { format: DocumentNumbering }
+    >(getFirebaseFunctions(), 'updateAdminDocumentNumbering');
+    const response = await updateFn({
+      numberingDocId: id,
+      updates: data,
+      reason: data.changeReason,
     });
-
-    await logNumberingAudit('EDIT_NUMBERING_FORMAT', id, meta, existing, updates);
-    return { format: normalizeDocumentNumbering(updated as DocumentNumbering), error: null };
-  } catch (e) {
-    return { format: null, error: (e as Error).message };
+    return { format: normalizeDocumentNumbering(response.data.format), error: null };
+  } catch (error) {
+    return { format: null, error: callableErrorMessage(error, 'Unable to update numbering rule') };
   }
 }
 
 export async function setDocumentNumberingStatus(
   id: string,
-  format: DocumentNumbering,
+  _format: DocumentNumbering,
   status: 'Active' | 'Inactive',
-  meta: DocumentNumberingAuditMeta,
+  _meta: DocumentNumberingAuditMeta,
+  reason: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    if (status === 'Active' && await hasDuplicateActiveNumbering(format.moduleName, format.documentType, id)) {
-      return { success: false, error: 'Another active format exists for this module and document type' };
-    }
-
-    await updateAdminRecord(ADMIN_COLLECTIONS.documentNumbering, id, { status }, {
-      userId: meta.userId,
-      userName: meta.userName,
-      module: 'Document Numbering',
-      oldValue: JSON.stringify(format),
-    });
-
-    const action = status === 'Active' ? 'ACTIVATE_NUMBERING_FORMAT' : 'DEACTIVATE_NUMBERING_FORMAT';
-    await logNumberingAudit(action, id, meta, format.status, status);
+    const fn = httpsCallable(getFirebaseFunctions(), 'setAdminDocumentNumberingStatus');
+    await fn({ numberingDocId: id, numberingStatus: status, reason });
     return { success: true };
-  } catch (e) {
-    return { success: false, error: (e as Error).message };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to update rule status') };
   }
 }
 
-async function getSequenceValue(numberingId: string, periodKey: string): Promise<number | null> {
-  const ref = doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.documentNumberSequences, sequenceDocId(numberingId, periodKey));
-  const snap = await getDoc(ref);
-  if (!snap.exists()) return null;
-  return Number(snap.data().currentValue ?? 0);
+export async function archiveDocumentNumbering(
+  id: string,
+  reason: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'archiveAdminDocumentNumbering');
+    await fn({ numberingDocId: id, reason });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to archive rule') };
+  }
 }
 
-async function setSequenceValue(numberingId: string, periodKey: string, value: number, formatId: string): Promise<void> {
-  const ref = doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.documentNumberSequences, sequenceDocId(numberingId, periodKey));
-  await setDoc(ref, {
-    numberingId,
-    periodKey,
-    currentValue: value,
-    formatId,
-    updatedAt: new Date().toISOString(),
-  }, { merge: true });
+export async function softDeleteDocumentNumbering(
+  id: string,
+  format: DocumentNumbering,
+  reason: string,
+): Promise<{ success: boolean; error?: string }> {
+  const check = canDeleteNumberingRecord(format);
+  if (!check.allowed) return { success: false, error: check.reason };
+  try {
+    const deleteFn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminDocumentNumbering');
+    await deleteFn({ numberingDocId: id, reason });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to delete rule') };
+  }
+}
+
+/** @deprecated use softDeleteDocumentNumbering */
+export async function deleteDocumentNumbering(
+  id: string,
+  format: DocumentNumbering,
+  reason: string,
+): Promise<{ success: boolean; error?: string }> {
+  return softDeleteDocumentNumbering(id, format, reason);
+}
+
+export async function restoreDocumentNumbering(
+  id: string,
+  reason: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const restoreFn = httpsCallable(getFirebaseFunctions(), 'restoreAdminDocumentNumbering');
+    await restoreFn({ numberingDocId: id, reason });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to restore rule') };
+  }
+}
+
+export async function cloneDocumentNumbering(
+  sourceId: string,
+  newCode: string,
+  newName: string,
+  _meta: DocumentNumberingAuditMeta,
+  reason = 'Clone numbering rule',
+): Promise<{ format: DocumentNumbering | null; error: string | null }> {
+  try {
+    const cloneFn = httpsCallable<Record<string, unknown>, DocumentNumbering>(
+      getFirebaseFunctions(),
+      'cloneAdminDocumentNumbering',
+    );
+    const response = await cloneFn({
+      sourceNumberingDocId: sourceId,
+      newCode,
+      newName,
+      reason,
+    });
+    return { format: normalizeDocumentNumbering(response.data), error: null };
+  } catch (error) {
+    return { format: null, error: callableErrorMessage(error, 'Unable to clone rule') };
+  }
+}
+
+export async function bulkUpdateDocumentNumberings(
+  numberingIds: string[],
+  action: 'activate' | 'deactivate' | 'archive',
+  reason: string,
+): Promise<{ successCount: number; error?: string }> {
+  try {
+    const bulkFn = httpsCallable<
+      Record<string, unknown>,
+      { successCount: number }
+    >(getFirebaseFunctions(), 'bulkUpdateAdminDocumentNumberings');
+    const response = await bulkFn({ numberingDocIds: numberingIds, action, reason });
+    return { successCount: response.data.successCount };
+  } catch (error) {
+    return { successCount: 0, error: callableErrorMessage(error, 'Bulk update failed') };
+  }
+}
+
+export async function bulkSoftDeleteDocumentNumberings(
+  numberingIds: string[],
+  reason: string,
+): Promise<{ successCount: number; errors: string[]; error?: string }> {
+  try {
+    const bulkFn = httpsCallable<
+      Record<string, unknown>,
+      { successCount: number; errors: string[] }
+    >(getFirebaseFunctions(), 'bulkSoftDeleteAdminDocumentNumberings');
+    const response = await bulkFn({ numberingDocIds: numberingIds, reason });
+    return response.data;
+  } catch (error) {
+    return { successCount: 0, errors: [], error: callableErrorMessage(error, 'Bulk delete failed') };
+  }
 }
 
 export async function resetRunningNumber(
   id: string,
-  format: DocumentNumbering,
-  meta: DocumentNumberingAuditMeta,
+  _format: DocumentNumbering,
+  _meta: DocumentNumberingAuditMeta,
+  reason: string,
   resetTo = 0,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const periodKey = getPeriodKey(format.resetFrequency, new Date());
-    await setSequenceValue(format.numberingId, periodKey, resetTo, id);
-    await updateAdminRecord(ADMIN_COLLECTIONS.documentNumbering, id, {
-      currentRunningNumber: resetTo,
-      currentNumber: resetTo,
-    }, {
-      userId: meta.userId,
-      userName: meta.userName,
-      module: 'Document Numbering',
-      oldValue: JSON.stringify(format),
-    });
-    await logNumberingAudit('RESET_RUNNING_NUMBER', id, meta, format.currentRunningNumber, resetTo);
+    const fn = httpsCallable(getFirebaseFunctions(), 'resetAdminDocumentNumberingSequence');
+    await fn({ numberingDocId: id, resetTo, reason });
     return { success: true };
-  } catch (e) {
-    return { success: false, error: (e as Error).message };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to reset sequence') };
   }
 }
 
 export async function testGenerateNumber(
   format: DocumentNumbering,
-  meta: DocumentNumberingAuditMeta,
+  _meta?: DocumentNumberingAuditMeta,
 ): Promise<GenerateDocumentNumberResult> {
-  const number = buildDocumentNumberPreview(format, {
-    runningNumber: Number(format.currentRunningNumber ?? 0) + 1,
+  return previewDocumentNumber(format.moduleName, format.documentType, {
+    siteCode: format.siteCode,
+    departmentCode: format.departmentCode,
+    productCode: format.productCodeOptional || format.product,
   });
-  await logNumberingAudit('TEST_GENERATE_NUMBER', format.id || format.numberingId, meta, null, { preview: number });
-  return { number, formatId: format.id, preview: true };
-}
-
-async function isNumberAlreadyUsed(number: string, moduleName: string): Promise<boolean> {
-  const q = query(
-    collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.documentNumberSequences),
-    where('lastGeneratedNumber', '==', number),
-    where('moduleName', '==', moduleName),
-  );
-  const snap = await getDocs(q);
-  return !snap.empty;
 }
 
 export async function generateDocumentNumber(
@@ -456,98 +563,175 @@ export async function generateDocumentNumber(
   documentType: string,
   options: GenerateDocumentNumberOptions = {},
 ): Promise<GenerateDocumentNumberResult> {
-  const format = await fetchActiveNumberingForModule(moduleName, documentType);
-  if (!format) {
-    return { number: '', error: `No active numbering format for ${moduleName} / ${documentType}` };
+  if (documentNumberingCallablesUnavailable) {
+    return {
+      number: '',
+      error: `Unable to generate number for ${moduleName} / ${documentType}`,
+    };
   }
-
-  if (!format.autoGenerateEnabled && !options.manualNumber) {
-    return { number: '', error: 'Auto generate is disabled for this format' };
-  }
-
-  if (options.manualNumber) {
-    if (!format.manualOverrideAllowed && !options.allowManualOverride) {
-      return { number: '', error: 'Manual override is not allowed for this format' };
-    }
-    if (await isNumberAlreadyUsed(options.manualNumber, moduleName)) {
-      return { number: '', error: 'Document number already exists' };
-    }
-    return { number: options.manualNumber, formatId: format.id };
-  }
-
-  const date = options.date ?? new Date();
-  const periodKey = getPeriodKey(format.resetFrequency, date);
-  let sequence = await getSequenceValue(format.numberingId, periodKey);
-
-  if (sequence === null) {
-    sequence = Number(format.currentRunningNumber ?? 0);
-    if (format.resetFrequency !== 'Never') {
-      sequence = 0;
-    }
-  }
-
-  const nextNumber = sequence + 1;
-  const built = buildDocumentNumberPreview(format, {
-    siteCode: options.siteCode,
-    departmentCode: options.departmentCode,
-    productCode: options.productCode,
-    revision: options.revision,
-    runningNumber: nextNumber,
-    date,
-  });
-
-  if (await isNumberAlreadyUsed(built, moduleName)) {
-    return { number: '', error: 'Generated number would duplicate an existing document number' };
-  }
-
-  if (options.increment) {
-    await setSequenceValue(format.numberingId, periodKey, nextNumber, format.id || '');
-    const seqRef = doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.documentNumberSequences, sequenceDocId(format.numberingId, periodKey));
-    await setDoc(seqRef, {
-      lastGeneratedNumber: built,
+  try {
+    // Mutate sequence only when increment is explicitly true
+    const shouldIncrement = options.increment === true && options.preview !== true;
+    const fn = httpsCallable<
+      Record<string, unknown>,
+      GenerateDocumentNumberResult
+    >(getFirebaseFunctions(), 'generateAdminDocumentNumber');
+    const response = await fn({
       moduleName,
       documentType,
-      updatedAt: new Date().toISOString(),
-    }, { merge: true });
-
-    if (format.id) {
-      await updateDoc(doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.documentNumbering, format.id), {
-        currentRunningNumber: nextNumber,
-        currentNumber: nextNumber,
-        updatedAt: new Date().toISOString(),
-      });
+      siteCode: options.siteCode,
+      departmentCode: options.departmentCode,
+      productCode: options.productCode,
+      revision: options.revision,
+      manualNumber: options.manualNumber,
+      allowManualOverride: options.allowManualOverride,
+      preview: !shouldIncrement,
+      increment: shouldIncrement,
+      date: options.date instanceof Date ? options.date.toISOString() : options.date,
+    });
+    return response.data;
+  } catch (error) {
+    if (isCallableUnavailableError(error)) {
+      markDocumentNumberingUnavailable('generateAdminDocumentNumber');
     }
+    return {
+      number: '',
+      error: callableErrorMessage(error, `Unable to generate number for ${moduleName} / ${documentType}`),
+    };
   }
+}
 
-  return { number: built, formatId: format.id, preview: !options.increment };
+export async function previewDocumentNumber(
+  moduleName: string,
+  documentType: string,
+  options: GenerateDocumentNumberOptions = {},
+): Promise<GenerateDocumentNumberResult> {
+  if (documentNumberingCallablesUnavailable) {
+    return {
+      number: '',
+      preview: true,
+      error: `Unable to preview number for ${moduleName} / ${documentType}`,
+    };
+  }
+  try {
+    const fn = httpsCallable<
+      Record<string, unknown>,
+      GenerateDocumentNumberResult
+    >(getFirebaseFunctions(), 'previewAdminDocumentNumber');
+    const response = await fn({
+      moduleName,
+      documentType,
+      siteCode: options.siteCode,
+      departmentCode: options.departmentCode,
+      productCode: options.productCode,
+      revision: options.revision,
+      date: options.date instanceof Date ? options.date.toISOString() : options.date,
+    });
+    return { ...response.data, preview: true };
+  } catch (error) {
+    if (isCallableUnavailableError(error)) {
+      markDocumentNumberingUnavailable('previewAdminDocumentNumber');
+      return {
+        number: '',
+        preview: true,
+        error: callableErrorMessage(error, `Unable to preview number for ${moduleName} / ${documentType}`),
+      };
+    }
+    // Fallback to generate with preview flag
+    return generateDocumentNumber(moduleName, documentType, { ...options, preview: true, increment: false });
+  }
+}
+
+export async function listDocumentNumberHistory(
+  numberingId?: string,
+  formatId?: string,
+): Promise<Array<Record<string, unknown> & { id: string }>> {
+  try {
+    const fn = httpsCallable<
+      Record<string, unknown>,
+      { history: Array<Record<string, unknown> & { id: string }> }
+    >(getFirebaseFunctions(), 'listAdminDocumentNumberHistory');
+    const response = await fn({ numberingId, formatId });
+    return response.data.history || [];
+  } catch (error) {
+    console.error('listDocumentNumberHistory failed:', error);
+    return [];
+  }
+}
+
+export async function fetchDocumentNumberingAuditTrail(recordId: string) {
+  if (!isFirebaseConfigured() || !recordId) return [];
+  try {
+    const firestore = getFirebaseFirestore();
+    const [trailSnap, logsSnap] = await Promise.all([
+      getDocs(query(
+        collection(firestore, ADMIN_COLLECTIONS.auditTrail),
+        where('documentId', '==', recordId),
+        orderBy('timestamp', 'desc'),
+        limit(30),
+      )).catch(() => ({ docs: [] })),
+      getDocs(query(
+        collection(firestore, ADMIN_COLLECTIONS.auditLogs),
+        where('recordId', '==', recordId),
+        orderBy('dateTime', 'desc'),
+        limit(30),
+      )).catch(() => ({ docs: [] })),
+    ]);
+    return [...trailSnap.docs, ...logsSnap.docs]
+      .map((document): Record<string, unknown> & { id: string } => {
+        const data = document.data() as Record<string, unknown>;
+        return { id: document.id, ...data };
+      })
+      .sort((a, b) => String(b.timestamp ?? b.dateTime).localeCompare(String(a.timestamp ?? a.dateTime)))
+      .slice(0, 30);
+  } catch (error) {
+    console.error('fetchDocumentNumberingAuditTrail failed:', error);
+    return [];
+  }
+}
+
+/** Alias used by UI */
+export async function fetchDocumentNumberingAudit(recordId: string) {
+  return fetchDocumentNumberingAuditTrail(recordId);
 }
 
 export function exportDocumentNumberingsCsv(formats: DocumentNumbering[]): string {
   const headers = [
-    'Numbering Code', 'Module', 'Document Type', 'Prefix', 'Site Code', 'Department Code',
-    'Year Format', 'Month Format', 'Separator', 'Running Length', 'Current Number',
-    'Reset Frequency', 'Revision Format', 'Format Tokens', 'Example Preview',
-    'Auto Generate', 'Manual Override', 'Status',
+    'Numbering Code', 'Numbering Name', 'Module', 'Document Type', 'Category',
+    'Department', 'Site', 'Business Unit', 'Prefix', 'Suffix', 'Site Code', 'Department Code',
+    'Year Format', 'Month Format', 'Separator', 'Running Length', 'Starting Number',
+    'Current Number', 'Reset Frequency', 'Revision Format', 'Format Tokens', 'Example Preview',
+    'Version', 'Auto Generate', 'Manual Override', 'Allow Skip', 'Status', 'Archived',
   ];
   const rows = formats.map((n) => [
     n.numberingCode,
+    n.numberingName,
     n.moduleName,
     n.documentType,
+    n.documentCategory,
+    n.department,
+    n.site,
+    n.businessUnit,
     n.prefix,
+    n.suffix,
     n.siteCode,
     n.departmentCode,
     n.yearFormat,
     n.monthFormat,
     n.separator,
     String(n.runningNumberLength),
+    String(n.startingNumber ?? 0),
     String(n.currentRunningNumber),
     n.resetFrequency,
     n.revisionFormat,
     n.formatTokens,
     n.exampleNumberPreview,
+    n.numberingVersion,
     n.autoGenerateEnabled ? 'Yes' : 'No',
     n.manualOverrideAllowed ? 'Yes' : 'No',
+    n.allowSkipSequence ? 'Yes' : 'No',
     n.status,
+    n.isArchived ? 'Yes' : 'No',
   ].map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','));
   return [headers.join(','), ...rows].join('\n');
 }
@@ -555,267 +739,203 @@ export function exportDocumentNumberingsCsv(formats: DocumentNumbering[]): strin
 export async function logDocumentNumberingExport(
   meta: DocumentNumberingAuditMeta,
   count: number,
+  reason = 'Numbering list export',
 ): Promise<void> {
-  await logNumberingAudit('EXPORT_NUMBERING_LIST', 'export', meta, null, { count });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminDocumentNumberingExport');
+    await fn({ count, reason, userId: meta.userId });
+  } catch (error) {
+    console.error('logDocumentNumberingExport failed:', error);
+  }
 }
 
-const DEFAULT_FORMATS: Array<DocumentNumberingFormData & { numberingCode: string }> = [
+function rowToImportNumbering(cols: string[], headers: string[]): Record<string, string> | null {
+  const idx = (name: string) => headers.findIndex((h) => h.includes(name));
+  const code = cols[idx('code')] || '';
+  if (!code) return null;
+  return {
+    numberingCode: code,
+    numberingName: cols[idx('name')] || code,
+    moduleName: cols[idx('module')] || 'PQR',
+    documentType: cols[idx('document')] || cols[idx('type')] || 'PQR Report',
+    prefix: cols[idx('prefix')] || code.split('-')[0] || 'DOC',
+    departmentCode: cols[idx('department')] || 'QA',
+    siteCode: cols[idx('site')] || '',
+    formatTokens: cols[idx('format')] || 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
+    separator: cols[idx('separator')] || '/',
+    yearFormat: cols[idx('year')] || 'YYYY',
+    resetFrequency: cols[idx('reset')] || 'Yearly',
+  };
+}
+
+export async function importDocumentNumberings(
+  rows: Record<string, unknown>[],
+  reason = 'CSV numbering import',
+): Promise<{ imported: number; errors: string[] }> {
+  try {
+    const importFn = httpsCallable<
+      Record<string, unknown>,
+      { imported: number; errors: string[] }
+    >(getFirebaseFunctions(), 'importAdminDocumentNumberings');
+    const response = await importFn({ rows, reason });
+    return response.data;
+  } catch (error) {
+    return { imported: 0, errors: [callableErrorMessage(error, 'Import failed')] };
+  }
+}
+
+export async function importDocumentNumberingsFromFile(
+  file: File,
+  meta: DocumentNumberingAuditMeta,
+  reason = 'CSV numbering import',
+): Promise<{ imported: number; errors: string[] }> {
+  const text = await file.text();
+  const lines = text.trim().split(/\r?\n/).filter(Boolean);
+  if (lines.length < 2) return { imported: 0, errors: ['No data rows found'] };
+
+  const headers = lines[0].split(',').map((h) => h.replace(/^"|"$/g, '').trim().toLowerCase());
+  const rows: Record<string, string>[] = [];
+  for (const line of lines.slice(1)) {
+    const cols = line.match(/("([^"]|"")*"|[^,]*)/g)?.map((c) =>
+      c.replace(/^"|"$/g, '').replace(/""/g, '"').trim(),
+    ) || [];
+    const row = rowToImportNumbering(cols, headers);
+    if (row) rows.push(row);
+  }
+  if (!rows.length) return { imported: 0, errors: ['No valid rows found'] };
+  return importDocumentNumberings(rows, reason || `Import by ${meta.userName}`);
+}
+
+export const DEFAULT_NUMBERING_PRESETS: DocumentNumberingFormData[] = [
   {
-    numberingCode: 'PQR-REPORT',
-    moduleName: 'PQR',
-    documentType: 'PQR Report',
-    prefix: 'PQR',
-    siteCode: 'HMF',
-    departmentCode: '0041',
-    productCodeOptional: '',
-    yearFormat: 'YYYY',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 3,
-    currentRunningNumber: 40,
-    resetFrequency: 'Yearly',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,SITE_CODE,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: false,
-    remarks: 'Default PQR numbering',
+    numberingCode: 'PQR-REPORT', numberingName: 'PQR Report Numbering', description: 'Default PQR',
+    moduleName: 'PQR', documentType: 'Annual PQR', documentCategory: 'Quality', department: 'QA',
+    site: '', businessUnit: '', company: '', location: '', product: '', workflowCode: 'PQR-DEFAULT',
+    prefix: 'PQR', suffix: '', siteCode: 'HMF', departmentCode: '0041', productCodeOptional: '',
+    yearFormat: 'YYYY', monthFormat: 'None', separator: '/', runningNumberLength: 3, startingNumber: 0,
+    currentRunningNumber: 40, resetFrequency: 'Yearly', revisionFormat: '00',
+    formatTokens: 'PREFIX,SITE_CODE,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR', numberingVersion: '1.0',
+    effectiveDate: '', reviewDate: '', autoGenerateEnabled: true, manualOverrideAllowed: false,
+    allowSkipSequence: false, remarks: 'Default PQR numbering', changeReason: 'Seed default',
   },
   {
-    numberingCode: 'DEV-REPORT',
-    moduleName: 'Deviation',
-    documentType: 'Deviation Report',
-    prefix: 'DEV',
-    siteCode: '',
-    departmentCode: 'QA',
-    productCodeOptional: '',
-    yearFormat: 'YYYY',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 4,
-    currentRunningNumber: 0,
-    resetFrequency: 'Yearly',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: false,
-    remarks: 'Default deviation numbering',
+    numberingCode: 'DEV-REPORT', numberingName: 'Deviation Numbering', description: 'GMP Deviation',
+    moduleName: 'Deviation', documentType: 'GMP Deviation', documentCategory: 'Quality', department: 'QA',
+    site: '', businessUnit: '', company: '', location: '', product: '', workflowCode: 'DEV-DEFAULT',
+    prefix: 'DEV', suffix: '', siteCode: '', departmentCode: 'QA', productCodeOptional: '',
+    yearFormat: 'YYYY', monthFormat: 'None', separator: '/', runningNumberLength: 4, startingNumber: 0,
+    currentRunningNumber: 0, resetFrequency: 'Yearly', revisionFormat: '00',
+    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR', numberingVersion: '1.0',
+    effectiveDate: '', reviewDate: '', autoGenerateEnabled: true, manualOverrideAllowed: false,
+    allowSkipSequence: false, remarks: 'Default deviation numbering', changeReason: 'Seed default',
   },
   {
-    numberingCode: 'OOS-INV',
-    moduleName: 'OOS',
-    documentType: 'OOS Investigation',
-    prefix: 'OOS',
-    siteCode: '',
-    departmentCode: 'QC',
-    productCodeOptional: '',
-    yearFormat: 'YYYY',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 4,
-    currentRunningNumber: 0,
-    resetFrequency: 'Yearly',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: false,
-    remarks: '',
+    numberingCode: 'OOS-INV', numberingName: 'OOS Investigation Numbering', description: 'OOS',
+    moduleName: 'OOS', documentType: 'OOS Investigation', documentCategory: 'Quality', department: 'QC',
+    site: '', businessUnit: '', company: '', location: '', product: '', workflowCode: 'OOS-DEFAULT',
+    prefix: 'OOS', suffix: '', siteCode: '', departmentCode: 'QC', productCodeOptional: '',
+    yearFormat: 'YYYY', monthFormat: 'None', separator: '/', runningNumberLength: 4, startingNumber: 0,
+    currentRunningNumber: 0, resetFrequency: 'Yearly', revisionFormat: '00',
+    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR', numberingVersion: '1.0',
+    effectiveDate: '', reviewDate: '', autoGenerateEnabled: true, manualOverrideAllowed: false,
+    allowSkipSequence: false, remarks: '', changeReason: 'Seed default',
   },
   {
-    numberingCode: 'CAPA-REPORT',
-    moduleName: 'CAPA',
-    documentType: 'CAPA Report',
-    prefix: 'CAPA',
-    siteCode: '',
-    departmentCode: 'QA',
-    productCodeOptional: '',
-    yearFormat: 'YYYY',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 4,
-    currentRunningNumber: 0,
-    resetFrequency: 'Yearly',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: false,
-    remarks: '',
+    numberingCode: 'CAPA-REPORT', numberingName: 'CAPA Numbering', description: 'CAPA / Corrective Action',
+    moduleName: 'CAPA', documentType: 'Corrective Action', documentCategory: 'Quality', department: 'QA',
+    site: '', businessUnit: '', company: '', location: '', product: '', workflowCode: 'CAPA-DEFAULT',
+    prefix: 'CAPA', suffix: '', siteCode: '', departmentCode: 'QA', productCodeOptional: '',
+    yearFormat: 'YYYY', monthFormat: 'None', separator: '/', runningNumberLength: 4, startingNumber: 0,
+    currentRunningNumber: 0, resetFrequency: 'Yearly', revisionFormat: '00',
+    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR', numberingVersion: '1.0',
+    effectiveDate: '', reviewDate: '', autoGenerateEnabled: true, manualOverrideAllowed: false,
+    allowSkipSequence: false, remarks: '', changeReason: 'Seed default',
   },
   {
-    numberingCode: 'CC-CTRL',
-    moduleName: 'Change Control',
-    documentType: 'Change Control',
-    prefix: 'CC',
-    siteCode: '',
-    departmentCode: 'QA',
-    productCodeOptional: '',
-    yearFormat: 'YYYY',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 4,
-    currentRunningNumber: 0,
-    resetFrequency: 'Yearly',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: false,
-    remarks: '',
+    numberingCode: 'CC-CTRL', numberingName: 'Change Control Numbering', description: 'Change Control',
+    moduleName: 'Change Control', documentType: 'Change Control', documentCategory: 'Quality', department: 'QA',
+    site: '', businessUnit: '', company: '', location: '', product: '', workflowCode: 'CC-DEFAULT',
+    prefix: 'CC', suffix: '', siteCode: '', departmentCode: 'QA', productCodeOptional: '',
+    yearFormat: 'YYYY', monthFormat: 'None', separator: '/', runningNumberLength: 4, startingNumber: 0,
+    currentRunningNumber: 0, resetFrequency: 'Yearly', revisionFormat: '00',
+    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR', numberingVersion: '1.0',
+    effectiveDate: '', reviewDate: '', autoGenerateEnabled: true, manualOverrideAllowed: false,
+    allowSkipSequence: false, remarks: '', changeReason: 'Seed default',
   },
   {
-    numberingCode: 'CPV-REVIEW',
-    moduleName: 'CPV',
-    documentType: 'CPV Review',
-    prefix: 'CPV',
-    siteCode: '',
-    departmentCode: 'QA',
-    productCodeOptional: '',
-    yearFormat: 'YYYY',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 4,
-    currentRunningNumber: 0,
-    resetFrequency: 'Yearly',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: false,
-    remarks: '',
+    numberingCode: 'CMP-MKT', numberingName: 'Complaint Numbering', description: 'Market Complaint',
+    moduleName: 'Complaint', documentType: 'Market Complaint', documentCategory: 'Quality', department: 'QA',
+    site: '', businessUnit: '', company: '', location: '', product: '', workflowCode: '',
+    prefix: 'CMP', suffix: '', siteCode: '', departmentCode: 'QA', productCodeOptional: '',
+    yearFormat: 'YYYY', monthFormat: 'None', separator: '/', runningNumberLength: 4, startingNumber: 0,
+    currentRunningNumber: 0, resetFrequency: 'Yearly', revisionFormat: '00',
+    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR', numberingVersion: '1.0',
+    effectiveDate: '', reviewDate: '', autoGenerateEnabled: true, manualOverrideAllowed: false,
+    allowSkipSequence: false, remarks: '', changeReason: 'Seed default',
   },
   {
-    numberingCode: 'SOP-DOC',
-    moduleName: 'DMS',
-    documentType: 'SOP',
-    prefix: 'SOP',
-    siteCode: '',
-    departmentCode: 'QA',
-    productCodeOptional: '',
-    yearFormat: 'None',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 3,
-    currentRunningNumber: 0,
-    resetFrequency: 'Never',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,REVISION',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: true,
-    remarks: '',
+    numberingCode: 'REC-PROD', numberingName: 'Recall Numbering', description: 'Product Recall',
+    moduleName: 'Recall', documentType: 'Product Recall', documentCategory: 'Quality', department: 'QA',
+    site: '', businessUnit: '', company: '', location: '', product: '', workflowCode: '',
+    prefix: 'REC', suffix: '', siteCode: '', departmentCode: 'QA', productCodeOptional: '',
+    yearFormat: 'YYYY', monthFormat: 'None', separator: '/', runningNumberLength: 4, startingNumber: 0,
+    currentRunningNumber: 0, resetFrequency: 'Yearly', revisionFormat: '00',
+    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR', numberingVersion: '1.0',
+    effectiveDate: '', reviewDate: '', autoGenerateEnabled: true, manualOverrideAllowed: false,
+    allowSkipSequence: false, remarks: '', changeReason: 'Seed default',
   },
   {
-    numberingCode: 'STP-DOC',
-    moduleName: 'DMS',
-    documentType: 'STP',
-    prefix: 'STP',
-    siteCode: '',
-    departmentCode: 'QC',
-    productCodeOptional: '',
-    yearFormat: 'None',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 3,
-    currentRunningNumber: 0,
-    resetFrequency: 'Never',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,REVISION',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: true,
-    remarks: '',
+    numberingCode: 'RISK-ASM', numberingName: 'Risk Assessment Numbering', description: 'Risk',
+    moduleName: 'Risk Management', documentType: 'Risk Assessment', documentCategory: 'Quality', department: 'QA',
+    site: '', businessUnit: '', company: '', location: '', product: '', workflowCode: '',
+    prefix: 'RISK', suffix: '', siteCode: '', departmentCode: 'QA', productCodeOptional: '',
+    yearFormat: 'YYYY', monthFormat: 'None', separator: '/', runningNumberLength: 4, startingNumber: 0,
+    currentRunningNumber: 0, resetFrequency: 'Yearly', revisionFormat: '00',
+    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR', numberingVersion: '1.0',
+    effectiveDate: '', reviewDate: '', autoGenerateEnabled: true, manualOverrideAllowed: false,
+    allowSkipSequence: false, remarks: '', changeReason: 'Seed default',
   },
   {
-    numberingCode: 'VAL-IQ',
-    moduleName: 'Validation',
-    documentType: 'Validation Protocol',
-    prefix: 'VAL',
-    siteCode: '',
-    departmentCode: 'IQ',
-    productCodeOptional: '',
-    yearFormat: 'YYYY',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 4,
-    currentRunningNumber: 0,
-    resetFrequency: 'Yearly',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: false,
-    remarks: '',
+    numberingCode: 'SOP-DOC', numberingName: 'SOP Numbering', description: 'DMS SOP',
+    moduleName: 'DMS', documentType: 'SOP', documentCategory: 'Document', department: 'QA',
+    site: '', businessUnit: '', company: '', location: '', product: '', workflowCode: 'DMS-DEFAULT',
+    prefix: 'SOP', suffix: '', siteCode: '', departmentCode: 'QA', productCodeOptional: '',
+    yearFormat: 'None', monthFormat: 'None', separator: '/', runningNumberLength: 3, startingNumber: 0,
+    currentRunningNumber: 0, resetFrequency: 'Never', revisionFormat: '00',
+    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,REVISION', numberingVersion: '1.0',
+    effectiveDate: '', reviewDate: '', autoGenerateEnabled: true, manualOverrideAllowed: true,
+    allowSkipSequence: false, remarks: '', changeReason: 'Seed default',
   },
   {
-    numberingCode: 'CSV-URS',
-    moduleName: 'CSV',
-    documentType: 'CSV URS',
-    prefix: 'CSV',
-    siteCode: '',
-    departmentCode: 'URS',
-    productCodeOptional: '',
-    yearFormat: 'YYYY',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 4,
-    currentRunningNumber: 0,
-    resetFrequency: 'Yearly',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: false,
-    remarks: '',
-  },
-  {
-    numberingCode: 'BMR-PROD',
-    moduleName: 'Warehouse',
-    documentType: 'BMR',
-    prefix: 'BMR',
-    siteCode: '',
-    departmentCode: 'PROD',
-    productCodeOptional: '',
-    yearFormat: 'YYYY',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 4,
-    currentRunningNumber: 0,
-    resetFrequency: 'Yearly',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: false,
-    remarks: '',
-  },
-  {
-    numberingCode: 'EBMR-PROD',
-    moduleName: 'eBMR',
-    documentType: 'BMR',
-    prefix: 'EBMR',
-    siteCode: '',
-    departmentCode: 'PROD',
-    productCodeOptional: '',
-    yearFormat: 'YYYY',
-    monthFormat: 'None',
-    separator: '/',
-    runningNumberLength: 4,
-    currentRunningNumber: 0,
-    resetFrequency: 'Yearly',
-    revisionFormat: '00',
-    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR',
-    autoGenerateEnabled: true,
-    manualOverrideAllowed: false,
-    remarks: '',
+    numberingCode: 'AUD-FIND', numberingName: 'Audit Numbering', description: 'Audit',
+    moduleName: 'Audit', documentType: 'Audit Report', documentCategory: 'Quality', department: 'QA',
+    site: '', businessUnit: '', company: '', location: '', product: '', workflowCode: '',
+    prefix: 'AUD', suffix: '', siteCode: '', departmentCode: 'QA', productCodeOptional: '',
+    yearFormat: 'YYYY', monthFormat: 'None', separator: '/', runningNumberLength: 4, startingNumber: 0,
+    currentRunningNumber: 0, resetFrequency: 'Yearly', revisionFormat: '00',
+    formatTokens: 'PREFIX,DEPARTMENT_CODE,RUNNING_NUMBER,YEAR', numberingVersion: '1.0',
+    effectiveDate: '', reviewDate: '', autoGenerateEnabled: true, manualOverrideAllowed: false,
+    allowSkipSequence: false, remarks: '', changeReason: 'Seed default',
   },
 ];
 
 export async function seedDefaultDocumentNumberings(
   meta: DocumentNumberingAuditMeta,
+  reason = 'Seed default numbering rules',
 ): Promise<{ created: number; skipped: number }> {
-  let created = 0;
-  let skipped = 0;
-  for (const def of DEFAULT_FORMATS) {
-    const exists = await checkUniqueField(ADMIN_COLLECTIONS.documentNumbering, 'numberingCode', def.numberingCode);
-    if (!exists) {
-      skipped += 1;
-      continue;
-    }
-    const result = await createDocumentNumbering(def, meta);
-    if (result.format) created += 1;
-    else skipped += 1;
+  try {
+    const seedFn = httpsCallable<
+      Record<string, unknown>,
+      { created: number; skipped: number }
+    >(getFirebaseFunctions(), 'seedAdminDefaultDocumentNumberings');
+    const response = await seedFn({
+      presets: DEFAULT_NUMBERING_PRESETS,
+      reason,
+      userId: meta.userId,
+    });
+    return response.data;
+  } catch (error) {
+    console.error('seedDefaultDocumentNumberings failed:', error);
+    return { created: 0, skipped: DEFAULT_NUMBERING_PRESETS.length };
   }
-  return { created, skipped };
 }

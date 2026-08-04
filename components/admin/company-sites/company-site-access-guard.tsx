@@ -10,7 +10,7 @@ import { ErrorCard } from '@/components/admin/dashboard/error-card';
 
 export function CompanySiteAccessGuard({ children }: { children: React.ReactNode }) {
   const { user, loading: authLoading } = useAuth();
-  const { role, loading: permsLoading } = useAdminPermissions();
+  const { role, loading: permsLoading, hasPermission } = useAdminPermissions();
   const router = useRouter();
 
   useEffect(() => {
@@ -22,7 +22,7 @@ export function CompanySiteAccessGuard({ children }: { children: React.ReactNode
   if (authLoading || permsLoading) return <LoadingSkeleton rows={2} />;
   if (!user) return null;
 
-  if (!canViewCompanySites(role)) {
+  if (!canViewCompanySites(role) || !hasPermission('Admin', 'view')) {
     return (
       <ErrorCard
         accessDenied

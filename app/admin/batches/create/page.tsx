@@ -54,7 +54,7 @@ function CreateBatchContent() {
   return (
     <div className="space-y-6">
       <PageHeader title="Create Batch" description="Register a new manufacturing batch linked to Product Master" basePath="/admin" />
-      <BatchForm products={products} onSubmit={onSubmit} onCancel={() => router.push('/admin/batches')} submitting={submitting} />
+      <BatchForm products={products} isCreate onSubmit={onSubmit} onCancel={() => router.push('/admin/batches')} submitting={submitting} />
     </div>
   );
 }

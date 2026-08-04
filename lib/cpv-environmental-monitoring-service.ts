@@ -1,25 +1,26 @@
+/**
+ * CPV Environmental Monitoring — client service.
+ * Reads: Firestore. Writes: Cloud Functions only.
+ */
 import {
-  addDoc, collection, getDocs, limit, orderBy, query, where,
+  collection, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchParameters, normalizeParameter } from '@/lib/admin/parameter-service';
 import type { Parameter } from '@/lib/admin/schemas';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
+import { isCpvProductOperational } from '@/lib/cpv-product-master';
 import { fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
-import { createAlert } from '@/lib/cpv-module-service';
 import { listAreas } from '@/lib/monitoring-mgmt-service';
 import type { AreaRecord } from '@/lib/monitoring-mgmt-types';
 import {
   ENVIRONMENTAL_MONITORING_COLLECTION,
   ENVIRONMENTAL_LEGACY_COLLECTIONS,
-  ENVIRONMENTAL_MODULE_NAME,
   buildEnvironmentalMonitoringId,
-  evaluateEnvironmentalStatus,
-  evaluateEnvironmentalRisk,
   parametersForMonitoringType,
   type EnvironmentalMonitoringFormData,
   type EnvironmentalMonitoringRecord,
@@ -31,41 +32,6 @@ export interface EnvironmentalActor {
   role?: string;
 }
 
-function actorCtx(actor: EnvironmentalActor) {
-  return { moduleName: ENVIRONMENTAL_MODULE_NAME, actor: { id: actor.id, name: actor.name } as DocumentActor };
-}
-
-async function logEmAudit(
-  actionType: string,
-  recordId: string,
-  actor: EnvironmentalActor,
-  oldVal?: unknown,
-  newVal?: unknown,
-  docNo?: string,
-) {
-  await createAuditLog({
-    moduleName: ENVIRONMENTAL_MODULE_NAME,
-    collectionName: ENVIRONMENTAL_MONITORING_COLLECTION,
-    recordId,
-    documentNumber: docNo,
-    actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-  await writeAuditTrail({
-    collectionName: ENVIRONMENTAL_MONITORING_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: ENVIRONMENTAL_MODULE_NAME,
-  });
-}
-
 function str(v: unknown, fb = ''): string {
   if (v === null || v === undefined) return fb;
   return String(v);
@@ -74,6 +40,12 @@ function str(v: unknown, fb = ''): string {
 function num(v: unknown, fb = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fb;
+}
+
+function optionalNum(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function observedVal(v: unknown): string | number {
@@ -88,7 +60,15 @@ function observedVal(v: unknown): string | number {
   return String(v);
 }
 
-function normalizeEnvironmentalRecord(raw: Record<string, unknown>): EnvironmentalMonitoringRecord {
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const msg = String((e as { message?: string }).message || '');
+    if (msg) return msg.replace(/^Firebase:\s*/i, '').replace(/\s*\(.*\)$/, '').trim() || fallback;
+  }
+  return fallback;
+}
+
+export function normalizeEnvironmentalRecord(raw: Record<string, unknown>): EnvironmentalMonitoringRecord {
   const batchNumber = str(raw.batchNumber || raw.batchNo || raw.batch_number);
   const parameterCode = str(raw.parameterCode || raw.parameter_code, 'PARAM');
   const areaName = str(raw.areaName || raw.area_name);
@@ -106,20 +86,38 @@ function normalizeEnvironmentalRecord(raw: Record<string, unknown>): Environment
     areaId: str(raw.areaId || raw.area_doc_id || raw.area_id),
     roomNumber: str(raw.roomNumber || raw.room_number),
     cleanroomGrade: str(raw.cleanroomGrade || raw.cleanroom_grade, 'Unclassified') as EnvironmentalMonitoringRecord['cleanroomGrade'],
+    isoClass: str(raw.isoClass || raw.iso_class, 'N/A') as EnvironmentalMonitoringRecord['isoClass'],
     processStage: str(raw.processStage || raw.process_stage, 'General Monitoring') as EnvironmentalMonitoringRecord['processStage'],
     monitoringType: str(raw.monitoringType || raw.monitoring_type, 'Temperature') as EnvironmentalMonitoringRecord['monitoringType'],
     samplingLocation: str(raw.samplingLocation || raw.sampling_location),
+    monitoringPointCode: str(raw.monitoringPointCode || raw.monitoring_point_code),
+    monitoringPointName: str(raw.monitoringPointName || raw.monitoring_point_name),
+    building: str(raw.building),
+    block: str(raw.block),
+    floor: str(raw.floor),
+    site: str(raw.site),
+    department: str(raw.department),
+    shift: str(raw.shift),
+    zone: str(raw.zone),
+    ahuId: str(raw.ahuId || raw.ahu_id),
+    ahuName: str(raw.ahuName || raw.ahu_name),
+    equipmentId: str(raw.equipmentId || raw.equipment_id),
+    equipmentName: str(raw.equipmentName || raw.equipment_name),
+    dataSource: str(raw.dataSource || raw.data_source, 'Manual') as EnvironmentalMonitoringRecord['dataSource'],
+    sensorId: str(raw.sensorId || raw.sensor_id),
+    alarmStatus: str(raw.alarmStatus || raw.alarm_status),
+    communicationStatus: str(raw.communicationStatus || raw.communication_status, 'OK'),
     parameterId: str(raw.parameterId || raw.parameter_id),
     parameterCode,
     parameterName: str(raw.parameterName || raw.parameter_name),
     observedValue: observedVal(raw.observedValue ?? raw.observed_value),
-    targetValue: num(raw.targetValue ?? raw.target_value ?? raw.target),
+    targetValue: optionalNum(raw.targetValue ?? raw.target_value ?? raw.target),
     lowerLimit: num(raw.lowerLimit ?? raw.lower_limit ?? raw.lsl),
     upperLimit: num(raw.upperLimit ?? raw.upper_limit ?? raw.usl),
-    alertLimitLow: num(raw.alertLimitLow ?? raw.alert_limit_low),
-    alertLimitHigh: num(raw.alertLimitHigh ?? raw.alert_limit_high),
-    actionLimitLow: num(raw.actionLimitLow ?? raw.action_limit_low),
-    actionLimitHigh: num(raw.actionLimitHigh ?? raw.action_limit_high),
+    alertLimitLow: optionalNum(raw.alertLimitLow ?? raw.alert_limit_low),
+    alertLimitHigh: optionalNum(raw.alertLimitHigh ?? raw.alert_limit_high),
+    actionLimitLow: optionalNum(raw.actionLimitLow ?? raw.action_limit_low),
+    actionLimitHigh: optionalNum(raw.actionLimitHigh ?? raw.action_limit_high),
     unit: str(raw.unit),
     resultType: (str(raw.resultType || raw.result_type, 'Numeric') as EnvironmentalMonitoringRecord['resultType']),
     monitoringDate: str(raw.monitoringDate || raw.monitoring_date),
@@ -129,6 +127,11 @@ function normalizeEnvironmentalRecord(raw: Record<string, unknown>): Environment
     reviewDate: str(raw.reviewDate || raw.review_date),
     remarks: str(raw.remarks),
     autoDeviationRequired: Boolean(raw.autoDeviationRequired ?? raw.auto_deviation_required ?? true),
+    specificationNumber: str(raw.specificationNumber || raw.specification_number),
+    version: str(raw.version, '1.0'),
+    effectiveDate: str(raw.effectiveDate || raw.effective_date),
+    description: str(raw.description),
+    changeReason: str(raw.changeReason || raw.change_reason),
     status: str(raw.status, 'Complies'),
     riskLevel: str(raw.riskLevel || raw.risk_level, 'Low'),
     deviationRequired: Boolean(raw.deviationRequired || raw.deviation_required),
@@ -137,6 +140,8 @@ function normalizeEnvironmentalRecord(raw: Record<string, unknown>): Environment
     linkedCapaNumber: str(raw.linkedCapaNumber || raw.linked_capa_number),
     reviewStatus: (str(raw.reviewStatus || raw.review_status, 'Draft') as EnvironmentalMonitoringRecord['reviewStatus']),
     isLocked: Boolean(raw.isLocked || raw.is_locked),
+    oosRequired: Boolean(raw.oosRequired || raw.oos_required),
+    linkedOosNumber: str(raw.linkedOosNumber || raw.linked_oos_number),
     createdAt: str(raw.createdAt || raw.created_at),
     updatedAt: str(raw.updatedAt || raw.updated_at),
     createdBy: str(raw.createdBy || raw.created_by),
@@ -159,16 +164,26 @@ export async function fetchEnvironmentalRecords(max = 500): Promise<Environmenta
     } catch {
       primary = await getRecords<EnvironmentalMonitoringRecord>(ENVIRONMENTAL_MONITORING_COLLECTION, [limit(max)]);
     }
-    const normalized = primary.map((r) => normalizeEnvironmentalRecord(r as unknown as Record<string, unknown>));
+    const normalized = primary
+      .map((r) => normalizeEnvironmentalRecord(r as unknown as Record<string, unknown>))
+      .filter((r) => !r.isDeleted);
     if (normalized.length) {
       return normalized.sort((a, b) => `${b.monitoringDate}${b.monitoringTime}`.localeCompare(`${a.monitoringDate}${a.monitoringTime}`));
     }
     for (const legacyName of ENVIRONMENTAL_LEGACY_COLLECTIONS) {
       const legacy = await listCpvRecords<Record<string, unknown>>(legacyName, max);
-      if (legacy.length) return legacy.map((r) => normalizeEnvironmentalRecord(r));
+      if (legacy.length) {
+        return legacy
+          .map((r) => normalizeEnvironmentalRecord(r))
+          .filter((r) => !r.isDeleted);
+      }
     }
     const cpvLegacy = await listCpvRecords<Record<string, unknown>>(CPV_COLLECTIONS.environment, max);
-    if (cpvLegacy.length) return cpvLegacy.map((r) => normalizeEnvironmentalRecord(r));
+    if (cpvLegacy.length) {
+      return cpvLegacy
+        .map((r) => normalizeEnvironmentalRecord(r))
+        .filter((r) => !r.isDeleted);
+    }
     return [];
   } catch (e) {
     console.error('fetchEnvironmentalRecords failed', e);
@@ -178,7 +193,10 @@ export async function fetchEnvironmentalRecords(max = 500): Promise<Environmenta
 
 export async function fetchEnvironmentalRecordById(id: string): Promise<EnvironmentalMonitoringRecord | null> {
   const record = await getRecord<EnvironmentalMonitoringRecord>(ENVIRONMENTAL_MONITORING_COLLECTION, id);
-  if (record) return normalizeEnvironmentalRecord(record as unknown as Record<string, unknown>);
+  if (record) {
+    const normalized = normalizeEnvironmentalRecord(record as unknown as Record<string, unknown>);
+    return normalized.isDeleted ? null : normalized;
+  }
   const all = await fetchEnvironmentalRecords();
   return all.find((r) => r.id === id) ?? null;
 }
@@ -263,251 +281,189 @@ export async function fetchAreaOptions(): Promise<AreaRecord[]> {
   ];
 }
 
-async function countEmFailures(batchNumber: string, parameterCode: string, areaName: string): Promise<number> {
-  const results = await fetchEnvironmentalRecords(1000);
-  return results.filter((r) =>
-    r.batchNumber === batchNumber
-    && r.parameterCode === parameterCode
-    && r.areaName === areaName
-    && ['Alert', 'Action', 'Excursion'].includes(r.status),
-  ).length;
-}
-
-async function maybeCreateDeviation(record: EnvironmentalMonitoringRecord, actor: EnvironmentalActor, autoDeviation: boolean) {
-  if (!autoDeviation || !['Excursion', 'Action', 'Alert'].includes(record.status)) return '';
-  try {
-    const { createDeviationFromCpv } = await import('@/lib/deviation-service');
-    const devStatus = record.status === 'Excursion' ? 'OOS' : 'OOT';
-    const dev = await createDeviationFromCpv('cpv_cpp', {
-      id: record.id,
-      product: record.productName,
-      batchNumber: record.batchNumber,
-      parameter: `${record.areaName}: ${record.parameterName}`,
-      observedValue: Number(record.observedValue),
-      status: devStatus,
-      department: 'Microbiology',
-    }, { id: actor.id, name: actor.name, role: actor.role || 'qa' });
-    if (!dev) return '';
-    return String((dev as { deviation_number?: string }).deviation_number || dev.id || '');
-  } catch {
-    return '';
-  }
-}
-
-async function maybeCreateAlertAndNotification(record: EnvironmentalMonitoringRecord, actor: EnvironmentalActor) {
-  if (record.status === 'Complies') return;
-  try {
-    await createAlert({
-      alertType: record.status === 'Excursion' ? 'OOT' : 'Limit Exceeded',
-      severity: record.riskLevel === 'Critical' ? 'Critical' : record.riskLevel === 'High' ? 'High' : 'Medium',
-      module: 'Environmental Monitoring',
-      productName: record.productName,
-      batchNo: record.batchNumber,
-      parameterName: record.parameterName,
-      message: `Environmental ${record.parameterName} ${record.status} in ${record.areaName}`,
-      observedValue: Number(record.observedValue),
-      recordId: record.id,
-    }, { id: actor.id, name: actor.name, role: actor.role });
-  } catch { /* optional */ }
-  if (!isFirebaseConfigured()) return;
-  try {
-    await addDoc(collection(getFirebaseFirestore(), 'notifications'), {
-      title: `Environmental ${record.status}`,
-      message: `${record.areaName}: ${record.parameterName} ${record.status}`,
-      module: ENVIRONMENTAL_MODULE_NAME,
-      record_id: record.id,
-      target_roles: ['qa', 'microbiology', 'qc'],
-      read: false,
-      created_at: new Date().toISOString(),
-    });
-  } catch { /* optional */ }
-}
-
 export async function createEnvironmentalRecord(
   data: EnvironmentalMonitoringFormData,
-  actor: EnvironmentalActor,
+  _actor: EnvironmentalActor,
+  qaOverride = false,
+  options?: { esignConfirmed?: boolean },
 ): Promise<{ result: EnvironmentalMonitoringRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
+    if (!data.changeReason || data.changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
     const product = await fetchCpvProductById(data.cpvProductId);
-    if (product?.cpvStatus === 'Inactive') return { result: null, error: 'Inactive CPV product — entry not allowed.' };
-    const batches = await fetchEmBatchesForProduct(data.productName);
-    const batchMatch = batches.find((b) => b.batchNumber === data.batchNumber);
-    if (batches.length && !batchMatch) return { result: null, error: 'Batch does not belong to selected product.' };
-    if (batchMatch && ['Cancelled', 'Rejected'].includes(batchMatch.batchStatus)) {
-      return { result: null, error: 'Cancelled or rejected batch — entry not allowed.' };
+    if (product && !isCpvProductOperational(product.cpvStatus)) {
+      return { result: null, error: 'Selected CPV product is not operational for environmental entry.' };
     }
-
-    const existing = await fetchEnvironmentalRecords(1000);
-    const duplicate = existing.find(
-      (r) => r.batchNumber === data.batchNumber
-        && r.parameterCode === data.parameterCode
-        && r.areaName === data.areaName
-        && r.monitoringDate === data.monitoringDate
-        && !r.isDeleted,
+    if (qaOverride && options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminEnvironmentalRecord',
     );
-    if (duplicate) return { result: null, error: 'Environmental record already exists for this batch, area, parameter and date.' };
-
-    const status = evaluateEnvironmentalStatus(
-      data.observedValue,
-      data.lowerLimit,
-      data.upperLimit,
-      data.resultType,
-      data.alertLimitLow,
-      data.alertLimitHigh,
-      data.actionLimitLow,
-      data.actionLimitHigh,
-    );
-    const failures = await countEmFailures(data.batchNumber, data.parameterCode, data.areaName);
-    const riskLevel = evaluateEnvironmentalRisk({ ...data, status }, failures);
-    const capaRequired = failures >= 3;
-    const autoDev = data.autoDeviationRequired;
-
-    const payload = {
+    const result = await fn({
       ...data,
-      environmentalMonitoringId: buildEnvironmentalMonitoringId(data.batchNumber, data.parameterCode, data.areaName),
-      status,
-      riskLevel,
-      deviationRequired: autoDev && status !== 'Complies',
-      capaRequired,
-      linkedDeviationNumber: '',
-      linkedCapaNumber: '',
-      reviewStatus: 'Draft' as const,
-      isLocked: false,
-      createdByName: actor.name,
-      updatedByName: actor.name,
-    };
-
-    const created = await createRecord(
-      ENVIRONMENTAL_MONITORING_COLLECTION,
-      payload as Omit<EnvironmentalMonitoringRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
-    );
-    let result = normalizeEnvironmentalRecord(created as unknown as Record<string, unknown>);
-
-    const devNo = await maybeCreateDeviation(result, actor, autoDev);
-    if (devNo) {
-      const updated = await updateRecord(ENVIRONMENTAL_MONITORING_COLLECTION, result.id, {
-        linkedDeviationNumber: devNo,
-        deviationRequired: true,
-      }, actorCtx(actor));
-      if (updated) result = normalizeEnvironmentalRecord(updated as unknown as Record<string, unknown>);
-      await logEmAudit('deviation auto-created', result.id, actor, null, devNo, result.environmentalMonitoringId);
-    }
-
-    if (status !== 'Complies') {
-      await maybeCreateAlertAndNotification(result, actor);
-      if (capaRequired) await logEmAudit('CAPA suggested', result.id, actor, null, { parameter: data.parameterCode }, result.environmentalMonitoringId);
-    }
-
-    await logEmAudit('create environmental record', result.id, actor, null, result, result.environmentalMonitoringId);
-    await logEmAudit('status calculation', result.id, actor, null, status, result.environmentalMonitoringId);
-    await logEmAudit('risk calculation', result.id, actor, null, riskLevel, result.environmentalMonitoringId);
-    return { result, error: null };
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
+      changeReason: data.changeReason,
+    });
+    return { result: normalizeEnvironmentalRecord(result.data), error: null };
   } catch (e) {
     console.error('createEnvironmentalRecord failed', e);
-    return { result: null, error: 'Failed to create environmental record.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to create environmental record.') };
   }
 }
 
 export async function updateEnvironmentalRecord(
   id: string,
   data: Partial<EnvironmentalMonitoringFormData>,
-  actor: EnvironmentalActor,
+  _actor: EnvironmentalActor,
   existing: EnvironmentalMonitoringRecord,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean },
 ): Promise<{ result: EnvironmentalMonitoringRecord | null; error: string | null }> {
-  if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Approved environmental record is locked. QA override required.' };
-  }
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    const merged = { ...existing, ...data };
-    const status = evaluateEnvironmentalStatus(
-      merged.observedValue,
-      merged.lowerLimit,
-      merged.upperLimit,
-      merged.resultType,
-      merged.alertLimitLow,
-      merged.alertLimitHigh,
-      merged.actionLimitLow,
-      merged.actionLimitHigh,
+    const changeReason = data.changeReason || existing.changeReason || '';
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) {
+      return { result: null, error: 'Approved environmental record is locked. QA override required.' };
+    }
+    if (qaOverride && options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'updateAdminEnvironmentalRecord',
     );
-    const failures = await countEmFailures(merged.batchNumber, merged.parameterCode, merged.areaName);
-    const riskLevel = evaluateEnvironmentalRisk({ ...merged, status }, failures);
-    const updates = {
+    const result = await fn({
+      ...existing,
       ...data,
-      status,
-      riskLevel,
-      capaRequired: failures >= 3,
-      updatedByName: actor.name,
-    };
-    const updated = await updateRecord(ENVIRONMENTAL_MONITORING_COLLECTION, id, updates as Partial<EnvironmentalMonitoringRecord>, actorCtx(actor));
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeEnvironmentalRecord(updated as unknown as Record<string, unknown>);
-    await logEmAudit(qaOverride ? 'QA override' : 'edit environmental record', id, actor, existing, result, result.environmentalMonitoringId);
-    await logEmAudit('status calculation', id, actor, existing.status, status, result.environmentalMonitoringId);
-    await logEmAudit('risk calculation', id, actor, existing.riskLevel, riskLevel, result.environmentalMonitoringId);
-    return { result, error: null };
+      id,
+      changeReason,
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
+    });
+    return { result: normalizeEnvironmentalRecord(result.data), error: null };
   } catch (e) {
     console.error('updateEnvironmentalRecord failed', e);
-    return { result: null, error: 'Failed to update environmental record.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to update environmental record.') };
   }
 }
 
-export async function reviewEnvironmentalRecord(id: string, actor: EnvironmentalActor, existing: EnvironmentalMonitoringRecord) {
-  const updated = await updateRecord(ENVIRONMENTAL_MONITORING_COLLECTION, id, {
-    reviewStatus: 'Under Review',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeEnvironmentalRecord(updated as unknown as Record<string, unknown>);
-  await logEmAudit('review environmental record', id, actor, existing.reviewStatus, 'Under Review', result.environmentalMonitoringId);
-  return { result, error: null };
+export async function reviewEnvironmentalRecord(
+  id: string,
+  _actor: EnvironmentalActor,
+  changeReason = 'Submitted for QA review',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'reviewAdminEnvironmentalRecord',
+    );
+    const result = await fn({ id, changeReason });
+    return { result: normalizeEnvironmentalRecord(result.data), error: null };
+  } catch (e) {
+    console.error('reviewEnvironmentalRecord failed', e);
+    return { result: null, error: cfErrorMessage(e, 'Failed to submit review.') };
+  }
 }
 
-export async function approveEnvironmentalRecord(id: string, actor: EnvironmentalActor, existing: EnvironmentalMonitoringRecord) {
-  const updated = await updateRecord(ENVIRONMENTAL_MONITORING_COLLECTION, id, {
-    reviewStatus: 'Approved',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    isLocked: true,
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeEnvironmentalRecord(updated as unknown as Record<string, unknown>);
-  await logEmAudit('approve environmental record', id, actor, existing.reviewStatus, 'Approved', result.environmentalMonitoringId);
-  return { result, error: null };
+export async function approveEnvironmentalRecord(
+  id: string,
+  _actor: EnvironmentalActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'approveAdminEnvironmentalRecord',
+    );
+    const result = await fn({ id, changeReason, esignConfirmed: true });
+    return { result: normalizeEnvironmentalRecord(result.data), error: null };
+  } catch (e) {
+    console.error('approveEnvironmentalRecord failed', e);
+    return { result: null, error: cfErrorMessage(e, 'Failed to approve environmental record.') };
+  }
+}
+
+export async function softDeleteEnvironmentalRecord(
+  id: string,
+  _actor: EnvironmentalActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+): Promise<{ error: string | null }> {
+  if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminEnvironmentalRecord');
+    await fn({ id, changeReason, esignConfirmed: true });
+    return { error: null };
+  } catch (e) {
+    console.error('softDeleteEnvironmentalRecord failed', e);
+    return { error: cfErrorMessage(e, 'Failed to soft-delete environmental record.') };
+  }
 }
 
 export async function bulkCreateEnvironmentalRecords(
   rows: EnvironmentalMonitoringFormData[],
-  actor: EnvironmentalActor,
+  _actor: EnvironmentalActor,
+  changeReason = 'Bulk environmental entry',
 ): Promise<{ created: number; errors: string[] }> {
-  let created = 0;
-  const errors: string[] = [];
-  for (const row of rows) {
-    const { error } = await createEnvironmentalRecord(row, actor);
-    if (error) errors.push(`${row.parameterName}: ${error}`);
-    else created += 1;
+  if (!isFirebaseConfigured()) return { created: 0, errors: ['Firebase is not configured.'] };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { created: 0, errors: ['Change reason (min 5 characters) is required.'] };
+    }
+    const fn = httpsCallable<Record<string, unknown>, { created: number; errors: string[] }>(
+      getFirebaseFunctions(),
+      'bulkCreateAdminEnvironmentalRecords',
+    );
+    const result = await fn({ rows, changeReason });
+    return result.data;
+  } catch (e) {
+    console.error('bulkCreateEnvironmentalRecords failed', e);
+    return { created: 0, errors: [cfErrorMessage(e, 'Bulk create failed.')] };
   }
-  if (created) await logEmAudit('bulk environmental entry', 'bulk', actor, null, { count: created });
-  return { created, errors };
 }
 
 export async function fetchEnvironmentalAuditTrail(recordId: string) {
   if (!isFirebaseConfigured()) return [];
   try {
     const snap = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('documentId', '==', recordId), limit(50)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (!snap.empty) return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap2 = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('recordId', '==', recordId), limit(50)));
+    return snap2.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch {
     return [];
   }
 }
 
 export async function logEnvironmentalExport(actor: EnvironmentalActor, count: number) {
-  await logEmAudit('export environmental list', 'export', actor, null, { count });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminEnvironmentalExport');
+    await fn({ count, format: 'CSV', changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logEnvironmentalExport CF failed (non-blocking)', e);
+  }
 }
 
 export function environmentalParameterTrendData(

@@ -37,13 +37,14 @@ service firebase.storage {
         || request.resource.contentType.matches('application/vnd.*')
         || request.resource.contentType.matches('application/msword')
         || request.resource.contentType.matches('image/(png|jpeg|webp)')
-        || request.resource.contentType.matches('text/csv');
+        || request.resource.contentType.matches('text/csv')
+        || request.resource.contentType.matches('text/html');
     }
 
     function canWriteModule(moduleName) {
       return isAdmin()
         || (getProfileRole() in ['head_qa', 'qa_manager', 'qa_executive', 'qa']
-          && moduleName.matches('(qms|dms|documents|sop|capa|deviation|change-control|complaints|audit|training|validation|products).*'))
+          && moduleName.matches('(qms|dms|documents|sop|capa|deviation|change-control|complaints|audit|validation|products|cpv).*'))
         || (getProfileRole() in ['qc_manager', 'qc_executive', 'qc']
           && moduleName.matches('(oos|stability|qc|laboratory|cqa).*'))
         || (getProfileRole() in ['engineering_manager', 'engineering_executive', 'engineering']
@@ -51,8 +52,7 @@ service firebase.storage {
         || (getProfileRole() in ['production_manager', 'production_executive', 'production']
           && moduleName.matches('(batch|batches|ebmr|production|cpv).*'))
         || (getProfileRole() in ['warehouse_manager', 'warehouse_executive', 'warehouse']
-          && moduleName.matches('(warehouse|material|inventory|vendor).*'))
-        || (getProfileRole() == 'training_coordinator' && moduleName.matches('training.*'));
+          && moduleName.matches('(warehouse|material|inventory|vendor).*'));
     }
 
     function canReadModule(moduleName, documentId) {
@@ -64,12 +64,12 @@ service firebase.storage {
           'warehouse_executive', 'warehouse', 'regulatory_affairs', 'regulatory',
           'auditor', 'viewer'
         ]
-        || (getProfileRole() in ['training_coordinator', 'hr']
-          && moduleName.matches('(training|dms|documents|sop).*'))
+        || (getProfileRole() == 'hr'
+          && moduleName.matches('(dms|documents|sop).*'))
         || (getProfileRole() == 'document_controller'
           && moduleName.matches('(dms|documents|sop).*'))
         || (getProfileRole() in ['department_head', 'employee']
-          && moduleName.matches('(training|dms|documents|sop).*'))
+          && moduleName.matches('(dms|documents|sop).*'))
         || (getProfileRole() == 'vendor'
           && moduleName.matches('vendor.*')
           && documentId == request.auth.uid);

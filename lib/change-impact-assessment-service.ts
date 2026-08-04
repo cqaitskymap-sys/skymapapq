@@ -6,7 +6,6 @@ import { logAuditEvent } from '@/lib/admin/admin-service';
 import { downloadCsv } from '@/lib/export-utils';
 import { listDocuments, getDocumentById } from '@/lib/dms-service';
 import { generateChangeNumber } from '@/lib/change-control-service';
-import { createRetrainingForMajorRevision } from '@/lib/document-training-linkage-service';
 import type {
   DocumentChangeImpactRecord, ChangeImpactFilters, ChangeImpactActor, ImpactDependency,
 } from './change-impact-assessment-types';
@@ -381,9 +380,8 @@ export async function approveImpactAssessment(assessmentId: string, input: Appro
   await updateDoc(doc(getFirebaseFirestore(), CIA_COLLECTIONS.assessments, assessmentId), updates);
 
   if (rec.retraining_required) {
-    await createRetrainingForMajorRevision(rec.related_document_id, rec.document_version, actor);
     await audit(actor, 'TRAINING_ASSIGNED', assessmentId, null, { document_id: rec.related_document_id });
-    await notify('Retraining Assigned', `${rec.document_number} retraining triggered`, assessmentId, ['training_coordinator']);
+    await notify('Retraining Required', `${rec.document_number} marked for retraining`, assessmentId, ['qa_manager', 'document_controller']);
   }
 
   if (input.signature_meaning) {

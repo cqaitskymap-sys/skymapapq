@@ -1,11 +1,11 @@
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
-import { getFirebaseStorage, isFirebaseConfigured } from '@/lib/firebase';
-import { writeAuditTrail } from '@/lib/audit-trail';
 import {
-  getAdminRecords, createAdminRecord, updateAdminRecord,
-  checkUniqueField, logAuditEvent,
-} from './admin-service';
-import { ADMIN_COLLECTIONS, PRODUCT_ATTACHMENT_MAX_BYTES } from './constants';
+  collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
+  type Unsubscribe,
+} from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { getFirebaseApp, getFirebaseFirestore, getFirebaseStorage, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
+import { ADMIN_COLLECTIONS, PRODUCT_ATTACHMENT_MAX_BYTES, PRODUCT_LIFECYCLE_STATUSES } from './constants';
 import type {
   AdminProduct, ProductFormData, ProductCompositionRow,
   ProductPackingRow, ProductAttachment,
@@ -16,37 +16,12 @@ export interface ProductAuditMeta {
   userName: string;
 }
 
-async function logProductAudit(
-  action: string,
-  recordId: string,
-  meta: ProductAuditMeta,
-  oldValue: unknown,
-  newValue: unknown,
-) {
-  await logAuditEvent({
-    userId: meta.userId,
-    userName: meta.userName,
-    module: 'Product Master',
-    recordId,
-    action,
-    oldValue: typeof oldValue === 'string' ? oldValue : JSON.stringify(oldValue ?? ''),
-    newValue: typeof newValue === 'string' ? newValue : JSON.stringify(newValue ?? ''),
-    reason: '',
-    ipAddress: 'client',
-    device: typeof navigator !== 'undefined' ? navigator.userAgent : 'browser',
-    status: 'Success',
-  });
-
-  await writeAuditTrail({
-    collectionName: ADMIN_COLLECTIONS.products,
-    documentId: recordId,
-    action,
-    oldValue,
-    newValue,
-    userId: meta.userId,
-    userName: meta.userName,
-    moduleName: 'Product Master',
-  });
+function callableErrorMessage(error: unknown, fallback: string): string {
+  const err = error as { message?: string };
+  return (err.message || fallback)
+    .replace(/^Firebase:\s*/i, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim() || fallback;
 }
 
 export function buildProductId(code: string): string {
@@ -54,252 +29,401 @@ export function buildProductId(code: string): string {
 }
 
 export function normalizeProduct(p: AdminProduct): AdminProduct {
+  const manufacturingLicense = p.manufacturingLicenseNumber || p.manufacturingLicenseNo || '';
+  const batchSize = p.standardBatchSize || p.batchSize || '';
+  const therapeuticCategory = p.therapeuticCategory || p.category || '';
+  const productStatus = p.productStatus || 'Active';
   return {
     ...p,
-    manufacturingLicenseNo: p.manufacturingLicenseNumber || p.manufacturingLicenseNo || '',
-    manufacturingLicenseNumber: p.manufacturingLicenseNumber || p.manufacturingLicenseNo || '',
-    standardBatchSize: p.standardBatchSize || p.batchSize || '',
-    batchSize: p.standardBatchSize || p.batchSize || '',
-    status: p.productStatus === 'Active' ? 'Active' : 'Inactive',
+    manufacturingLicenseNo: manufacturingLicense,
+    manufacturingLicenseNumber: manufacturingLicense,
+    standardBatchSize: batchSize,
+    batchSize,
+    therapeuticCategory,
+    category: p.category || therapeuticCategory,
+    status: productStatus === 'Active' ? 'Active' : 'Inactive',
+    lifecycleStatus: p.lifecycleStatus || 'Commercial',
+    country: p.country || 'India',
+    productFamily: p.productFamily || '',
+    packType: p.packType || '',
+    containerClosure: p.containerClosure || '',
+    manufacturingSite: p.manufacturingSite || '',
+    businessUnit: p.businessUnit || '',
+    department: p.department || '',
+    productOwner: p.productOwner || '',
+    registrationNumber: p.registrationNumber || '',
+    licenseNumber: p.licenseNumber || '',
+    batchPrefix: p.batchPrefix || '',
+    hsnCode: p.hsnCode || '',
+    gtin: p.gtin || '',
+    barcode: p.barcode || '',
+    qrCode: p.qrCode || '',
+    description: p.description || '',
+    isDeleted: Boolean(p.isDeleted),
+    isArchived: p.isArchived ?? p.lifecycleStatus === 'Archived',
   };
 }
 
-export async function fetchProducts(): Promise<AdminProduct[]> {
+function mapProductDoc(snapshot: { id: string; data: () => Record<string, unknown> }): AdminProduct {
+  return normalizeProduct({ id: snapshot.id, ...snapshot.data() } as AdminProduct);
+}
+
+export async function fetchProducts(includeDeleted = false): Promise<AdminProduct[]> {
+  if (!isFirebaseConfigured()) return [];
   try {
-    const records = await getAdminRecords<AdminProduct>(ADMIN_COLLECTIONS.products);
-    return records.filter((p) => !p.isDeleted).map(normalizeProduct);
-  } catch {
-    return [];
+    const snapshot = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.products),
+      orderBy('createdAt', 'desc'),
+    ));
+    return snapshot.docs
+      .map((document) => mapProductDoc(document))
+      .filter((product) => includeDeleted || !product.isDeleted);
+  } catch (error) {
+    console.error('fetchProducts failed:', error);
+    throw new Error('Unable to load products. Check your connection and permissions.');
   }
 }
 
-export async function fetchProductById(id: string): Promise<AdminProduct | null> {
-  const products = await fetchProducts();
-  return products.find((p) => p.id === id) ?? null;
+export function subscribeToProducts(
+  includeDeleted: boolean,
+  onData: (products: AdminProduct[]) => void,
+  onError?: (error: Error) => void,
+): Unsubscribe {
+  if (!isFirebaseConfigured()) {
+    onData([]);
+    return () => undefined;
+  }
+  const productsQuery = query(
+    collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.products),
+    orderBy('createdAt', 'desc'),
+  );
+  return onSnapshot(
+    productsQuery,
+    (snapshot) => {
+      const products = snapshot.docs
+        .map((document) => mapProductDoc(document))
+        .filter((product) => includeDeleted || !product.isDeleted);
+      onData(products);
+    },
+    (error) => {
+      console.error('subscribeToProducts failed:', error);
+      onError?.(new Error(error.message || 'Unable to subscribe to products'));
+    },
+  );
+}
+
+export async function fetchProductById(id: string, includeDeleted = false): Promise<AdminProduct | null> {
+  if (!isFirebaseConfigured() || !id) return null;
+  try {
+    const snapshot = await getDoc(doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.products, id));
+    if (!snapshot.exists()) return null;
+    const product = mapProductDoc(snapshot);
+    if (product.isDeleted && !includeDeleted) return null;
+    return product;
+  } catch (error) {
+    console.error('fetchProductById failed:', error);
+    throw new Error('Unable to load product details.');
+  }
 }
 
 export async function fetchProductCompositions(productId: string): Promise<ProductCompositionRow[]> {
+  if (!isFirebaseConfigured() || !productId) return [];
   try {
-    const all = await getAdminRecords<ProductCompositionRow & { productId: string }>(
-      ADMIN_COLLECTIONS.productCompositions,
-    );
-    return all.filter((c) => c.productId === productId && !(c as { isDeleted?: boolean }).isDeleted);
-  } catch {
+    const snapshot = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.productCompositions),
+      where('productId', '==', productId),
+    ));
+    return snapshot.docs
+      .map((document) => ({ id: document.id, ...document.data() } as ProductCompositionRow))
+      .filter((row) => !(row as { isDeleted?: boolean }).isDeleted);
+  } catch (error) {
+    console.error('fetchProductCompositions failed:', error);
     return [];
   }
 }
 
 export async function fetchProductPacking(productId: string): Promise<ProductPackingRow[]> {
+  if (!isFirebaseConfigured() || !productId) return [];
   try {
-    const all = await getAdminRecords<ProductPackingRow & { productId: string }>(
-      ADMIN_COLLECTIONS.productPackingDetails,
-    );
-    return all.filter((p) => p.productId === productId && !(p as { isDeleted?: boolean }).isDeleted);
-  } catch {
+    const snapshot = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.productPackingDetails),
+      where('productId', '==', productId),
+    ));
+    return snapshot.docs
+      .map((document) => ({ id: document.id, ...document.data() } as ProductPackingRow))
+      .filter((row) => !(row as { isDeleted?: boolean }).isDeleted);
+  } catch (error) {
+    console.error('fetchProductPacking failed:', error);
     return [];
   }
 }
 
 export async function fetchProductAttachments(productId: string): Promise<ProductAttachment[]> {
+  if (!isFirebaseConfigured() || !productId) return [];
   try {
-    const all = await getAdminRecords<ProductAttachment>(ADMIN_COLLECTIONS.productAttachments);
-    return all.filter((a) => a.productId === productId && !(a as { isDeleted?: boolean }).isDeleted);
-  } catch {
+    const snapshot = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.productAttachments),
+      where('productId', '==', productId),
+    ));
+    return snapshot.docs
+      .map((document) => ({ id: document.id, ...document.data() } as ProductAttachment))
+      .filter((row) => !(row as { isDeleted?: boolean }).isDeleted);
+  } catch (error) {
+    console.error('fetchProductAttachments failed:', error);
     return [];
   }
 }
 
 export async function isProductActiveForUse(productCodeOrId: string): Promise<boolean> {
-  const products = await fetchProducts();
-  const p = products.find(
-    (x) => x.id === productCodeOrId || x.productCode === productCodeOrId || x.productId === productCodeOrId,
-  );
-  if (!p) return true;
-  return p.productStatus === 'Active';
-}
-
-function productPayload(data: ProductFormData, meta: ProductAuditMeta) {
-  const productId = buildProductId(data.productCode);
-  return {
-    productId,
-    productCode: data.productCode,
-    productName: data.productName,
-    genericName: data.genericName,
-    brandName: data.brandName,
-    strength: data.strength,
-    dosageForm: data.dosageForm,
-    routeOfAdministration: data.routeOfAdministration,
-    packSize: data.packSize,
-    market: data.market,
-    therapeuticCategory: data.therapeuticCategory,
-    shelfLife: data.shelfLife,
-    storageCondition: data.storageCondition,
-    standardBatchSize: data.standardBatchSize,
-    batchSize: data.standardBatchSize,
-    manufacturingLicenseNumber: data.manufacturingLicenseNumber,
-    manufacturingLicenseNo: data.manufacturingLicenseNumber,
-    mfrNumber: data.mfrNumber,
-    bmrNumber: data.bmrNumber,
-    bprNumber: data.bprNumber,
-    specificationNumber: data.specificationNumber,
-    stpNumber: data.stpNumber,
-    productStatus: data.productStatus,
-    status: data.productStatus === 'Active' ? 'Active' : 'Inactive',
-    remarks: data.remarks,
-    composition: data.compositions.map((c) => c.ingredientName).join(', '),
-    packingStyle: data.packingDetails.map((p) => p.packingMaterial).join(', '),
-    createdBy: meta.userId,
-    updatedBy: meta.userId,
-  };
-}
-
-async function syncCompositions(
-  productId: string,
-  rows: ProductCompositionRow[],
-  meta: ProductAuditMeta,
-  existing: ProductCompositionRow[],
-) {
-  const existingIds = new Set(existing.map((e) => e.id).filter(Boolean));
-  const newIds = new Set(rows.map((r) => r.id).filter(Boolean));
-
-  for (const row of rows) {
-    const payload = { ...row, productId };
-    if (row.id && existingIds.has(row.id)) {
-      await updateAdminRecord(ADMIN_COLLECTIONS.productCompositions, row.id, payload, {
-        userId: meta.userId, userName: meta.userName, module: 'Product Master',
-        oldValue: JSON.stringify(existing.find((e) => e.id === row.id)),
-      });
-      await logProductAudit('COMPOSITION_EDIT', productId, meta, null, row);
-    } else {
-      const created = await createAdminRecord(ADMIN_COLLECTIONS.productCompositions, payload as Record<string, unknown>, {
-        userId: meta.userId, userName: meta.userName, module: 'Product Master', action: 'COMPOSITION_ADD',
-      });
-      await logProductAudit('COMPOSITION_ADD', productId, meta, null, created);
-    }
-  }
-
-  for (const old of existing) {
-    if (old.id && !newIds.has(old.id)) {
-      await updateAdminRecord(ADMIN_COLLECTIONS.productCompositions, old.id, { isDeleted: true }, {
-        userId: meta.userId, userName: meta.userName, module: 'Product Master',
-        oldValue: JSON.stringify(old),
-      });
-      await logProductAudit('COMPOSITION_DELETE', productId, meta, old, null);
-    }
+  if (!isFirebaseConfigured() || !productCodeOrId) return true;
+  try {
+    const byId = await fetchProductById(productCodeOrId);
+    if (byId) return byId.productStatus === 'Active' && !byId.isDeleted;
+    const products = await fetchProducts();
+    const product = products.find(
+      (item) => item.productCode === productCodeOrId || item.productId === productCodeOrId,
+    );
+    if (!product) return true;
+    return product.productStatus === 'Active';
+  } catch {
+    return true;
   }
 }
 
-async function syncPacking(
-  productId: string,
-  rows: ProductPackingRow[],
-  meta: ProductAuditMeta,
-  existing: ProductPackingRow[],
-) {
-  const existingIds = new Set(existing.map((e) => e.id).filter(Boolean));
-  const newIds = new Set(rows.map((r) => r.id).filter(Boolean));
-
-  for (const row of rows) {
-    const payload = { ...row, productId };
-    if (row.id && existingIds.has(row.id)) {
-      await updateAdminRecord(ADMIN_COLLECTIONS.productPackingDetails, row.id, payload, {
-        userId: meta.userId, userName: meta.userName, module: 'Product Master',
-        oldValue: JSON.stringify(existing.find((e) => e.id === row.id)),
-      });
-      await logProductAudit('PACKING_EDIT', productId, meta, null, row);
-    } else {
-      const created = await createAdminRecord(ADMIN_COLLECTIONS.productPackingDetails, payload as Record<string, unknown>, {
-        userId: meta.userId, userName: meta.userName, module: 'Product Master', action: 'PACKING_ADD',
-      });
-      await logProductAudit('PACKING_ADD', productId, meta, null, created);
-    }
+export async function countLinkedBatches(productCode: string): Promise<number> {
+  if (!isFirebaseConfigured() || !productCode) return 0;
+  try {
+    const snapshot = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.batches),
+      where('productCode', '==', productCode),
+      limit(500),
+    ));
+    return snapshot.docs.filter((document) => document.data().isDeleted !== true).length;
+  } catch (error) {
+    console.error('countLinkedBatches failed:', error);
+    return 0;
   }
+}
 
-  for (const old of existing) {
-    if (old.id && !newIds.has(old.id)) {
-      await updateAdminRecord(ADMIN_COLLECTIONS.productPackingDetails, old.id, { isDeleted: true }, {
-        userId: meta.userId, userName: meta.userName, module: 'Product Master',
-        oldValue: JSON.stringify(old),
-      });
-      await logProductAudit('PACKING_DELETE', productId, meta, old, null);
-    }
+export function buildProductCategoryGroups(products: AdminProduct[]): Array<{
+  category: string;
+  families: Array<{ productFamily: string; products: AdminProduct[] }>;
+}> {
+  const categoryMap = new Map<string, Map<string, AdminProduct[]>>();
+  products.filter((p) => !p.isDeleted).forEach((product) => {
+    const category = product.category || product.therapeuticCategory || 'Uncategorized';
+    const family = product.productFamily || 'General';
+    if (!categoryMap.has(category)) categoryMap.set(category, new Map());
+    const familyMap = categoryMap.get(category)!;
+    const list = familyMap.get(family) || [];
+    list.push(product);
+    familyMap.set(family, list);
+  });
+  return Array.from(categoryMap.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([category, familyMap]) => ({
+      category,
+      families: Array.from(familyMap.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([productFamily, items]) => ({
+          productFamily,
+          products: items.sort((a, b) => a.productName.localeCompare(b.productName)),
+        })),
+    }));
+}
+
+export function buildLifecycleDashboard(products: AdminProduct[]): Array<{
+  lifecycleStatus: string;
+  count: number;
+  products: AdminProduct[];
+}> {
+  const map = new Map<string, AdminProduct[]>();
+  PRODUCT_LIFECYCLE_STATUSES.forEach((status) => map.set(status, []));
+  products.filter((p) => !p.isDeleted).forEach((product) => {
+    const status = product.lifecycleStatus || 'Commercial';
+    const list = map.get(status) || [];
+    list.push(product);
+    map.set(status, list);
+  });
+  return PRODUCT_LIFECYCLE_STATUSES.map((lifecycleStatus) => ({
+    lifecycleStatus,
+    count: (map.get(lifecycleStatus) || []).length,
+    products: (map.get(lifecycleStatus) || []).sort((a, b) => a.productName.localeCompare(b.productName)),
+  }));
+}
+
+export function canDeleteProductRecord(product: AdminProduct): { allowed: boolean; reason?: string } {
+  if (product.isDeleted) {
+    return { allowed: false, reason: 'Product is already deleted.' };
   }
+  if (product.lifecycleStatus === 'Commercial' && product.productStatus === 'Active') {
+    return { allowed: false, reason: 'Deactivate or archive active commercial products before deleting.' };
+  }
+  return { allowed: true };
 }
 
 export async function createProduct(
   data: ProductFormData,
-  meta: ProductAuditMeta,
+  _meta: ProductAuditMeta,
 ): Promise<{ product: AdminProduct | null; error: string | null }> {
   try {
-    const unique = await checkUniqueField(ADMIN_COLLECTIONS.products, 'productCode', data.productCode);
-    if (!unique) return { product: null, error: 'Product code already exists' };
-
-    const payload = productPayload(data, meta);
-    const created = await createAdminRecord(ADMIN_COLLECTIONS.products, payload as Omit<AdminProduct, 'id'>, {
-      userId: meta.userId, userName: meta.userName, module: 'Product Master', action: 'CREATE_PRODUCT',
+    const createFn = httpsCallable<Record<string, unknown>, AdminProduct>(
+      getFirebaseFunctions(),
+      'createAdminProduct',
+    );
+    const response = await createFn({
+      ...data,
+      reason: data.changeReason,
     });
-
-    const productId = created.id!;
-    await syncCompositions(productId, data.compositions, meta, []);
-    await syncPacking(productId, data.packingDetails, meta, []);
-
-    await logProductAudit('CREATE_PRODUCT', productId, meta, null, payload);
-    return { product: normalizeProduct(created as AdminProduct), error: null };
-  } catch (e) {
-    return { product: null, error: (e as Error).message };
+    return { product: normalizeProduct(response.data), error: null };
+  } catch (error) {
+    return { product: null, error: callableErrorMessage(error, 'Unable to create product') };
   }
 }
 
 export async function updateProduct(
   id: string,
   data: ProductFormData,
-  existing: AdminProduct,
-  meta: ProductAuditMeta,
-): Promise<{ product: AdminProduct | null; error: string | null }> {
+  _existing: AdminProduct,
+  _meta: ProductAuditMeta,
+): Promise<{ product: AdminProduct | null; error: string | null; cascadeCount?: number }> {
   try {
-    if (data.productCode !== existing.productCode) {
-      const unique = await checkUniqueField(ADMIN_COLLECTIONS.products, 'productCode', data.productCode, id);
-      if (!unique) return { product: null, error: 'Product code already exists' };
-    }
-
-    const updates = productPayload(data, meta);
-    delete (updates as { createdBy?: string }).createdBy;
-
-    const updated = await updateAdminRecord(ADMIN_COLLECTIONS.products, id, updates, {
-      userId: meta.userId, userName: meta.userName, module: 'Product Master',
-      oldValue: JSON.stringify(existing),
+    const updateFn = httpsCallable<
+      Record<string, unknown>,
+      { product: AdminProduct; cascadeCount: number }
+    >(getFirebaseFunctions(), 'updateAdminProduct');
+    const response = await updateFn({
+      productDocId: id,
+      updates: data,
+      reason: data.changeReason,
     });
-
-    const [oldComp, oldPack] = await Promise.all([
-      fetchProductCompositions(id),
-      fetchProductPacking(id),
-    ]);
-    await syncCompositions(id, data.compositions, meta, oldComp);
-    await syncPacking(id, data.packingDetails, meta, oldPack);
-
-    await logProductAudit('EDIT_PRODUCT', id, meta, existing, updates);
-    return { product: normalizeProduct(updated as AdminProduct), error: null };
-  } catch (e) {
-    return { product: null, error: (e as Error).message };
+    return {
+      product: normalizeProduct(response.data.product),
+      error: null,
+      cascadeCount: response.data.cascadeCount,
+    };
+  } catch (error) {
+    return {
+      product: null,
+      error: callableErrorMessage(error, 'Unable to update product'),
+    };
   }
 }
 
 export async function setProductStatus(
   id: string,
-  product: AdminProduct,
+  _product: AdminProduct,
   productStatus: AdminProduct['productStatus'],
-  meta: ProductAuditMeta,
+  _meta: ProductAuditMeta,
+  reason = 'Product status change',
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const status = productStatus === 'Active' ? 'Active' : 'Inactive';
-    await updateAdminRecord(ADMIN_COLLECTIONS.products, id, { productStatus, status }, {
-      userId: meta.userId, userName: meta.userName, module: 'Product Master',
-      oldValue: JSON.stringify(product),
-    });
-    const action = productStatus === 'Active' ? 'PRODUCT_ACTIVATED' : 'PRODUCT_DEACTIVATED';
-    await logProductAudit(action, id, meta, product.productStatus, productStatus);
+    const setStatusFn = httpsCallable(getFirebaseFunctions(), 'setAdminProductStatus');
+    await setStatusFn({ productDocId: id, productStatus, reason });
     return { success: true };
-  } catch (e) {
-    return { success: false, error: (e as Error).message };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to update product status') };
+  }
+}
+
+export async function setProductLifecycle(
+  id: string,
+  _product: AdminProduct,
+  lifecycleStatus: AdminProduct['lifecycleStatus'],
+  _meta: ProductAuditMeta,
+  reason = 'Product lifecycle change',
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const setLifecycleFn = httpsCallable(getFirebaseFunctions(), 'setAdminProductLifecycle');
+    await setLifecycleFn({ productDocId: id, lifecycleStatus, reason });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to update product lifecycle') };
+  }
+}
+
+export async function archiveProduct(
+  id: string,
+  _product: AdminProduct,
+  reason: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const archiveFn = httpsCallable(getFirebaseFunctions(), 'archiveAdminProduct');
+    await archiveFn({ productDocId: id, reason });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to archive product') };
+  }
+}
+
+export async function deleteProduct(
+  id: string,
+  product: AdminProduct,
+  reason: string,
+): Promise<{ success: boolean; error?: string }> {
+  const check = canDeleteProductRecord(product);
+  if (!check.allowed) return { success: false, error: check.reason };
+
+  const linkedBatches = await countLinkedBatches(product.productCode);
+  if (linkedBatches > 0) {
+    return {
+      success: false,
+      error: `Cannot delete product: ${linkedBatches} linked batch record(s) found`,
+    };
+  }
+
+  try {
+    const deleteFn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminProduct');
+    await deleteFn({ productDocId: id, reason });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to delete product') };
+  }
+}
+
+export async function restoreProduct(
+  id: string,
+  reason: string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const restoreFn = httpsCallable(getFirebaseFunctions(), 'restoreAdminProduct');
+    await restoreFn({ productDocId: id, reason });
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to restore product') };
+  }
+}
+
+export async function bulkUpdateProducts(
+  productIds: string[],
+  action: 'activate' | 'deactivate' | 'archive',
+  reason: string,
+): Promise<{ successCount: number; error?: string }> {
+  try {
+    const bulkFn = httpsCallable<
+      Record<string, unknown>,
+      { successCount: number }
+    >(getFirebaseFunctions(), 'bulkUpdateAdminProducts');
+    const response = await bulkFn({ productDocIds: productIds, action, reason });
+    return { successCount: response.data.successCount };
+  } catch (error) {
+    return { successCount: 0, error: callableErrorMessage(error, 'Bulk update failed') };
+  }
+}
+
+export async function bulkDeleteProducts(
+  productIds: string[],
+  reason: string,
+): Promise<{ successCount: number; errors: string[]; error?: string }> {
+  try {
+    const bulkFn = httpsCallable<
+      Record<string, unknown>,
+      { successCount: number; errors: string[] }
+    >(getFirebaseFunctions(), 'bulkSoftDeleteAdminProducts');
+    const response = await bulkFn({ productDocIds: productIds, reason });
+    return response.data;
+  } catch (error) {
+    return { successCount: 0, errors: [], error: callableErrorMessage(error, 'Bulk delete failed') };
   }
 }
 
@@ -307,7 +431,8 @@ export async function uploadProductAttachment(
   productId: string,
   file: File,
   attachmentType: ProductAttachment['attachmentType'],
-  meta: ProductAuditMeta,
+  _meta: ProductAuditMeta,
+  reason = 'Attachment registered after client upload',
 ): Promise<{ attachment: ProductAttachment | null; error?: string }> {
   if (file.size > PRODUCT_ATTACHMENT_MAX_BYTES) {
     return { attachment: null, error: 'File must be 10 MB or smaller' };
@@ -322,33 +447,39 @@ export async function uploadProductAttachment(
     await uploadBytes(storageRef, file);
     const downloadUrl = await getDownloadURL(storageRef);
 
-    const payload: Omit<ProductAttachment, 'id'> = {
-      productId,
+    const registerFn = httpsCallable<Record<string, unknown>, ProductAttachment>(
+      getFirebaseFunctions(),
+      'registerAdminProductAttachment',
+    );
+    const response = await registerFn({
+      productDocId: productId,
       fileName: file.name,
       fileType: file.type,
       fileSize: file.size,
       attachmentType,
       storagePath: path,
       downloadUrl,
-      uploadedBy: meta.userId,
-    };
-
-    const created = await createAdminRecord(ADMIN_COLLECTIONS.productAttachments, payload as Record<string, unknown>, {
-      userId: meta.userId, userName: meta.userName, module: 'Product Master', action: 'ATTACHMENT_UPLOAD',
+      reason,
     });
-
-    await logProductAudit('ATTACHMENT_UPLOAD', productId, meta, null, { fileName: file.name, attachmentType });
-    return { attachment: created as ProductAttachment };
-  } catch (e) {
-    return { attachment: null, error: (e as Error).message };
+    return { attachment: response.data };
+  } catch (error) {
+    return { attachment: null, error: callableErrorMessage(error, 'Unable to upload attachment') };
   }
 }
 
 export async function deleteProductAttachment(
   attachment: ProductAttachment,
-  meta: ProductAuditMeta,
+  _meta: ProductAuditMeta,
+  reason = 'Attachment deleted',
 ): Promise<{ success: boolean; error?: string }> {
+  if (!attachment.id) {
+    return { success: false, error: 'Attachment ID is required' };
+  }
+
   try {
+    const deleteFn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminProductAttachment');
+    await deleteFn({ attachmentDocId: attachment.id, reason });
+
     if (attachment.storagePath && isFirebaseConfigured()) {
       try {
         await deleteObject(ref(getFirebaseStorage(), attachment.storagePath));
@@ -356,50 +487,78 @@ export async function deleteProductAttachment(
         /* storage file may already be removed */
       }
     }
-    if (attachment.id) {
-      await updateAdminRecord(ADMIN_COLLECTIONS.productAttachments, attachment.id, { isDeleted: true }, {
-        userId: meta.userId, userName: meta.userName, module: 'Product Master',
-        oldValue: JSON.stringify(attachment),
-      });
-    }
-    await logProductAudit('ATTACHMENT_DELETE', attachment.productId, meta, attachment, null);
     return { success: true };
-  } catch (e) {
-    return { success: false, error: (e as Error).message };
+  } catch (error) {
+    return { success: false, error: callableErrorMessage(error, 'Unable to delete attachment') };
   }
 }
 
 export async function fetchProductAuditTrail(recordId: string) {
+  if (!isFirebaseConfigured() || !recordId) return [];
   try {
+    const db = getFirebaseFirestore();
     const [trail, logs] = await Promise.all([
-      getAdminRecords<Record<string, unknown>>(ADMIN_COLLECTIONS.auditTrail).catch(() => []),
-      getAdminRecords<Record<string, unknown>>(ADMIN_COLLECTIONS.auditLogs).catch(() => []),
+      getDocs(query(
+        collection(db, ADMIN_COLLECTIONS.auditTrail),
+        where('documentId', '==', recordId),
+        orderBy('timestamp', 'desc'),
+        limit(30),
+      )),
+      getDocs(query(
+        collection(db, ADMIN_COLLECTIONS.auditLogs),
+        where('recordId', '==', recordId),
+        orderBy('dateTime', 'desc'),
+        limit(30),
+      )),
     ]);
-    return [...trail, ...logs]
-      .filter((l) => l.documentId === recordId || l.recordId === recordId)
+    return [...trail.docs, ...logs.docs]
+      .map((snapshot): Record<string, unknown> => ({ id: snapshot.id, ...snapshot.data() }))
       .sort((a, b) => String(b.timestamp ?? b.dateTime).localeCompare(String(a.timestamp ?? a.dateTime)))
       .slice(0, 30);
-  } catch {
+  } catch (error) {
+    console.error('fetchProductAuditTrail failed:', error);
     return [];
   }
 }
 
 export function exportProductsCsv(products: AdminProduct[]): string {
   const headers = [
-    'Product ID', 'Code', 'Name', 'Generic Name', 'Strength', 'Dosage Form',
-    'Market', 'Shelf Life', 'Status',
+    'Product ID', 'Code', 'Name', 'Generic Name', 'Brand Name', 'Product Family',
+    'Therapeutic Category', 'Strength', 'Dosage Form', 'Route', 'Pack Size', 'Pack Type',
+    'Container Closure', 'Market', 'Country', 'Manufacturing Site', 'Business Unit',
+    'Department', 'Product Owner', 'Lifecycle', 'Shelf Life', 'Storage Condition',
+    'Standard Batch Size', 'Mfg License', 'Registration No', 'License No',
+    'MFR No', 'BMR No', 'BPR No', 'Specification No', 'STP No', 'Batch Prefix',
+    'HSN Code', 'GTIN', 'Barcode', 'Status', 'Remarks',
   ];
-  const rows = products.map((p) => [
-    p.productId, p.productCode, p.productName, p.genericName, p.strength,
-    p.dosageForm, p.market, p.shelfLife, p.productStatus,
+  const rows = products.map((product) => [
+    product.productId, product.productCode, product.productName, product.genericName,
+    product.brandName, product.productFamily, product.therapeuticCategory, product.strength,
+    product.dosageForm, product.routeOfAdministration, product.packSize, product.packType,
+    product.containerClosure, product.market, product.country, product.manufacturingSite,
+    product.businessUnit, product.department, product.productOwner, product.lifecycleStatus,
+    product.shelfLife, product.storageCondition, product.standardBatchSize || product.batchSize,
+    product.manufacturingLicenseNumber || product.manufacturingLicenseNo,
+    product.registrationNumber, product.licenseNumber, product.mfrNumber, product.bmrNumber,
+    product.bprNumber, product.specificationNumber, product.stpNumber, product.batchPrefix,
+    product.hsnCode, product.gtin, product.barcode, product.productStatus, product.remarks,
   ]);
   return [headers.join(','), ...rows.map((row) =>
-    row.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','),
+    row.map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','),
   )].join('\n');
 }
 
-export async function logProductExport(meta: ProductAuditMeta, count: number) {
-  await logProductAudit('EXPORT_PRODUCT_LIST', 'export', meta, null, { count });
+export async function logProductExport(
+  _meta: ProductAuditMeta,
+  count: number,
+  reason = 'Product list export',
+) {
+  try {
+    const exportFn = httpsCallable(getFirebaseFunctions(), 'logAdminProductExport');
+    await exportFn({ count, reason });
+  } catch (error) {
+    console.error('logProductExport failed:', error);
+  }
 }
 
 export interface ProductImportRow extends Partial<ProductFormData> {
@@ -560,7 +719,7 @@ function defaultImportComposition(): ProductFormData['compositions'] {
 function rowToImportProduct(
   row: ProductImportRow,
   seenCodes: Set<string>,
-): ProductFormData | null {
+): Omit<ProductFormData, 'changeReason'> | null {
   if (!row.productCode || !row.productName) return null;
 
   const extracted = extractStrengthFromProductName(row.productName);
@@ -571,22 +730,40 @@ function rowToImportProduct(
     productName: extracted.productName,
     genericName: row.genericName || extracted.productName,
     brandName: '',
+    productFamily: '',
+    category: '',
     strength: row.strength || extracted.strength,
     dosageForm: row.dosageForm || inferDosageForm(extracted.productName),
     routeOfAdministration: '',
     packSize: '',
+    packType: '',
+    containerClosure: '',
     market: row.market || 'Domestic',
+    country: 'India',
+    manufacturingSite: '',
+    businessUnit: '',
+    department: '',
+    productOwner: '',
+    lifecycleStatus: 'Commercial',
     therapeuticCategory: '',
     shelfLife: row.shelfLife || '24',
     storageCondition: '',
     standardBatchSize: '',
     manufacturingLicenseNumber: '',
+    registrationNumber: '',
+    licenseNumber: '',
     mfrNumber: row.mfrNumber || '',
     bmrNumber: '',
     bprNumber: row.bprNumber || '',
     specificationNumber: '',
     stpNumber: '',
+    batchPrefix: '',
+    hsnCode: '',
+    gtin: '',
+    barcode: '',
+    qrCode: '',
     productStatus: row.productStatus || parseImportStatus(row.remarks || ''),
+    description: '',
     remarks: row.remarks || 'Imported',
     compositions: row.compositions || defaultImportComposition(),
     packingDetails: row.packingDetails || [],
@@ -668,30 +845,36 @@ export function parseProductImportRows(text: string): ProductImportRow[] {
 
 export async function importProductsFromText(
   text: string,
-  meta: ProductAuditMeta,
+  _meta: ProductAuditMeta,
+  reason = 'Bulk product import from text',
 ): Promise<{ imported: number; errors: string[] }> {
-  const rows = parseProductImportRows(text);
-  let imported = 0;
-  const errors: string[] = [];
+  const parsedRows = parseProductImportRows(text);
   const seenCodes = new Set<string>();
+  const rows = parsedRows
+    .map((row) => rowToImportProduct(row, seenCodes))
+    .filter((row): row is Omit<ProductFormData, 'changeReason'> => row !== null);
 
-  for (const row of rows) {
-    const data = rowToImportProduct(row, seenCodes);
-    if (!data) continue;
-
-    const result = await createProduct(data, meta);
-    if (result.error) errors.push(`${data.productCode}: ${result.error}`);
-    else imported += 1;
+  if (rows.length === 0) {
+    return { imported: 0, errors: [] };
   }
 
-  if (imported) await logProductAudit('IMPORT_PRODUCT', 'import', meta, null, { imported, errors: errors.length });
-  return { imported, errors };
+  try {
+    const importFn = httpsCallable<
+      Record<string, unknown>,
+      { successCount: number; errors: string[] }
+    >(getFirebaseFunctions(), 'importAdminProducts');
+    const response = await importFn({ rows, reason });
+    return { imported: response.data.successCount, errors: response.data.errors };
+  } catch (error) {
+    return { imported: 0, errors: [callableErrorMessage(error, 'Import failed')] };
+  }
 }
 
 export async function importProductsFromFile(
   file: File,
   meta: ProductAuditMeta,
+  reason = 'Bulk product import from file',
 ): Promise<{ imported: number; errors: string[] }> {
   const text = await file.text();
-  return importProductsFromText(text, meta);
+  return importProductsFromText(text, meta, reason);
 }

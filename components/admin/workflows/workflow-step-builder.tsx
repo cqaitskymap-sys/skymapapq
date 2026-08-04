@@ -38,6 +38,10 @@ const defaultStep = (): Step => ({
   requireComment: false,
   dueDays: 3,
   escalationRole: 'head_qa',
+  conditionExpression: '',
+  nextStepOnApprove: '',
+  nextStepOnReject: '',
+  isParallel: false,
   status: 'Active',
 });
 
@@ -169,6 +173,35 @@ export function WorkflowStepBuilder({
                     </SelectContent>
                   </Select>
                 </div>
+                {(step.stepType === 'Decision' || step.stepType === 'Condition' || step.conditionExpression) && (
+                  <div className="space-y-1 sm:col-span-2 md:col-span-3">
+                    <Label className="text-xs">Condition Expression</Label>
+                    <Input
+                      value={step.conditionExpression || ''}
+                      disabled={readOnly}
+                      placeholder="e.g. riskLevel == High"
+                      onChange={(e) => updateStep(index, { conditionExpression: e.target.value })}
+                    />
+                  </div>
+                )}
+                <div className="space-y-1">
+                  <Label className="text-xs">Next on Approve</Label>
+                  <Input
+                    value={step.nextStepOnApprove || ''}
+                    disabled={readOnly}
+                    placeholder="Step name"
+                    onChange={(e) => updateStep(index, { nextStepOnApprove: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Next on Reject</Label>
+                  <Input
+                    value={step.nextStepOnReject || ''}
+                    disabled={readOnly}
+                    placeholder="Step name"
+                    onChange={(e) => updateStep(index, { nextStepOnReject: e.target.value })}
+                  />
+                </div>
               </div>
 
               <div className="flex flex-wrap gap-4 pt-2">
@@ -176,9 +209,10 @@ export function WorkflowStepBuilder({
                   { key: 'isMandatory', label: 'Mandatory' },
                   { key: 'canApprove', label: 'Can Approve' },
                   { key: 'canReject', label: 'Can Reject' },
-                  { key: 'canSendBack', label: 'Can Send Back' },
+                  { key: 'canSendBack', label: 'Can Send Back / Rework' },
                   { key: 'requireESignature', label: 'E-Sign' },
                   { key: 'requireComment', label: 'Require Comment' },
+                  { key: 'isParallel', label: 'Parallel' },
                 ].map((item) => (
                   <div key={item.key} className="flex items-center gap-2">
                     <Checkbox

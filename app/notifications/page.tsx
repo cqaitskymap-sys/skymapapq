@@ -13,18 +13,22 @@ import { isFirebaseConfigured } from '@/lib/firebase';
 import {
   subscribeToNotifications,
   markAllNotificationsRead,
+  clearAllNotifications,
   type NotificationRecord,
 } from '@/lib/notification-service';
 import { EmptyState } from '@/components/admin/dashboard/empty-state';
 import { ErrorCard } from '@/components/admin/dashboard/error-card';
 import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 import { PriorityBadge } from '@/components/admin/notifications/priority-badge';
+import { canDeleteRecords } from '@/lib/permissions';
 
 export default function NotificationsPage() {
   const { user, profile } = useAuth();
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
+  const canClearAll = canDeleteRecords(profile?.role);
 
   useEffect(() => {
     if (!user?.uid) {
@@ -59,6 +63,20 @@ export default function NotificationsPage() {
     else toast.error('Failed to update notifications');
   };
 
+  const handleClearAll = async () => {
+    if (!user?.uid || !canClearAll) return;
+    if (!window.confirm('Permanently delete all notifications? This cannot be undone.')) return;
+    setClearing(true);
+    const result = await clearAllNotifications({
+      id: user.uid,
+      name: profile?.full_name || profile?.email || 'User',
+      role: profile?.role,
+    });
+    setClearing(false);
+    if (result.success) toast.success(`Cleared ${result.deleted} notifications`);
+    else toast.error(result.error || 'Failed to clear notifications');
+  };
+
   if (loading) return <LoadingSkeleton rows={3} />;
   if (error) return <ErrorCard message={error} onRetry={() => window.location.reload()} />;
 
@@ -69,9 +87,16 @@ export default function NotificationsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Notifications</h1>
           <p className="text-muted-foreground">In-app alerts, approvals, and workflow reminders</p>
         </div>
-        {unreadCount > 0 && (
-          <Button variant="outline" onClick={handleMarkAllRead}>Mark All as Read</Button>
-        )}
+        <div className="flex items-center gap-2">
+          {canClearAll && notifications.length > 0 && (
+            <Button variant="destructive" onClick={handleClearAll} disabled={clearing}>
+              {clearing ? 'Clearing…' : 'Clear All'}
+            </Button>
+          )}
+          {unreadCount > 0 && (
+            <Button variant="outline" onClick={handleMarkAllRead}>Mark All as Read</Button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

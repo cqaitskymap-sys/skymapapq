@@ -131,7 +131,7 @@ export async function getDocument<T extends BaseRecord>(
     const db = getDb();
     const docSnap = await getDoc(doc(db, collectionName, documentId));
     if (!docSnap.exists()) return null;
-    const data = { id: docSnap.id, ...docSnap.data() } as T;
+    const data = { ...docSnap.data(), id: docSnap.id } as T;
     if (!includeDeleted && data.isDeleted) return null;
     return data;
   } catch (error) {
@@ -149,7 +149,7 @@ export async function getDocuments<T extends BaseRecord>(
     const db = getDb();
     const q = query(collection(db, collectionName), ...constraints);
     const snap = await getDocs(q);
-    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() } as T));
+    const items = snap.docs.map((d) => ({ ...d.data(), id: d.id } as T));
     if (includeDeleted) return items;
     return items.filter((item) => !item.isDeleted);
   } catch (error) {
@@ -183,7 +183,7 @@ export async function queryDocuments<T extends BaseRecord>(
 
     const snap = await getDocs(q);
     const allDocs = snap.docs
-      .map((d) => ({ id: d.id, ...d.data() } as T))
+      .map((d) => ({ ...d.data(), id: d.id } as T))
       .filter((item) => includeDeleted || !item.isDeleted);
 
     const hasMore = allDocs.length > pageSize;

@@ -50,9 +50,11 @@ function EditEsignSettingContent() {
 
   const initial: Partial<EsignSettingFormData> = {
     settingCode: setting.settingCode,
-    moduleName: setting.moduleName as EsignSettingFormData['moduleName'],
-    actionType: setting.actionType as EsignSettingFormData['actionType'],
-    signatureMeaning: setting.signatureMeaning as EsignSettingFormData['signatureMeaning'],
+    moduleName: setting.moduleName,
+    actionType: setting.actionType,
+    moduleAliases: (setting.moduleAliases || []).join(', '),
+    actionAliases: (setting.actionAliases || []).join(', '),
+    signatureMeaning: setting.signatureMeaning,
     requirePasswordReAuthentication: setting.requirePasswordReAuthentication,
     requireCommentReason: setting.requireCommentReason,
     requireRoleVerification: setting.requireRoleVerification,
@@ -65,7 +67,10 @@ function EditEsignSettingContent() {
     requireFinalApprovalSignature: setting.requireFinalApprovalSignature,
     showSignatureStatement: setting.showSignatureStatement,
     signatureStatementText: setting.signatureStatementText,
+    allowedRoles: (setting.allowedRoles || []).join(', '),
+    allowedDepartments: (setting.allowedDepartments || []).join(', '),
     remarks: setting.remarks,
+    changeReason: '',
   };
 
   const onSubmit = async (data: EsignSettingFormData) => {

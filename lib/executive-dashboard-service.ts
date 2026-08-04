@@ -9,7 +9,6 @@ import { listDeviations } from '@/lib/deviation-service';
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import { computeExtendedOosDashboardMetrics } from '@/lib/oos-dashboard-records';
 import { listOosRecords } from '@/lib/oos-service';
-import { fetchTrainingDashboard } from '@/lib/training-dashboard-service';
 import { isCapaClosed } from '@/lib/capa-types';
 import { isOpenStatus, type DeviationRecord } from '@/lib/deviation-types';
 import type { CpvBatchRecord } from '@/lib/cpv-batch-registration';
@@ -265,7 +264,6 @@ export async function fetchExecutiveDashboardData(): Promise<ExecutiveDashboardD
       oosRecords,
       capaRecords,
       yieldRecords,
-      trainingData,
       cpvAlerts,
     ] = await Promise.all([
       fetchCpvBatches().catch(() => [] as CpvBatchRecord[]),
@@ -274,7 +272,6 @@ export async function fetchExecutiveDashboardData(): Promise<ExecutiveDashboardD
       listOosRecords().catch(() => []),
       listCapas().catch(() => []),
       fetchYieldRecords().catch(() => []),
-      fetchTrainingDashboard().catch(() => null),
       fetchCpvAlerts(50).catch(() => [] as CpvAlertRecord[]),
     ]);
 
@@ -381,7 +378,6 @@ export async function fetchExecutiveDashboardData(): Promise<ExecutiveDashboardD
       }))
       .filter((c) => c.value > 0);
 
-    const trainingCompliance = trainingData?.kpis.trainingCompliancePercent ?? 0;
     const deviationClosure = pct(deviationMetrics.closed, deviationMetrics.total);
     const capaClosure = pct(capaMetrics.closed, capaMetrics.total);
     const oosClosure = pct(oosMetrics.closed, oosMetrics.total);
@@ -396,7 +392,6 @@ export async function fetchExecutiveDashboardData(): Promise<ExecutiveDashboardD
         yieldRecords.length || 1,
       ) },
       { module: 'Change Control', score: 0 },
-      { module: 'Training', score: trainingCompliance },
       { module: 'Vendors', score: 0 },
     ].filter((m) => m.score > 0);
 

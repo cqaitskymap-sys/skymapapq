@@ -131,9 +131,9 @@ export function AdminDataTable<T extends { id?: string; status?: string }>({
                 </TableCell>
               </TableRow>
             ) : (
-              paginated.map((row) => (
+              paginated.map((row, index) => (
                 <TableRow
-                  key={row.id}
+                  key={row.id || `${currentPage}-${index}`}
                   className={onRowClick ? 'cursor-pointer hover:bg-blue-50/50 dark:hover:bg-slate-800/50' : ''}
                   onClick={() => onRowClick?.(row)}
                 >

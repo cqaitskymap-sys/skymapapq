@@ -1,5 +1,11 @@
+import { Suspense } from 'react';
 import { StabilityReviewPage } from '@/components/pqr/stability-review-page';
+import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 
 export default function Page() {
-  return <StabilityReviewPage />;
+  return (
+    <Suspense fallback={<div className="p-4 sm:p-6"><LoadingSkeleton rows={3} /></div>}>
+      <StabilityReviewPage />
+    </Suspense>
+  );
 }

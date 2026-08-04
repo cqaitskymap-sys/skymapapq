@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, Download, Eye, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { BarChart, Bar, Cell, PieChart, Pie, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -66,11 +67,15 @@ function TrendStatusBadge({ status }: { status: string }) {
 
 export function TrendAnalysisPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const productQuery = searchParams.get('product') || '';
+  const batchQuery = searchParams.get('batch') || '';
   const { user, profile } = useAuth();
   const role = profile?.role;
   const canCreate = cpvPermissions.canCreateTrendAnalysis(role);
-  const canEdit = cpvPermissions.canEditTrendAnalysis(role);
+  const canEdit = cpvPermissions.canEditTrendAnalysis(role) || canCreate;
   const canReview = cpvPermissions.canReviewTrendAnalysis(role);
+  void canReview;
   const canImportExport = cpvPermissions.canImportExportTrendAnalysis(role);
 
   const [records, setRecords] = useState<TrendAnalysisRecord[]>([]);
@@ -83,8 +88,8 @@ export function TrendAnalysisPage() {
   const [compareProducts, setCompareProducts] = useState<string[]>([]);
   const [compareParameters, setCompareParameters] = useState<string[]>([]);
 
-  const [search, setSearch] = useState('');
-  const [productFilter, setProductFilter] = useState('all');
+  const [search, setSearch] = useState(batchQuery || '');
+  const [productFilter, setProductFilter] = useState(productQuery || 'all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [riskFilter, setRiskFilter] = useState('all');
@@ -104,7 +109,7 @@ export function TrendAnalysisPage() {
     setError(null);
     try {
       const [rows, prods] = await Promise.all([fetchTrendAnalysisRecords(), fetchProducts()]);
-      setRecords(rows);
+      setRecords(rows.filter((r) => !r.isDeleted));
       setProducts(prods);
     } catch {
       setError('Failed to load trend analysis records.');
@@ -116,6 +121,10 @@ export function TrendAnalysisPage() {
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
+    if (productQuery) setProductFilter(productQuery);
+  }, [productQuery]);
+
+  useEffect(() => {
     if (wizardStep === 3 && form.dataSource && form.productName) {
       void fetchParametersForTrend(form.dataSource, form.productName).then(setParameters);
     }
@@ -124,7 +133,7 @@ export function TrendAnalysisPage() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return records.filter((r) => {
-      if (productFilter !== 'all' && r.productName !== productFilter) return false;
+      if (productFilter !== 'all' && r.productName !== productFilter && r.productCode !== productFilter) return false;
       if (sourceFilter !== 'all' && r.dataSource !== sourceFilter) return false;
       if (statusFilter !== 'all' && r.trendStatus !== statusFilter) return false;
       if (riskFilter !== 'all' && r.riskLevel !== riskFilter) return false;
@@ -134,7 +143,8 @@ export function TrendAnalysisPage() {
       if (dateTo && periodEnd > dateTo) return false;
       if (!q) return true;
       return r.productName.toLowerCase().includes(q) || r.parameterName.toLowerCase().includes(q)
-        || r.trendId.toLowerCase().includes(q);
+        || r.trendId.toLowerCase().includes(q)
+        || r.sourcePreview.some((p) => (p.batchNumber || '').toLowerCase().includes(q));
     });
   }, [records, search, productFilter, sourceFilter, statusFilter, riskFilter, workflowFilter, dateFrom, dateTo]);
 
@@ -150,6 +160,11 @@ export function TrendAnalysisPage() {
 
   const summary = useMemo(() => summarizeTrendAnalysis(records), [records]);
   const charts = useMemo(() => buildTrendAnalysisCharts(filtered), [filtered]);
+  const driftCount = useMemo(() => records.filter((r) => r.processDriftDetected).length, [records]);
+  const avgHealth = useMemo(() => {
+    if (!records.length) return 0;
+    return Math.round(records.reduce((s, r) => s + (r.healthScore || 0), 0) / records.length);
+  }, [records]);
 
   const onProductChange = async (productId: string) => {
     const p = products.find((x) => x.id === productId);
@@ -216,6 +231,10 @@ export function TrendAnalysisPage() {
       toast.error('At least 3 numeric data points required');
       return;
     }
+    if (!form.changeReason || form.changeReason.trim().length < 5) {
+      toast.error('Change reason (min 5 characters) is required');
+      return;
+    }
     setSubmitting(true);
     const { error: err } = await createTrendAnalysis(form as TrendAnalysisFormData, sourcePreview, actor);
     setSubmitting(false);
@@ -229,14 +248,14 @@ export function TrendAnalysisPage() {
 
   const exportList = () => {
     downloadCsv('trend-analysis.csv',
-      ['ID', 'Product', 'Parameter', 'Source', 'Direction', 'Status', 'Risk'],
+      ['ID', 'Product', 'Parameter', 'Source', 'Direction', 'Status', 'Risk', 'Health', 'Forecast', 'Cpk'],
       filtered.map((r) => [
         r.trendId, r.productName, r.parameterName, r.dataSource,
-        r.trendDirection, r.trendStatus, r.riskLevel,
+        r.trendDirection, r.trendStatus, r.riskLevel, r.healthScore, r.forecastNext, r.cpk,
       ]),
     );
-    void logTrendExport(actor, 'report', filtered.length);
-    toast.success('Export downloaded (report placeholder)');
+    void logTrendExport(actor, 'CSV', filtered.length);
+    toast.success(`Exported ${filtered.length} records`);
   };
 
   const columns: ColumnDef<TrendAnalysisRecord>[] = [
@@ -247,6 +266,7 @@ export function TrendAnalysisPage() {
     { key: 'trendDirection', header: 'Direction' },
     { key: 'trendStatus', header: 'Status', render: (r) => <TrendStatusBadge status={r.trendStatus} /> },
     { key: 'riskLevel', header: 'Risk', render: (r) => <RiskBadge level={r.riskLevel} /> },
+    { key: 'healthScore', header: 'Health' },
     { key: 'status', header: 'Workflow' },
     {
       key: 'actions',
@@ -256,12 +276,13 @@ export function TrendAnalysisPage() {
           <Button variant="ghost" size="icon" onClick={() => router.push(`/cpv/trend-analysis/${r.id}`)}>
             <Eye className="h-4 w-4" />
           </Button>
-          {canEdit && (
+          {canEdit && r.status !== 'Approved' && (
             <Button variant="ghost" size="icon" onClick={async () => {
-              const qaOverride = r.isLocked && r.status === 'Approved' && canReview;
-              const { error: err } = await regenerateTrendAnalysis(r.id, actor, r, qaOverride);
+              const reason = window.prompt('Change reason (min 5 chars)');
+              if (!reason || reason.trim().length < 5) { toast.error('Change reason required'); return; }
+              const { error: err } = await regenerateTrendAnalysis(r.id, actor, r, false, { changeReason: reason });
               if (err) toast.error(err);
-              else { toast.success(qaOverride ? 'Regenerated with QA override' : 'Regenerated'); await load(); }
+              else { toast.success('Regenerated'); await load(); }
             }}>
               <RefreshCw className="h-4 w-4" />
             </Button>
@@ -299,6 +320,10 @@ export function TrendAnalysisPage() {
                   parameterType: 'CPP',
                   reviewPeriodFrom: '',
                   reviewPeriodTo: '',
+                  conclusion: '',
+                  recommendation: '',
+                  remarks: '',
+                  changeReason: '',
                 });
                 setSourcePreview([]);
                 setCalcPreview(null);
@@ -312,15 +337,41 @@ export function TrendAnalysisPage() {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="no-print flex flex-wrap gap-1.5">
+        {[
+          { href: batchQuery ? `/cpv/cpp?batch=${encodeURIComponent(batchQuery)}` : productQuery ? `/cpv/cpp?product=${encodeURIComponent(productQuery)}` : '/cpv/cpp', label: 'CPP' },
+          { href: '/cpv/cqa', label: 'CQA' },
+          { href: '/cpv/yield-monitoring', label: 'Yield' },
+          { href: '/cpv/environmental-monitoring', label: 'Environmental' },
+          { href: '/cpv/utility-monitoring', label: 'Utility' },
+          { href: '/cpv/hold-time-monitoring', label: 'Hold Time' },
+          { href: '/cpv/stability-monitoring', label: 'Stability' },
+          { href: '/cpv/process-capability', label: 'Process Capability' },
+          { href: '/cpv/batch-registration', label: 'Batch' },
+          { href: '/qms/deviation', label: 'Deviation' },
+          { href: '/qms/capa', label: 'CAPA' },
+          { href: '/cpv/risk-assessment', label: 'Risk' },
+          { href: '/admin/audit-trail', label: 'Audit Trail' },
+          { href: '/cpv/reports-analytics', label: 'Reports' },
+          { href: '/cpv/statistical-process-control', label: 'SPC' },
+          { href: '/cpv/ai-analytics', label: 'AI Analytics' },
+        ].map((link) => (
+          <Link key={link.label} href={link.href} className="rounded-md border px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900">
+            {link.label}
+          </Link>
+        ))}
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
         <KpiCard label="Total Trends" value={summary.total} />
         <KpiCard label="Normal" value={summary.normal} tone="green" />
         <KpiCard label="Alert" value={summary.alert} tone="amber" />
         <KpiCard label="OOT" value={summary.oot} tone="amber" />
         <KpiCard label="OOS" value={summary.oos} tone="red" />
         <KpiCard label="Action Required" value={summary.actionRequired} tone="red" />
+        <KpiCard label="Process Drift" value={driftCount} tone="amber" />
+        <KpiCard label="Avg Health" value={avgHealth} tone="blue" />
         <KpiCard label="High Risk" value={summary.highRisk} tone="amber" />
-        <KpiCard label="Critical Risk" value={summary.criticalRisk} tone="red" />
         <KpiCard label="CAPA Suggested" value={summary.capaSuggested} tone="amber" />
       </div>
 
@@ -646,11 +697,14 @@ export function TrendAnalysisPage() {
               <ParameterTrendChart data={calcPreview.chartData} title={form.parameterName} />
               <div className="grid gap-2 sm:grid-cols-3 text-sm">
                 <div>Mean: {calcPreview.mean}</div>
-                <div>Min: {calcPreview.minimumValue}</div>
-                <div>Max: {calcPreview.maximumValue}</div>
+                <div>Median: {calcPreview.median}</div>
                 <div>SD: {calcPreview.standardDeviation}</div>
                 <div>Direction: {calcPreview.trendDirection}</div>
                 <div>Status: {calcPreview.trendStatus}</div>
+                <div>Forecast: {calcPreview.forecastNext}</div>
+                <div>Cpk: {calcPreview.cpk || '—'}</div>
+                <div>Health: {calcPreview.healthScore}</div>
+                <div>EWMA: {calcPreview.ewmaLast}</div>
               </div>
               <Button onClick={() => setWizardStep(7)}>Continue</Button>
             </div>
@@ -672,7 +726,19 @@ export function TrendAnalysisPage() {
               <Textarea value={form.recommendation || ''} onChange={(e) => setForm((f) => ({ ...f, recommendation: e.target.value }))} />
               <Label>Remarks</Label>
               <Textarea value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} />
-              <Button onClick={() => setWizardStep(9)}>Preview Save</Button>
+              <Label>Change Reason * (ALCOA+)</Label>
+              <Textarea
+                value={form.changeReason || ''}
+                onChange={(e) => setForm((f) => ({ ...f, changeReason: e.target.value }))}
+                placeholder="Minimum 5 characters"
+              />
+              <Button onClick={() => {
+                if (!form.changeReason || form.changeReason.trim().length < 5) {
+                  toast.error('Change reason must be at least 5 characters');
+                  return;
+                }
+                setWizardStep(9);
+              }}>Preview Save</Button>
             </div>
           )}
 
@@ -682,7 +748,11 @@ export function TrendAnalysisPage() {
               <p><strong>Parameter:</strong> {form.parameterName}</p>
               <p><strong>Status:</strong> {calcPreview.trendStatus} · {calcPreview.trendDirection}</p>
               <p><strong>Data points:</strong> {calcPreview.dataPointsCount}</p>
+              <p><strong>Health / Confidence:</strong> {calcPreview.healthScore} / {calcPreview.confidenceScore}</p>
+              <p><strong>Forecast next:</strong> {calcPreview.forecastNext}</p>
+              {calcPreview.processDriftDetected && <p className="text-amber-700">Process drift detected</p>}
               {calcPreview.capaSuggested && <p className="text-amber-700">CAPA suggested based on trend signals.</p>}
+              <p className="text-muted-foreground">{calcPreview.aiRecommendation}</p>
             </div>
           )}
 

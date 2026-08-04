@@ -15,6 +15,7 @@ import {
   type CapaTrendSaveForm,
 } from '@/lib/capa-trend-records';
 import { CAPA_COLLECTIONS, type CapaTrendRecord } from '@/lib/capa-types';
+import { polishTrendDrafts } from '@/lib/ai/client';
 
 export type { CapaTrendActor, CapaTrendFilterInput, CapaTrendSaveForm };
 
@@ -65,7 +66,23 @@ async function notify(title: string, message: string, recordId: string, userId?:
 export async function generateCapaTrend(filters: CapaTrendFilterInput) {
   const all = await listCapas();
   const analysis = computeCapaTrendAnalysis(all, filters);
-  return analysis;
+  const polished = await polishTrendDrafts({
+    module: 'CAPA',
+    recommendation_draft: analysis.recommendation_draft,
+    conclusion_draft: analysis.conclusion_draft,
+    context: {
+      metrics: analysis.metrics,
+      alerts: analysis.alerts,
+      trend_status: analysis.trend_status,
+      risk_level: analysis.risk_level,
+      filters,
+    },
+  });
+  return {
+    ...analysis,
+    recommendation_draft: polished.recommendation_draft,
+    conclusion_draft: polished.conclusion_draft || analysis.conclusion_draft,
+  };
 }
 
 export async function listSavedCapaTrends(max = 100): Promise<CapaTrendRecord[]> {

@@ -1,16 +1,16 @@
 import {
   EmailAuthProvider, reauthenticateWithCredential,
 } from 'firebase/auth';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, getDocs, limit, orderBy, query } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { createAuditLog } from '@/lib/audit-trail';
-import { getFirebaseAuth, getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecords } from '@/lib/firestore-service';
+import { getFirebaseAuth, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import {
-  createSignatureSession, completeSignatureSession, persistEnterpriseSignature, getClientDeviceInfo,
+  createSignatureSession, completeSignatureSession, getClientDeviceInfo,
 } from '@/lib/electronic-signatures-service';
 import { ADMIN_COLLECTIONS } from './constants';
 import {
-  fetchActiveEsignSetting, fetchEsignSettings, normalizeEsignSetting,
+  fetchActiveEsignSetting, normalizeEsignSetting,
 } from './esign-settings-service';
 import type { EsignRecord, EsignSettings } from './schemas';
 
@@ -29,6 +29,9 @@ export interface PerformEsignInput {
   userRole?: string;
   department?: string;
   isTest?: boolean;
+  workflowId?: string;
+  approvalLevel?: string;
+  subModule?: string;
 }
 
 export interface PerformEsignResult {
@@ -38,20 +41,47 @@ export interface PerformEsignResult {
   locked?: boolean;
 }
 
-function buildEsignRecordId(): string {
-  return `ESR-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
-}
-
 function getDeviceInfo(): string {
   return getClientDeviceInfo().device;
 }
 
+function parseUa() {
+  if (typeof navigator === 'undefined') {
+    return { browser: 'server', operatingSystem: 'server' };
+  }
+  const ua = navigator.userAgent;
+  let browser = 'Unknown';
+  if (/Edg\//.test(ua)) browser = 'Edge';
+  else if (/Chrome\//.test(ua)) browser = 'Chrome';
+  else if (/Firefox\//.test(ua)) browser = 'Firefox';
+  else if (/Safari\//.test(ua)) browser = 'Safari';
+  let operatingSystem = 'Unknown';
+  if (/Windows/i.test(ua)) operatingSystem = 'Windows';
+  else if (/Mac OS/i.test(ua)) operatingSystem = 'macOS';
+  else if (/Android/i.test(ua)) operatingSystem = 'Android';
+  else if (/iPhone|iPad/i.test(ua)) operatingSystem = 'iOS';
+  else if (/Linux/i.test(ua)) operatingSystem = 'Linux';
+  return { browser, operatingSystem };
+}
+
 export async function fetchEsignRecords(): Promise<EsignRecord[]> {
+  if (!isFirebaseConfigured()) return [];
   try {
-    const records = await getRecords<EsignRecord>(ADMIN_COLLECTIONS.esignRecords, []);
-    return records.sort((a, b) => String(b.signedDateTime).localeCompare(String(a.signedDateTime)));
+    const snap = await getDocs(query(
+      collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.esignRecords),
+      orderBy('signedDateTime', 'desc'),
+      limit(400),
+    ));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as EsignRecord));
   } catch {
-    return [];
+    try {
+      const snap = await getDocs(collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.esignRecords));
+      return snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as EsignRecord))
+        .sort((a, b) => String(b.signedDateTime).localeCompare(String(a.signedDateTime)));
+    } catch {
+      return [];
+    }
   }
 }
 
@@ -65,6 +95,7 @@ export function getEsignRecordsSummary(records: EsignRecord[]) {
     totalRecords: records.filter((r) => !r.isTest).length,
     failedAttempts: records.filter((r) => r.authenticationStatus === 'Failed').length,
     testSignatures: records.filter((r) => r.isTest).length,
+    signed: records.filter((r) => r.status === 'Signed' && !r.isTest).length,
   };
 }
 
@@ -90,32 +121,51 @@ async function incrementFailedAttempts(
   const current = Number(snap.data()?.esignFailedAttempts ?? 0) + 1;
   const locked = lockAccount && current >= maxAttempts;
   const lockedUntil = locked ? new Date(Date.now() + 30 * 60 * 1000).toISOString() : null;
-
   await updateDoc(ref, {
     esignFailedAttempts: current,
     esignLockedUntil: lockedUntil,
     updatedAt: new Date().toISOString(),
-  });
-
+  }).catch(() => undefined);
   return { locked, attempts: current };
 }
 
 async function resetFailedAttempts(userId: string): Promise<void> {
   if (!isFirebaseConfigured()) return;
-  const ref = doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.users, userId);
-  await updateDoc(ref, {
+  await updateDoc(doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.users, userId), {
     esignFailedAttempts: 0,
     esignLockedUntil: null,
     updatedAt: new Date().toISOString(),
   }).catch(() => undefined);
 }
 
-async function saveEsignRecord(data: Omit<EsignRecord, 'id'>): Promise<EsignRecord> {
-  return createRecord<EsignRecord>(
-    ADMIN_COLLECTIONS.esignRecords,
-    data as Omit<EsignRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-    { moduleName: 'E-Signature', actor: { id: data.userId, name: data.userName } },
-  );
+async function attestViaCloud(input: {
+  moduleName: string;
+  actionType: string;
+  recordId: string;
+  documentNumber?: string;
+  signatureMeaning: string;
+  reasonComment?: string;
+  authenticationStatus: string;
+  isTest?: boolean;
+  clientReauthAt?: string;
+  department?: string;
+  workflowId?: string;
+  approvalLevel?: string;
+  subModule?: string;
+}): Promise<EsignRecord> {
+  const ua = parseUa();
+  const fn = httpsCallable(getFirebaseFunctions(), 'recordAdminEsignAttestation');
+  const result = await fn({
+    ...input,
+    deviceInfo: getDeviceInfo(),
+    browser: ua.browser,
+    operatingSystem: ua.operatingSystem,
+    authenticationMethod: 'Password Confirmation',
+    mfaStatus: 'Not Applicable',
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+  });
+  const data = result.data as { record?: EsignRecord; id?: string };
+  return { ...(data.record || {}), id: data.id } as EsignRecord;
 }
 
 export async function performEsign(input: PerformEsignInput): Promise<PerformEsignResult> {
@@ -138,18 +188,29 @@ export async function performEsign(input: PerformEsignInput): Promise<PerformEsi
     return { success: false, error: 'Electronic signature confirmation is required' };
   }
 
+  if (normalized?.requireRoleVerification && (normalized.allowedRoles || []).length > 0) {
+    if (!input.userRole || !normalized.allowedRoles.includes(input.userRole)) {
+      return { success: false, error: 'Your role is not authorized for this electronic signature' };
+    }
+  }
+
+  if (normalized?.requireDepartmentVerification && (normalized.allowedDepartments || []).length > 0) {
+    if (!input.department || !normalized.allowedDepartments.includes(input.department)) {
+      return { success: false, error: 'Your department is not authorized for this electronic signature' };
+    }
+  }
+
   let sessionId = '';
   try {
     sessionId = await createSignatureSession(input.userId, input.moduleName, input.recordId, input.actionType);
   } catch { /* session optional */ }
-
-  const clientInfo = getClientDeviceInfo();
 
   const meaning = input.signatureMeaning || normalized?.signatureMeaning || '';
   if (normalized?.requireCommentReason && !input.reasonComment?.trim()) {
     return { success: false, error: 'Reason or comment is required' };
   }
 
+  let clientReauthAt = '';
   if (normalized?.requirePasswordReAuthentication) {
     if (!input.password) {
       return { success: false, error: 'Password is required for re-authentication' };
@@ -163,9 +224,14 @@ export async function performEsign(input: PerformEsignInput): Promise<PerformEsi
       if (!currentUser || currentUser.uid !== input.userId) {
         return { success: false, error: 'You can only sign as the logged-in user' };
       }
+      // Prevent autofill bypass: require non-empty password typed for this session
+      if (input.password.length < 6) {
+        return { success: false, error: 'Invalid password for re-authentication' };
+      }
       const credential = EmailAuthProvider.credential(input.userEmail, input.password);
       await reauthenticateWithCredential(currentUser, credential);
-    } catch (e) {
+      clientReauthAt = new Date().toISOString();
+    } catch {
       const maxAttempts = normalized?.maxFailedEsignAttempts ?? 3;
       const lockResult = await incrementFailedAttempts(
         input.userId,
@@ -173,26 +239,23 @@ export async function performEsign(input: PerformEsignInput): Promise<PerformEsi
         normalized?.lockAccountAfterFailedAttempts ?? true,
       );
 
-      const failedRecord = await saveEsignRecord({
-        esignRecordId: buildEsignRecordId(),
-        moduleName: input.moduleName,
-        recordId: input.recordId,
-        documentNumber: input.documentNumber || '',
-        actionType: input.actionType,
-        signatureMeaning: meaning,
-        userId: input.userId,
-        userName: input.userName,
-        userEmail: input.userEmail,
-        userRole: input.userRole || '',
-        department: input.department || '',
-        signedDateTime: new Date().toISOString(),
-        reasonComment: input.reasonComment || '',
-        ipAddress: clientInfo.ip,
-        deviceInfo: clientInfo.device,
-        authenticationStatus: 'Failed',
-        status: 'Failed',
-        isTest: input.isTest ?? false,
-      });
+      let failedRecord: EsignRecord | undefined;
+      try {
+        failedRecord = await attestViaCloud({
+          moduleName: input.moduleName,
+          actionType: input.actionType,
+          recordId: input.recordId,
+          documentNumber: input.documentNumber,
+          signatureMeaning: meaning,
+          reasonComment: input.reasonComment,
+          authenticationStatus: 'Failed',
+          isTest: input.isTest,
+          department: input.department,
+          workflowId: input.workflowId,
+          approvalLevel: input.approvalLevel,
+          subModule: input.subModule,
+        });
+      } catch { /* best effort */ }
 
       await createAuditLog({
         moduleName: input.moduleName,
@@ -204,18 +267,10 @@ export async function performEsign(input: PerformEsignInput): Promise<PerformEsi
         user: { id: input.userId, name: input.userName, role: input.userRole, department: input.department },
         status: 'Failed',
         newValue: { attempts: lockResult.attempts },
-      });
+      }).catch(() => undefined);
 
-      if (lockResult.locked) {
-        await createAuditLog({
-          moduleName: 'Admin',
-          collectionName: ADMIN_COLLECTIONS.users,
-          recordId: input.userId,
-          actionType: 'Override',
-          actionDescription: 'Account locked due to failed e-signature attempts',
-          user: { id: input.userId, name: input.userName },
-          status: 'Success',
-        });
+      if (sessionId) {
+        await completeSignatureSession(sessionId, false).catch(() => undefined);
       }
 
       return {
@@ -231,53 +286,58 @@ export async function performEsign(input: PerformEsignInput): Promise<PerformEsi
 
   await resetFailedAttempts(input.userId);
 
-  const record = await saveEsignRecord({
-    esignRecordId: buildEsignRecordId(),
-    moduleName: input.moduleName,
-    recordId: input.recordId,
-    documentNumber: input.documentNumber || '',
-    actionType: input.actionType,
-    signatureMeaning: meaning,
-    userId: input.userId,
-    userName: input.userName,
-    userEmail: input.userEmail,
-    userRole: input.userRole || '',
-    department: input.department || '',
-    signedDateTime: new Date().toISOString(),
-    reasonComment: input.reasonComment || '',
-    ipAddress: clientInfo.ip,
-    deviceInfo: clientInfo.device,
-    authenticationStatus: 'Success',
-    status: input.isTest ? 'Test' : 'Signed',
-    isTest: input.isTest ?? false,
-  });
-
   try {
-    await persistEnterpriseSignature(record, { sessionId });
-    await completeSignatureSession(sessionId, true);
-  } catch { /* enterprise store optional during migration */ }
+    const record = await attestViaCloud({
+      moduleName: input.moduleName,
+      actionType: input.actionType,
+      recordId: input.recordId,
+      documentNumber: input.documentNumber,
+      signatureMeaning: meaning,
+      reasonComment: input.reasonComment,
+      authenticationStatus: 'Success',
+      isTest: input.isTest,
+      clientReauthAt: clientReauthAt || new Date().toISOString(),
+      department: input.department,
+      workflowId: input.workflowId,
+      approvalLevel: input.approvalLevel,
+      subModule: input.subModule,
+    });
 
-  await createAuditLog({
-    moduleName: input.moduleName,
-    collectionName: ADMIN_COLLECTIONS.esignRecords,
-    recordId: input.recordId,
-    documentNumber: input.documentNumber,
-    actionType: 'E-Signature',
-    actionDescription: input.isTest ? 'Test e-signature' : 'Successful e-signature',
-    fieldName: 'actionType',
-    newValue: input.actionType,
-    reason: input.reasonComment,
-    user: { id: input.userId, name: input.userName, role: input.userRole, department: input.department },
-    status: 'Success',
-    eSignatureRequired: true,
-    eSignatureStatus: 'Signed',
-  });
+    if (sessionId) {
+      await completeSignatureSession(sessionId, true).catch(() => undefined);
+    }
 
-  return { success: true, record };
+    await createAuditLog({
+      moduleName: input.moduleName,
+      collectionName: ADMIN_COLLECTIONS.esignRecords,
+      recordId: input.recordId,
+      documentNumber: input.documentNumber,
+      actionType: 'E-Signature',
+      actionDescription: input.isTest ? 'Test e-signature' : 'Successful e-signature',
+      fieldName: 'actionType',
+      newValue: input.actionType,
+      reason: input.reasonComment,
+      user: { id: input.userId, name: input.userName, role: input.userRole, department: input.department },
+      status: 'Success',
+      eSignatureRequired: true,
+      eSignatureStatus: 'Signed',
+    }).catch(() => undefined);
+
+    return { success: true, record };
+  } catch (e) {
+    if (sessionId) {
+      await completeSignatureSession(sessionId, false).catch(() => undefined);
+    }
+    return {
+      success: false,
+      error: (e as Error).message || 'Unable to record electronic signature',
+    };
+  }
 }
 
 /** Backward-compatible global settings reader */
 export async function getEsignSettings(): Promise<EsignSettings | null> {
+  const { fetchEsignSettings } = await import('./esign-settings-service');
   const settings = await fetchEsignSettings();
   return settings.find((s) => s.status === 'Active') ?? settings[0] ?? null;
 }

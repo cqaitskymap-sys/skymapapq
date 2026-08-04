@@ -1,14 +1,14 @@
 import {
-  addDoc, collection, getDocs, limit, orderBy, query, where,
+  collection, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
+import { isCpvProductOperational } from '@/lib/cpv-product-master';
 import { fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
-import { createAlert } from '@/lib/cpv-module-service';
 import {
   HOLD_TIME_MONITORING_COLLECTION,
   HOLD_TIME_MASTER_COLLECTION,
@@ -16,10 +16,16 @@ import {
   HOLD_TIME_MODULE_NAME,
   BULK_HOLD_STAGES,
   buildHoldTimeId,
+  buildHoldTimeCode,
+  buildHoldTimeComputedFields,
   calculateActualHoldTime,
   calculateHoldDifference,
+  calculateRemainingTime,
+  calculateExceededTime,
+  calculateTimeUtilization,
   evaluateHoldTimeStatus,
   evaluateHoldTimeRisk,
+  evaluateStorageExcursion,
   defaultAllowedForStage,
   type HoldTimeMonitoringFormData,
   type HoldTimeMonitoringRecord,
@@ -31,41 +37,6 @@ export interface HoldTimeActor {
   role?: string;
 }
 
-function actorCtx(actor: HoldTimeActor) {
-  return { moduleName: HOLD_TIME_MODULE_NAME, actor: { id: actor.id, name: actor.name } as DocumentActor };
-}
-
-async function logHoldTimeAudit(
-  actionType: string,
-  recordId: string,
-  actor: HoldTimeActor,
-  oldVal?: unknown,
-  newVal?: unknown,
-  docNo?: string,
-) {
-  await createAuditLog({
-    moduleName: HOLD_TIME_MODULE_NAME,
-    collectionName: HOLD_TIME_MONITORING_COLLECTION,
-    recordId,
-    documentNumber: docNo,
-    actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-  await writeAuditTrail({
-    collectionName: HOLD_TIME_MONITORING_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: HOLD_TIME_MODULE_NAME,
-  });
-}
-
 function str(v: unknown, fb = ''): string {
   if (v === null || v === undefined) return fb;
   return String(v);
@@ -74,6 +45,20 @@ function str(v: unknown, fb = ''): string {
 function num(v: unknown, fb = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fb;
+}
+
+function optionalNum(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const message = String((e as { message?: string }).message || '');
+    if (message) return message.replace(/^Firebase:\s*/i, '').replace(/\s*\(.*\)$/, '').trim() || fallback;
+  }
+  return fallback;
 }
 
 function normalizeHoldTimeRecord(raw: Record<string, unknown>): HoldTimeMonitoringRecord {
@@ -88,35 +73,83 @@ function normalizeHoldTimeRecord(raw: Record<string, unknown>): HoldTimeMonitori
     calculateActualHoldTime(start, end, unit),
   );
   const difference = num(raw.difference, calculateHoldDifference(allowed, actual));
+  const remainingTime = num(raw.remainingTime, calculateRemainingTime(allowed, actual));
+  const exceededTime = num(raw.exceededTime, calculateExceededTime(allowed, actual));
+  const timeUtilizationPercent = num(
+    raw.timeUtilizationPercent,
+    calculateTimeUtilization(allowed, actual),
+  );
   const status = str(
     raw.status || raw.complianceStatus || raw.compliance_status,
-    evaluateHoldTimeStatus(actual, allowed),
+    evaluateHoldTimeStatus(actual, allowed, { endDateTime: end }),
   );
+  const temperature = optionalNum(raw.temperature);
+  const humidity = optionalNum(raw.humidity);
+  const temperatureLimitLow = optionalNum(raw.temperatureLimitLow);
+  const temperatureLimitHigh = optionalNum(raw.temperatureLimitHigh);
+  const humidityLimitLow = optionalNum(raw.humidityLimitLow);
+  const humidityLimitHigh = optionalNum(raw.humidityLimitHigh);
+  const excursions = evaluateStorageExcursion({
+    temperature, humidity, temperatureLimitLow, temperatureLimitHigh, humidityLimitLow, humidityLimitHigh,
+  });
+
   return {
     id: str(raw.id),
     holdTimeId: str(raw.holdTimeId || raw.hold_time_id, buildHoldTimeId(batchNumber, holdStage)),
+    holdTimeCode: str(raw.holdTimeCode, buildHoldTimeCode(batchNumber, holdStage)),
+    studyNumber: str(raw.studyNumber),
     cpvProductId: str(raw.cpvProductId || raw.cpv_product_id),
     productName: str(raw.productName || raw.product_name),
     productCode: str(raw.productCode || raw.product_code),
+    productVersion: str(raw.productVersion),
+    material: str(raw.material),
+    materialCategory: (str(raw.materialCategory, 'N/A') as HoldTimeMonitoringRecord['materialCategory']),
+    equipmentId: str(raw.equipmentId),
+    equipmentName: str(raw.equipmentName),
     batchNumber,
+    manufacturingOrder: str(raw.manufacturingOrder),
     manufacturingDate: str(raw.manufacturingDate || raw.manufacturing_date),
     processStage: str(raw.processStage || raw.process_stage || holdStage),
-      holdStage: holdStage,
+    operation: str(raw.operation),
+    holdStage,
+    department: str(raw.department, 'Production'),
+    productionLine: str(raw.productionLine),
+    site: str(raw.site),
+    storageLocation: str(raw.storageLocation),
+    storageCondition: str(raw.storageCondition),
+    temperature,
+    humidity,
+    temperatureLimitLow,
+    temperatureLimitHigh,
+    humidityLimitLow,
+    humidityLimitHigh,
     startDateTime: start,
     endDateTime: end,
     actualHoldTime: actual,
+    elapsedTime: num(raw.elapsedTime, actual),
+    remainingTime,
+    exceededTime,
+    timeUtilizationPercent,
     allowedHoldTime: allowed,
     holdTimeUnit: (unit === 'Minutes' || unit === 'Days' ? unit : 'Hours') as HoldTimeMonitoringRecord['holdTimeUnit'],
     difference,
     complianceStatus: status,
     status,
+    nearExpiry: Boolean(raw.nearExpiry) || (remainingTime <= allowed * 0.2 && remainingTime > 0),
+    temperatureExcursion: Boolean(raw.temperatureExcursion) || excursions.temperatureExcursion,
+    humidityExcursion: Boolean(raw.humidityExcursion) || excursions.humidityExcursion,
+    storageExcursion: Boolean(raw.storageExcursion) || excursions.storageExcursion,
+    effectiveDate: str(raw.effectiveDate),
+    reviewDate: str(raw.reviewDate || raw.review_date),
+    description: str(raw.description),
     reasonForHold: str(raw.reasonForHold || raw.reason_for_hold),
     extensionApproved: Boolean(raw.extensionApproved || raw.extension_approved),
     extensionReason: str(raw.extensionReason || raw.extension_reason),
     approvedBy: str(raw.approvedBy || raw.approved_by),
-    reviewDate: str(raw.reviewDate || raw.review_date),
     remarks: str(raw.remarks),
     autoDeviationRequired: Boolean(raw.autoDeviationRequired ?? raw.auto_deviation_required ?? true),
+    timerStatus: (str(raw.timerStatus, end ? 'Completed' : 'Not Started') as HoldTimeMonitoringRecord['timerStatus']),
+    changeReason: str(raw.changeReason || raw.change_reason),
     riskLevel: str(raw.riskLevel || raw.risk_level, 'Low'),
     deviationRequired: Boolean(raw.deviationRequired || raw.deviation_required),
     linkedDeviationNumber: str(raw.linkedDeviationNumber || raw.linked_deviation_number),
@@ -134,14 +167,7 @@ function normalizeHoldTimeRecord(raw: Record<string, unknown>): HoldTimeMonitori
   };
 }
 
-export function buildHoldTimeComputedFields(
-  data: Pick<HoldTimeMonitoringFormData, 'startDateTime' | 'endDateTime' | 'allowedHoldTime' | 'holdTimeUnit'>,
-) {
-  const actualHoldTime = calculateActualHoldTime(data.startDateTime, data.endDateTime, data.holdTimeUnit);
-  const difference = calculateHoldDifference(data.allowedHoldTime, actualHoldTime);
-  const status = evaluateHoldTimeStatus(actualHoldTime, data.allowedHoldTime);
-  return { actualHoldTime, difference, status, complianceStatus: status };
-}
+export { buildHoldTimeComputedFields };
 
 export async function fetchHoldTimeMaster(stage: string): Promise<{ allowed: number; unit: string }> {
   if (!isFirebaseConfigured()) return defaultAllowedForStage(stage);
@@ -186,14 +212,16 @@ export async function fetchHoldTimeRecords(max = 500): Promise<HoldTimeMonitorin
     } catch {
       primary = await getRecords<HoldTimeMonitoringRecord>(HOLD_TIME_MONITORING_COLLECTION, [limit(max)]);
     }
-    const normalized = primary.map((r) => normalizeHoldTimeRecord(r as unknown as Record<string, unknown>));
+    const normalized = primary
+      .map((r) => normalizeHoldTimeRecord(r as unknown as Record<string, unknown>))
+      .filter((r) => !r.isDeleted);
     if (normalized.length) return normalized.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     for (const legacy of HOLD_TIME_LEGACY_COLLECTIONS) {
       const legacyRows = await listCpvRecords<Record<string, unknown>>(legacy, max);
-      if (legacyRows.length) return legacyRows.map((r) => normalizeHoldTimeRecord(r));
+      if (legacyRows.length) return legacyRows.map((r) => normalizeHoldTimeRecord(r)).filter((r) => !r.isDeleted);
     }
     const cpvLegacy = await listCpvRecords<Record<string, unknown>>(CPV_COLLECTIONS.holdTime, max);
-    return cpvLegacy.map((r) => normalizeHoldTimeRecord(r));
+    return cpvLegacy.map((r) => normalizeHoldTimeRecord(r)).filter((r) => !r.isDeleted);
   } catch (e) {
     console.error('fetchHoldTimeRecords failed', e);
     return [];
@@ -202,7 +230,9 @@ export async function fetchHoldTimeRecords(max = 500): Promise<HoldTimeMonitorin
 
 export async function fetchHoldTimeRecordById(id: string): Promise<HoldTimeMonitoringRecord | null> {
   const record = await getRecord<HoldTimeMonitoringRecord>(HOLD_TIME_MONITORING_COLLECTION, id);
-  if (record) return normalizeHoldTimeRecord(record as unknown as Record<string, unknown>);
+  if (record && !(record as HoldTimeMonitoringRecord).isDeleted) {
+    return normalizeHoldTimeRecord(record as unknown as Record<string, unknown>);
+  }
   const all = await fetchHoldTimeRecords();
   return all.find((r) => r.id === id) ?? null;
 }
@@ -216,232 +246,197 @@ export async function fetchHoldTimeBatchesForProduct(productName: string, produc
   );
 }
 
-async function countExceededHoldTimes(batchNumber: string): Promise<number> {
-  const records = await fetchHoldTimeRecords(1000);
-  return records.filter((r) =>
-    r.batchNumber === batchNumber
-    && r.status === 'Exceeded'
-    && !r.isDeleted,
-  ).length;
-}
-
-async function maybeCreateDeviation(record: HoldTimeMonitoringRecord, actor: HoldTimeActor, autoDev: boolean) {
-  if (!autoDev || record.status !== 'Exceeded') return '';
-  try {
-    const { createDeviationFromCpv } = await import('@/lib/deviation-service');
-    const dev = await createDeviationFromCpv('cpv_cpp', {
-      id: record.id,
-      product: record.productName,
-      batchNumber: record.batchNumber,
-      parameter: record.holdStage,
-      observedValue: record.actualHoldTime,
-      status: 'OOT',
-      department: 'Production',
-    }, { id: actor.id, name: actor.name, role: actor.role || 'qa' });
-    if (!dev) return '';
-    return String((dev as { deviation_number?: string }).deviation_number || dev.id || '');
-  } catch {
-    return '';
-  }
-}
-
-async function maybeCreateAlertAndNotification(record: HoldTimeMonitoringRecord, actor: HoldTimeActor) {
-  if (record.status === 'Complies') return;
-  try {
-    await createAlert({
-      alertType: record.status === 'Exceeded' ? 'Limit Exceeded' : 'OOT',
-      severity: record.riskLevel === 'Critical' ? 'Critical' : record.riskLevel === 'High' ? 'High' : 'Medium',
-      module: HOLD_TIME_MODULE_NAME,
-      productName: record.productName,
-      batchNo: record.batchNumber,
-      parameterName: record.holdStage,
-      message: `Hold time ${record.status} for ${record.holdStage} — batch ${record.batchNumber}`,
-      observedValue: record.actualHoldTime,
-      recordId: record.id,
-    }, { id: actor.id, name: actor.name, role: actor.role });
-  } catch { /* optional */ }
-  if (!isFirebaseConfigured()) return;
-  try {
-    await addDoc(collection(getFirebaseFirestore(), 'notifications'), {
-      title: `Hold Time ${record.status}`,
-      message: `${record.batchNumber}: ${record.holdStage} ${record.actualHoldTime} ${record.holdTimeUnit}`,
-      module: HOLD_TIME_MODULE_NAME,
-      record_id: record.id,
-      target_roles: ['qa', 'production'],
-      read: false,
-      created_at: new Date().toISOString(),
-    });
-  } catch { /* optional */ }
-}
-
 export async function createHoldTimeRecord(
   data: HoldTimeMonitoringFormData,
-  actor: HoldTimeActor,
+  _actor: HoldTimeActor,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean },
 ): Promise<{ result: HoldTimeMonitoringRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
+    if (!data.changeReason || data.changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
     const product = await fetchCpvProductById(data.cpvProductId);
-    if (product?.cpvStatus === 'Inactive') return { result: null, error: 'Inactive CPV product — entry not allowed.' };
-    const batches = await fetchHoldTimeBatchesForProduct(data.productName, data.cpvProductId);
-    const batchMatch = batches.find((b) => b.batchNumber === data.batchNumber);
-    if (batches.length && !batchMatch) return { result: null, error: 'Batch does not belong to selected product.' };
-    if (batchMatch && ['Cancelled', 'Rejected'].includes(batchMatch.batchStatus)) {
-      return { result: null, error: 'Cancelled or rejected batch — entry not allowed.' };
+    if (product && !isCpvProductOperational(product.cpvStatus)) {
+      return { result: null, error: 'Selected CPV product is not operational for hold time entry.' };
     }
-
-    const existing = await fetchHoldTimeRecords(1000);
-    const duplicate = existing.find(
-      (r) => r.batchNumber === data.batchNumber && r.holdStage === data.holdStage && !r.isDeleted,
+    if (qaOverride && options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminHoldTimeRecord',
     );
-    if (duplicate) return { result: null, error: 'Hold time record already exists for this batch and stage.' };
-
-    const computed = buildHoldTimeComputedFields(data);
-    const priorExceeded = await countExceededHoldTimes(data.batchNumber);
-    const exceededCount = priorExceeded + (computed.status === 'Exceeded' ? 1 : 0);
-    const riskLevel = evaluateHoldTimeRisk({ ...data, ...computed }, exceededCount);
-    const capaRequired = exceededCount >= 3;
-    const autoDev = data.autoDeviationRequired;
-
-    const payload = {
+    const result = await fn({
       ...data,
-      ...computed,
-      holdTimeId: buildHoldTimeId(data.batchNumber, data.holdStage),
-      riskLevel,
-      deviationRequired: autoDev && computed.status === 'Exceeded',
-      capaRequired,
-      linkedDeviationNumber: '',
-      linkedCapaNumber: '',
-      reviewStatus: 'Draft' as const,
-      isLocked: false,
-      createdByName: actor.name,
-      updatedByName: actor.name,
-    };
-
-    const created = await createRecord(
-      HOLD_TIME_MONITORING_COLLECTION,
-      payload as Omit<HoldTimeMonitoringRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
-    );
-    let result = normalizeHoldTimeRecord(created as unknown as Record<string, unknown>);
-
-    const devNo = await maybeCreateDeviation(result, actor, autoDev);
-    if (devNo) {
-      const updated = await updateRecord(HOLD_TIME_MONITORING_COLLECTION, result.id, {
-        linkedDeviationNumber: devNo,
-        deviationRequired: true,
-      }, actorCtx(actor));
-      if (updated) result = normalizeHoldTimeRecord(updated as unknown as Record<string, unknown>);
-      await logHoldTimeAudit('deviation auto-created', result.id, actor, null, devNo, result.holdTimeId);
-    }
-
-    if (computed.status !== 'Complies') {
-      await maybeCreateAlertAndNotification(result, actor);
-      if (capaRequired) await logHoldTimeAudit('CAPA suggested', result.id, actor, null, { exceededCount }, result.holdTimeId);
-    }
-
-    await logHoldTimeAudit('create hold time record', result.id, actor, null, result, result.holdTimeId);
-    await logHoldTimeAudit('status calculation', result.id, actor, null, computed.status, result.holdTimeId);
-    await logHoldTimeAudit('risk calculation', result.id, actor, null, riskLevel, result.holdTimeId);
-    return { result, error: null };
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
+      changeReason: data.changeReason,
+    });
+    return { result: normalizeHoldTimeRecord(result.data), error: null };
   } catch (e) {
     console.error('createHoldTimeRecord failed', e);
-    return { result: null, error: 'Failed to create hold time record.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to create hold time record.') };
   }
 }
 
 export async function updateHoldTimeRecord(
   id: string,
   data: Partial<HoldTimeMonitoringFormData>,
-  actor: HoldTimeActor,
+  _actor: HoldTimeActor,
   existing: HoldTimeMonitoringRecord,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean },
 ): Promise<{ result: HoldTimeMonitoringRecord | null; error: string | null }> {
-  if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Approved hold time record is locked. QA override required.' };
-  }
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    const merged = { ...existing, ...data };
-    const computed = buildHoldTimeComputedFields(merged);
-    const priorExceeded = await countExceededHoldTimes(merged.batchNumber);
-    const isSameRecordExceeded = merged.status === 'Exceeded';
-    const otherExceeded = existing.status === 'Exceeded' && isSameRecordExceeded
-      ? priorExceeded
-      : priorExceeded - (existing.status === 'Exceeded' ? 1 : 0);
-    const exceededCount = Math.max(0, otherExceeded) + (computed.status === 'Exceeded' ? 1 : 0);
-    const riskLevel = evaluateHoldTimeRisk({ ...merged, ...computed }, exceededCount);
-    const updates = {
+    const changeReason = data.changeReason || existing.changeReason || '';
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) {
+      return { result: null, error: 'Approved hold time record is locked. QA override required.' };
+    }
+    if (qaOverride && options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'updateAdminHoldTimeRecord',
+    );
+    const result = await fn({
+      ...existing,
       ...data,
-      ...computed,
-      riskLevel,
-      capaRequired: exceededCount >= 3,
-      updatedByName: actor.name,
-    };
-    const updated = await updateRecord(HOLD_TIME_MONITORING_COLLECTION, id, updates as Partial<HoldTimeMonitoringRecord>, actorCtx(actor));
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeHoldTimeRecord(updated as unknown as Record<string, unknown>);
-    await logHoldTimeAudit(qaOverride ? 'QA override' : 'edit hold time record', id, actor, existing, result, result.holdTimeId);
-    await logHoldTimeAudit('status change', id, actor, existing.status, computed.status, result.holdTimeId);
-    return { result, error: null };
+      id,
+      changeReason,
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
+    });
+    return { result: normalizeHoldTimeRecord(result.data), error: null };
   } catch (e) {
     console.error('updateHoldTimeRecord failed', e);
-    return { result: null, error: 'Failed to update hold time record.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to update hold time record.') };
   }
 }
 
-export async function reviewHoldTimeRecord(id: string, actor: HoldTimeActor, existing: HoldTimeMonitoringRecord) {
-  const updated = await updateRecord(HOLD_TIME_MONITORING_COLLECTION, id, {
-    reviewStatus: 'Under Review',
-    reviewDate: new Date().toISOString().split('T')[0],
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeHoldTimeRecord(updated as unknown as Record<string, unknown>);
-  await logHoldTimeAudit('review', id, actor, existing.reviewStatus, 'Under Review', result.holdTimeId);
-  return { result, error: null };
+export async function reviewHoldTimeRecord(
+  id: string,
+  _actor: HoldTimeActor,
+  changeReason = 'Submitted for QA review',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'reviewAdminHoldTimeRecord',
+    );
+    const result = await fn({ id, changeReason });
+    return { result: normalizeHoldTimeRecord(result.data), error: null };
+  } catch (e) {
+    console.error('reviewHoldTimeRecord failed', e);
+    return { result: null, error: cfErrorMessage(e, 'Failed to submit review.') };
+  }
 }
 
-export async function approveHoldTimeRecord(id: string, actor: HoldTimeActor, existing: HoldTimeMonitoringRecord) {
-  const updated = await updateRecord(HOLD_TIME_MONITORING_COLLECTION, id, {
-    reviewStatus: 'Approved',
-    approvedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    isLocked: true,
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeHoldTimeRecord(updated as unknown as Record<string, unknown>);
-  await logHoldTimeAudit('approval', id, actor, existing.reviewStatus, 'Approved', result.holdTimeId);
-  return { result, error: null };
+export async function approveHoldTimeRecord(
+  id: string,
+  _actor: HoldTimeActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'approveAdminHoldTimeRecord',
+    );
+    const result = await fn({ id, changeReason, esignConfirmed: true });
+    return { result: normalizeHoldTimeRecord(result.data), error: null };
+  } catch (e) {
+    console.error('approveHoldTimeRecord failed', e);
+    return { result: null, error: cfErrorMessage(e, 'Failed to approve hold time record.') };
+  }
+}
+
+export async function softDeleteHoldTimeRecord(
+  id: string,
+  _actor: HoldTimeActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+): Promise<{ error: string | null }> {
+  if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminHoldTimeRecord');
+    await fn({ id, changeReason, esignConfirmed: true });
+    return { error: null };
+  } catch (e) {
+    console.error('softDeleteHoldTimeRecord failed', e);
+    return { error: cfErrorMessage(e, 'Failed to soft-delete hold time record.') };
+  }
 }
 
 export async function bulkCreateHoldTimeRecords(
   rows: HoldTimeMonitoringFormData[],
-  actor: HoldTimeActor,
+  _actor: HoldTimeActor,
+  changeReason = 'Bulk hold time entry',
 ): Promise<{ created: number; errors: string[] }> {
-  let created = 0;
-  const errors: string[] = [];
-  for (const row of rows) {
-    const { error } = await createHoldTimeRecord(row, actor);
-    if (error) errors.push(`${row.holdStage}: ${error}`);
-    else created += 1;
+  if (!isFirebaseConfigured()) return { created: 0, errors: ['Firebase is not configured.'] };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { created: 0, errors: ['Change reason (min 5 characters) is required.'] };
+    }
+    const fn = httpsCallable<Record<string, unknown>, { created: number; errors: string[] }>(
+      getFirebaseFunctions(),
+      'bulkCreateAdminHoldTimeRecords',
+    );
+    const result = await fn({ rows, changeReason });
+    return result.data;
+  } catch (e) {
+    console.error('bulkCreateHoldTimeRecords failed', e);
+    return { created: 0, errors: [cfErrorMessage(e, 'Bulk create failed.')] };
   }
-  if (created) await logHoldTimeAudit('bulk hold time entry', 'bulk', actor, null, { count: created });
-  return { created, errors };
 }
 
 export async function fetchHoldTimeAuditTrail(recordId: string) {
   if (!isFirebaseConfigured()) return [];
   try {
-    const snap = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('documentId', '==', recordId), limit(50)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap = await getDocs(query(
+      collection(getFirebaseFirestore(), 'audit_trail'),
+      where('documentId', '==', recordId),
+      limit(50),
+    ));
+    if (!snap.empty) return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap2 = await getDocs(query(
+      collection(getFirebaseFirestore(), 'audit_trail'),
+      where('recordId', '==', recordId),
+      limit(50),
+    ));
+    return snap2.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch {
     return [];
   }
 }
 
 export async function logHoldTimeExport(actor: HoldTimeActor, count: number) {
-  await logHoldTimeAudit('export', 'export', actor, null, { count });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminHoldTimeExport');
+    await fn({ count, format: 'CSV', changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logHoldTimeExport CF failed (non-blocking)', e);
+  }
 }
 
 export function holdTimeStageTrendData(records: HoldTimeMonitoringRecord[], stage: string) {
@@ -457,4 +452,17 @@ export function holdTimeStageTrendData(records: HoldTimeMonitoringRecord[], stag
     }));
 }
 
+export function refreshLiveHoldMetrics(record: HoldTimeMonitoringRecord, now = new Date()): HoldTimeMonitoringRecord {
+  if (record.endDateTime?.trim()) return record;
+  const computed = buildHoldTimeComputedFields(record, now);
+  const riskLevel = evaluateHoldTimeRisk(
+    { ...record, ...computed },
+    record.status === 'Exceeded' || record.status === 'Expired' ? 1 : 0,
+  );
+  return { ...record, ...computed, riskLevel };
+}
+
 export const BULK_HOLD_STAGE_OPTIONS = BULK_HOLD_STAGES;
+
+// Silence unused import warning for module name in tree-shaken builds
+void HOLD_TIME_MODULE_NAME;

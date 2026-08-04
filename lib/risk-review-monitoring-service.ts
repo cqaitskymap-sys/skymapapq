@@ -13,6 +13,7 @@ import { listDeviations } from '@/lib/deviation-service';
 import { listOosRecords } from '@/lib/oos-service';
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import { updateRecord } from '@/lib/firestore';
+import { polishRecommendationText } from '@/lib/ai/client';
 import {
   RISK_MONITORING_COLLECTION,
   RISK_REVIEW_MODULE,
@@ -121,14 +122,14 @@ async function countLinkedQualityEvents(risk: RiskAssessmentRecord) {
   return { deviations, oos, complaints, capas };
 }
 
-function buildReviewPayload(
+async function buildReviewPayload(
   risk: RiskAssessmentRecord,
   form: RiskReviewFormInput,
   ctx: ReturnType<typeof buildReviewMonitoringContext>,
   actor: RiskReviewActor,
   status: string,
   existing?: RiskReviewRecord | null,
-): Omit<RiskReviewRecord, 'id'> {
+): Promise<Omit<RiskReviewRecord, 'id'>> {
   const ts = nowIso();
   const residualRpn = ctx.residualRpn;
   const trend = computeRiskTrend(ctx.initialRpn, ctx.currentRpn, residualRpn, ctx.residualRiskLevel);
@@ -142,6 +143,16 @@ function buildReviewPayload(
     furtherMitigationRequired: form.further_mitigation_required,
     repeatEventsObserved: form.repeat_events_observed,
   });
+  const recommendation = await polishRecommendationText(
+    form.recommendation || recs.join(' '),
+    {
+      module: 'Risk Review Monitoring',
+      riskNumber: risk.riskNumber,
+      residualRiskLevel: ctx.residualRiskLevel,
+      riskTrend: trend,
+      effectiveness: form.effectiveness_evaluation,
+    },
+  );
 
   return {
     review_id: existing?.review_id || buildReviewId(risk.riskNumber),
@@ -169,7 +180,7 @@ function buildReviewPayload(
     risk_reduction_achieved: form.risk_reduction_achieved,
     further_mitigation_required: form.further_mitigation_required,
     review_conclusion: form.review_conclusion,
-    recommendation: form.recommendation || recs.join(' '),
+    recommendation,
     next_review_date: form.next_review_date || calculateNextReviewDate(form.review_date, form.review_frequency),
     qa_comments: form.qa_comments,
     status,
@@ -343,7 +354,7 @@ export async function saveRiskReviewDraft(
   const reviews = await getRiskReviews(riskAssessmentId);
   const ctx = buildReviewMonitoringContext(risk, linkedCounts, reviews);
   const existing = reviews.find((r) => r.status === 'Draft') || null;
-  const payload = buildReviewPayload(risk, form, ctx, actor, 'Draft', existing);
+  const payload = await buildReviewPayload(risk, form, ctx, actor, 'Draft', existing);
 
   if (existing?.id) {
     await updateDoc(doc(getFirebaseFirestore(), RISK_REVIEWS_COLLECTION, existing.id), payload);
@@ -373,7 +384,7 @@ export async function submitRiskReviewForQa(
   const reviews = await getRiskReviews(riskAssessmentId);
   const ctx = buildReviewMonitoringContext(risk, linkedCounts, reviews);
   const existing = reviews.find((r) => ['Draft', 'Under Review'].includes(r.status)) || null;
-  const payload = buildReviewPayload(risk, form, ctx, actor, 'QA Review', existing);
+  const payload = await buildReviewPayload(risk, form, ctx, actor, 'QA Review', existing);
 
   let saved: RiskReviewRecord;
   if (existing?.id) {
@@ -424,7 +435,7 @@ export async function approveRiskReview(
   const existing = reviews.find((r) => r.id === reviewDocId);
   if (!existing) throw new Error('Review record not found');
 
-  const payload = buildReviewPayload(risk, form, ctx, actor, 'Approved', existing);
+  const payload = await buildReviewPayload(risk, form, ctx, actor, 'Approved', existing);
   await updateDoc(doc(getFirebaseFirestore(), RISK_REVIEWS_COLLECTION, reviewDocId), payload);
 
   await audit(actor, 'review approved', riskAssessmentId, form.review_conclusion);

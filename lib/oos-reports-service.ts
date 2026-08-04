@@ -21,6 +21,7 @@ import {
   type OosReportRecord,
 } from '@/lib/oos-types';
 import { listOosRecords } from '@/lib/oos-service';
+import { polishQmsReportTexts } from '@/lib/ai/client';
 
 export type { OosReportActor, OosReportFilterInput, OosReportFormData };
 
@@ -146,9 +147,22 @@ export async function generateOosReport(
     root_cause_category: form.root_cause_category,
   };
   const analytics = await previewOosReport(filters);
+  const polished = await polishQmsReportTexts({
+    module: 'OOS Reports',
+    summary: analytics.summary,
+    recommendations: analytics.capa_summary,
+    management_summary: analytics.investigation_summary,
+    context: { reportType: form.report_type, metrics: analytics.metrics, filters },
+  });
+  const enrichedAnalytics = {
+    ...analytics,
+    summary: polished.summary,
+    capa_summary: polished.recommendations || analytics.capa_summary,
+    investigation_summary: polished.management_summary || analytics.investigation_summary,
+  };
   const year = new Date(form.review_period_to).getFullYear();
   const reportNumber = generateOosReportNumber(year, existingCount);
-  const payload = mapOosReportToRecord(form, analytics, actor, reportNumber);
+  const payload = mapOosReportToRecord(form, enrichedAnalytics, actor, reportNumber);
   try {
     const ref = await addDoc(collection(getFirebaseFirestore(), OOS_COLLECTIONS.reports), payload);
     const record = { id: ref.id, ...payload };

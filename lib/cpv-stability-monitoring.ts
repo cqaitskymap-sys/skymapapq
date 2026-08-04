@@ -11,7 +11,7 @@ export const STABILITY_STORAGE_MODULE = 'cpv/stability-monitoring';
 
 export const STABILITY_STUDY_TYPES = [
   'Long Term', 'Accelerated', 'Intermediate', 'Ongoing',
-  'Validation Batch', 'PV Batch', 'Commercial Batch',
+  'Validation Batch', 'PV Batch', 'Commercial Batch', 'Photostability', 'In-use Stability',
 ] as const;
 
 export const STABILITY_STORAGE_CONDITIONS = [
@@ -19,8 +19,8 @@ export const STABILITY_STORAGE_CONDITIONS = [
 ] as const;
 
 export const STABILITY_PULLING_INTERVALS = [
-  'Initial', '1 Month', '3 Month', '6 Month', '9 Month', '12 Month',
-  '18 Month', '24 Month', '36 Month', '48 Month',
+  'Initial', '1 Month', '2 Month', '3 Month', '6 Month', '9 Month', '12 Month',
+  '18 Month', '24 Month', '36 Month', '48 Month', '60 Month',
 ] as const;
 
 export const STABILITY_SCHEDULE_STATUSES = [
@@ -38,13 +38,15 @@ export const DEFAULT_STABILITY_PARAMETERS = [
 ] as const;
 
 export const INTERVALS_BY_STUDY_TYPE: Record<string, string[]> = {
-  'Long Term': ['Initial', '3 Month', '6 Month', '9 Month', '12 Month', '18 Month', '24 Month', '36 Month'],
+  'Long Term': ['Initial', '3 Month', '6 Month', '9 Month', '12 Month', '18 Month', '24 Month', '36 Month', '48 Month', '60 Month'],
   'Accelerated': ['Initial', '1 Month', '3 Month', '6 Month'],
   'Intermediate': ['Initial', '1 Month', '3 Month', '6 Month', '9 Month', '12 Month'],
   'Ongoing': ['Initial', '3 Month', '6 Month', '12 Month'],
   'Validation Batch': ['Initial', '3 Month', '6 Month'],
   'PV Batch': ['Initial', '3 Month', '6 Month', '12 Month'],
-  'Commercial Batch': ['Initial', '3 Month', '6 Month', '9 Month', '12 Month', '18 Month', '24 Month', '36 Month', '48 Month'],
+  'Commercial Batch': ['Initial', '3 Month', '6 Month', '9 Month', '12 Month', '18 Month', '24 Month', '36 Month', '48 Month', '60 Month'],
+  'Photostability': ['Initial', '1 Month', '2 Month', '3 Month', '6 Month'],
+  'In-use Stability': ['Initial', '1 Month', '2 Month', '3 Month', '6 Month'],
 };
 
 export const DEFAULT_STABILITY_LIMITS: Record<string, {
@@ -68,11 +70,21 @@ export const DEFAULT_STABILITY_LIMITS: Record<string, {
 };
 
 const requiredText = z.string().trim().min(1, 'Required');
+const optionalNum = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v),
+  z.coerce.number().optional(),
+);
 
 export const stabilityStudyFormSchema = z.object({
   cpvProductId: requiredText,
   productName: requiredText,
   productCode: requiredText,
+  productVersion: z.string().trim().default(''),
+  strength: z.string().trim().default(''),
+  dosageForm: z.string().trim().default(''),
+  packSize: z.string().trim().default(''),
+  packagingType: z.string().trim().default(''),
+  shelfLifeMonths: optionalNum,
   batchNumber: requiredText,
   manufacturingDate: requiredText,
   expiryDate: requiredText,
@@ -80,7 +92,14 @@ export const stabilityStudyFormSchema = z.object({
   storageCondition: z.enum(STABILITY_STORAGE_CONDITIONS),
   studyStartDate: requiredText,
   studyEndDate: z.string().trim().default(''),
+  protocolVersion: z.string().trim().default(''),
+  specificationVersion: z.string().trim().default(''),
+  site: z.string().trim().default(''),
+  department: z.string().trim().default(''),
+  chamberId: z.string().trim().default(''),
+  chamberName: z.string().trim().default(''),
   remarks: z.string().trim().default(''),
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => {
   const start = new Date(d.studyStartDate);
   const mfg = new Date(d.manufacturingDate);
@@ -107,19 +126,22 @@ export const stabilityResultFormSchema = z.object({
   parameterCode: requiredText,
   parameterName: requiredText,
   observedResult: z.union([z.coerce.number(), z.string().trim().min(1, 'Required')]),
-  targetValue: z.coerce.number().optional(),
+  targetValue: optionalNum,
   lowerLimit: z.coerce.number(),
   upperLimit: z.coerce.number(),
-  alertLimitLow: z.coerce.number().optional(),
-  alertLimitHigh: z.coerce.number().optional(),
-  actionLimitLow: z.coerce.number().optional(),
-  actionLimitHigh: z.coerce.number().optional(),
+  alertLimitLow: optionalNum,
+  alertLimitHigh: optionalNum,
+  actionLimitLow: optionalNum,
+  actionLimitHigh: optionalNum,
   unit: z.string().trim().default(''),
   resultType: z.enum(RESULT_TYPES).default('Numeric'),
   analyst: requiredText,
   reviewedBy: z.string().trim().default(''),
   reviewDate: z.string().trim().default(''),
+  chamberId: z.string().trim().default(''),
+  chamberName: z.string().trim().default(''),
   remarks: z.string().trim().default(''),
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => d.lowerLimit < d.upperLimit, {
   message: 'Upper limit must be greater than lower limit',
   path: ['upperLimit'],
@@ -264,11 +286,44 @@ export function evaluateStabilityStatus(
     return 'Complies';
   }
   if (num < lower || num > upper) return 'OOS';
-  if (actionLow != null && !Number.isNaN(actionLow) && num < actionLow) return 'Action';
-  if (actionHigh != null && !Number.isNaN(actionHigh) && num > actionHigh) return 'Action';
-  if (alertLow != null && !Number.isNaN(alertLow) && num < alertLow) return 'OOT';
-  if (alertHigh != null && !Number.isNaN(alertHigh) && num > alertHigh) return 'OOT';
+  if (Number.isFinite(actionLow) && num < Number(actionLow)) return 'Action';
+  if (Number.isFinite(actionHigh) && num > Number(actionHigh)) return 'Action';
+  if (Number.isFinite(alertLow) && num < Number(alertLow)) return 'OOT';
+  if (Number.isFinite(alertHigh) && num > Number(alertHigh)) return 'OOT';
+  if (!Number.isFinite(alertLow) && !Number.isFinite(alertHigh)) {
+    const range = upper - lower;
+    if (range > 0) {
+      const innerLow = lower + range * 0.1;
+      const innerHigh = upper - range * 0.1;
+      if (num < innerLow || num > innerHigh) return 'OOT';
+    }
+  }
   return 'Complies';
+}
+
+export function predictShelfLifeMonths(
+  results: StabilityResultRecord[],
+  parameterName: string,
+  lowerLimit: number,
+): number | null {
+  const points = results
+    .filter((r) => r.parameterName === parameterName && Number.isFinite(Number(r.observedResult)))
+    .map((r) => ({ x: intervalToMonths(r.pullingInterval), y: Number(r.observedResult) }))
+    .filter((point) => Number.isFinite(point.x))
+    .sort((a, b) => a.x - b.x);
+  if (points.length < 2) return null;
+  const n = points.length;
+  const sumX = points.reduce((sum, point) => sum + point.x, 0);
+  const sumY = points.reduce((sum, point) => sum + point.y, 0);
+  const sumXY = points.reduce((sum, point) => sum + point.x * point.y, 0);
+  const sumXX = points.reduce((sum, point) => sum + point.x * point.x, 0);
+  const denominator = n * sumXX - sumX * sumX;
+  if (denominator === 0) return null;
+  const slope = (n * sumXY - sumX * sumY) / denominator;
+  if (!Number.isFinite(slope) || slope >= 0) return null;
+  const intercept = (sumY - slope * sumX) / n;
+  const month = (lowerLimit - intercept) / slope;
+  return Number.isFinite(month) && month >= 0 ? Math.round(month) : null;
 }
 
 export function computeScheduleStatus(

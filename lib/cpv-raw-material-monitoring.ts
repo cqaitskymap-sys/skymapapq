@@ -13,7 +13,7 @@ export const RM_MATERIAL_TYPES = [
 
 export const RM_QC_STATUSES = QC_STATUSES;
 export const RM_COMPLIANCE_STATUSES = [
-  'Complies', 'Does Not Comply', 'Alert', 'Action', 'OOS',
+  'Complies', 'Does Not Comply', 'Alert', 'Action', 'OOS', 'OOT',
 ] as const;
 
 export const DEFAULT_RM_MATERIALS = [
@@ -23,6 +23,21 @@ export const DEFAULT_RM_MATERIALS = [
 ] as const;
 
 const requiredText = z.string().trim().min(1, 'Required');
+const optionalNum = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v),
+  z.coerce.number().optional(),
+);
+
+function parseComparableDate(value: string): Date | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^\d{4}-\d{2}$/.test(trimmed)) {
+    const [y, m] = trimmed.split('-').map(Number);
+    return new Date(y, m - 1, 1);
+  }
+  const dt = new Date(trimmed);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
 
 export const rawMaterialMonitoringFormSchema = z.object({
   cpvProductId: requiredText,
@@ -33,39 +48,60 @@ export const rawMaterialMonitoringFormSchema = z.object({
   materialName: requiredText,
   materialType: z.enum(RM_MATERIAL_TYPES),
   materialGrade: z.string().trim().default(''),
+  materialCategory: z.string().trim().default(''),
   manufacturerName: requiredText,
   supplierName: requiredText,
   vendorId: z.string().trim().default(''),
   vendorName: requiredText,
   vendorStatus: z.string().trim().default('Active'),
   avlStatus: z.string().trim().default('Approved'),
+  vendorCode: z.string().trim().default(''),
+  pharmacopoeiaStandard: z.string().trim().default(''),
   grnNumber: z.string().trim().default(''),
+  purchaseOrderNumber: z.string().trim().default(''),
   arNumber: requiredText,
   coaNumber: z.string().trim().default(''),
   materialLotNumber: z.string().trim().default(''),
+  supplierBatchNumber: z.string().trim().default(''),
   mfgDate: requiredText,
   expDate: requiredText,
   retestDate: z.string().trim().default(''),
+  shelfLifeMonths: z.string().trim().default(''),
   receivedQuantity: z.coerce.number().min(0).default(0),
+  acceptedQuantity: z.coerce.number().min(0).default(0),
+  rejectedQuantity: z.coerce.number().min(0).default(0),
+  quarantineQuantity: z.coerce.number().min(0).default(0),
   issuedQuantity: z.coerce.number().min(0).default(0),
   usedQuantity: z.coerce.number().min(0, 'Required'),
   unit: requiredText,
   storageCondition: z.string().trim().default(''),
+  warehouseLocation: z.string().trim().default(''),
+  storageArea: z.string().trim().default(''),
+  site: z.string().trim().default(''),
+  department: z.string().trim().default('Warehouse'),
+  shift: z.string().trim().default(''),
   qcStatus: z.enum(RM_QC_STATUSES),
+  qaStatus: z.string().trim().default(''),
+  releaseStatus: z.string().trim().default(''),
+  samplingStatus: z.string().trim().default(''),
   coaAvailable: z.enum(COA_AVAILABLE_OPTIONS),
   specificationNumber: z.string().trim().default(''),
+  specificationVersion: z.string().trim().default(''),
   stpNumber: z.string().trim().default(''),
   testParameter: z.string().trim().default(''),
   observedResult: z.union([z.coerce.number(), z.string()]).optional(),
-  lowerLimit: z.coerce.number().optional(),
-  upperLimit: z.coerce.number().optional(),
+  lowerLimit: optionalNum,
+  upperLimit: optionalNum,
   testUnit: z.string().trim().optional().default(''),
   testResultSummary: z.string().trim().default(''),
   remarks: z.string().trim().default(''),
+  effectiveDate: z.string().trim().default(''),
+  version: z.string().trim().default('1.0'),
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => {
-  const mfg = new Date(d.mfgDate);
-  const exp = new Date(d.expDate);
-  return !Number.isNaN(mfg.getTime()) && !Number.isNaN(exp.getTime()) && exp > mfg;
+  const mfg = parseComparableDate(d.mfgDate);
+  const exp = parseComparableDate(d.expDate);
+  return !!mfg && !!exp && exp > mfg;
 }, { message: 'EXP date must be after MFG date', path: ['expDate'] }).refine((d) => d.usedQuantity <= d.issuedQuantity || d.issuedQuantity === 0, {
   message: 'Used quantity cannot exceed standard quantity',
   path: ['usedQuantity'],
@@ -101,6 +137,7 @@ export interface RawMaterialMonitoringRecord extends RawMaterialMonitoringFormDa
   isLocked: boolean;
   attachments: RawMaterialAttachment[];
   warehouseReceiptId: string;
+  changeReason: string;
   createdAt: string;
   updatedAt: string;
   createdBy: string;
@@ -125,7 +162,12 @@ export interface RawMaterialSummary {
 
 function parseDate(d: string): Date | null {
   if (!d) return null;
-  const dt = new Date(d);
+  const trimmed = d.trim();
+  if (/^\d{4}-\d{2}$/.test(trimmed)) {
+    const [y, m] = trimmed.split('-').map(Number);
+    return new Date(y, m - 1, 1);
+  }
+  const dt = new Date(trimmed);
   return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
@@ -156,9 +198,11 @@ export function evaluateTestResultStatus(
   if (!Number.isFinite(num)) return 'Does Not Comply';
   if (num < lower || num > upper) return 'OOS';
   const range = upper - lower;
-  const alertLow = lower + range * 0.1;
-  const alertHigh = upper - range * 0.1;
-  if (num < alertLow || num > alertHigh) return 'Alert';
+  if (range > 0) {
+    const alertLow = lower + range * 0.1;
+    const alertHigh = upper - range * 0.1;
+    if (num < alertLow || num > alertHigh) return 'OOT';
+  }
   return 'Complies';
 }
 
@@ -192,7 +236,7 @@ export function evaluateRawMaterialCompliance(input: {
     return 'Does Not Comply';
   }
   if (testStatus === 'OOS') return 'OOS';
-  if (testStatus === 'Alert') return 'Alert';
+  if (testStatus === 'OOT' || testStatus === 'Alert') return 'OOT';
   if (testStatus === 'Action') return 'Action';
   if (testStatus === 'Does Not Comply') return 'Does Not Comply';
   return 'Complies';
@@ -210,7 +254,7 @@ export function evaluateRawMaterialRisk(
   if (record.issuedQuantity > 0 && record.usedQuantity > record.issuedQuantity) return 'Medium';
   if (isRetestOverdue(record.retestDate || '')) return 'High';
   if (record.complianceStatus === 'OOS') return 'High';
-  if (record.complianceStatus === 'Alert' || record.complianceStatus === 'Action') return 'Medium';
+  if (['OOT', 'Alert', 'Action'].includes(record.complianceStatus)) return 'Medium';
   return 'Low';
 }
 

@@ -225,6 +225,81 @@ function detectWesternElectricRules(
     }
   }
 
+  // Nelson Rule 5 — 6 consecutive increasing or decreasing
+  for (let i = 5; i < values.length; i++) {
+    const window = values.slice(i - 5, i + 1);
+    let inc = true;
+    let dec = true;
+    for (let j = 1; j < window.length; j++) {
+      if (!(window[j] > window[j - 1])) inc = false;
+      if (!(window[j] < window[j - 1])) dec = false;
+    }
+    if (inc || dec) {
+      violations.push({
+        rule: 5,
+        ruleName: 'Nelson 5 — Trend of 6',
+        description: 'Six consecutive points steadily increasing or decreasing',
+        pointIndex: i + 1,
+        batch: batches[i] || `Point ${i + 1}`,
+        chart,
+      });
+    }
+  }
+
+  // Nelson Rule 6 — 14 consecutive alternating up/down
+  for (let i = 13; i < values.length; i++) {
+    const window = values.slice(i - 13, i + 1);
+    let alt = true;
+    for (let j = 2; j < window.length; j++) {
+      const prevUp = window[j - 1] > window[j - 2];
+      const curUp = window[j] > window[j - 1];
+      if (prevUp === curUp) {
+        alt = false;
+        break;
+      }
+    }
+    if (alt) {
+      violations.push({
+        rule: 6,
+        ruleName: 'Nelson 6 — Alternating 14',
+        description: 'Fourteen consecutive points alternating up and down',
+        pointIndex: i + 1,
+        batch: batches[i] || `Point ${i + 1}`,
+        chart,
+      });
+    }
+  }
+
+  // Nelson Rule 7 — 15 consecutive within 1σ of center
+  for (let i = 14; i < values.length; i++) {
+    const window = values.slice(i - 14, i + 1);
+    if (window.every((v) => v > zone1Lower && v < zone1Upper)) {
+      violations.push({
+        rule: 7,
+        ruleName: 'Nelson 7 — Stratification',
+        description: 'Fifteen consecutive points within 1σ of center line',
+        pointIndex: i + 1,
+        batch: batches[i] || `Point ${i + 1}`,
+        chart,
+      });
+    }
+  }
+
+  // Nelson Rule 8 — 8 consecutive beyond 1σ (either side)
+  for (let i = 7; i < values.length; i++) {
+    const window = values.slice(i - 7, i + 1);
+    if (window.every((v) => v > zone1Upper || v < zone1Lower)) {
+      violations.push({
+        rule: 8,
+        ruleName: 'Nelson 8 — Mixture',
+        description: 'Eight consecutive points beyond 1σ from center (either side)',
+        pointIndex: i + 1,
+        batch: batches[i] || `Point ${i + 1}`,
+        chart,
+      });
+    }
+  }
+
   return violations;
 }
 

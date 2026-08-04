@@ -178,16 +178,9 @@ export const REPORT_MODULE_CATALOG: ReportModuleCategory[] = [
   },
   {
     id: 'compliance',
-    label: 'Compliance & Training',
-    description: 'Training, audit, document control, and regulatory inspection reports.',
+    label: 'Compliance',
+    description: 'Audit, document control, and regulatory inspection reports.',
     modules: [
-      {
-        id: 'training',
-        label: 'Training Reports',
-        description: 'Training compliance, certificate expiry, and GMP training matrix.',
-        href: '/training/reports',
-        reportTypes: ['Training Compliance', 'Certificate Expiry', 'Annual GMP Training'],
-      },
       {
         id: 'audit',
         label: 'Audit Reports',
@@ -224,12 +217,6 @@ export const REGULATORY_REPORT_TYPES = [
     description: 'Continued process verification annual review and trend summary.',
     href: '/cpv/annual-review',
     regulation: 'ICH Q8 / EU GMP Annex 15',
-  },
-  {
-    title: 'Training Compliance Report',
-    description: 'GMP training matrix coverage for regulatory inspection readiness.',
-    href: '/training/reports',
-    regulation: '21 CFR 211.25',
   },
   {
     title: 'Deviation & CAPA Trend Report',

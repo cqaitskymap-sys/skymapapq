@@ -14,6 +14,7 @@ import {
 import { fetchRiskAssessmentRecords } from '@/lib/cpv-risk-assessment-service';
 import { createRecord, updateRecord } from '@/lib/firestore';
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
+import { polishRecommendationText } from '@/lib/ai/client';
 import { normalizeRole } from '@/lib/permissions';
 import {
   RISK_CREATE_MODULE,
@@ -281,7 +282,7 @@ function mapLinkedFields(source: string, ref: string) {
   return linked;
 }
 
-function buildRiskPayload(
+async function buildRiskPayload(
   input: RiskCreateInput,
   actor: RiskCreateActor,
   riskNumber: string,
@@ -303,6 +304,14 @@ function buildRiskPayload(
     residual_detection: input.residual_detection,
   });
   const linked = mapLinkedFields(input.risk_source, input.source_reference_number);
+  const aiRecommendation = await polishRecommendationText(calc.aiRecommendation, {
+    module: 'Risk Management Create',
+    riskTitle: input.risk_title,
+    riskCategory: input.risk_category,
+    riskLevel: calc.riskLevel,
+    rpnScore: calc.rpnScore,
+    riskDescription: input.risk_description,
+  });
 
   return {
     riskAssessmentId: buildRiskAssessmentId(input.product_code || 'PRD'),
@@ -335,6 +344,7 @@ function buildRiskPayload(
     residualDetection: input.residual_detection,
     residualRpn: residual.residualRpn,
     residualRiskLevel: residual.residualRiskLevel,
+    aiRecommendation,
     riskStatus: status === 'Draft' ? 'Draft' as const : 'Under Review' as const,
     workflowStatus: status === 'Draft' ? 'Draft' as const : 'Review' as const,
     effectivenessStatus: 'Pending' as const,
@@ -362,7 +372,7 @@ function buildRiskPayload(
 
 async function syncRiskRegister(
   recordId: string,
-  payload: ReturnType<typeof buildRiskPayload>,
+  payload: Awaited<ReturnType<typeof buildRiskPayload>>,
   actor: RiskCreateActor,
 ) {
   if (!isFirebaseConfigured()) return;
@@ -407,7 +417,7 @@ async function syncRiskRegister(
 
 async function syncRiskControls(
   recordId: string,
-  payload: ReturnType<typeof buildRiskPayload>,
+  payload: Awaited<ReturnType<typeof buildRiskPayload>>,
   actor: RiskCreateActor,
 ) {
   if (!isFirebaseConfigured() || !payload.controls?.length) return;
@@ -439,7 +449,7 @@ async function syncRiskControls(
 
 async function syncRiskAssessmentsAlias(
   recordId: string,
-  payload: ReturnType<typeof buildRiskPayload>,
+  payload: Awaited<ReturnType<typeof buildRiskPayload>>,
   input: RiskCreateInput,
   actor: RiskCreateActor,
 ) {
@@ -493,7 +503,7 @@ async function syncRiskAssessmentsAlias(
 
 async function syncRiskCreateSideEffects(
   recordId: string,
-  payload: ReturnType<typeof buildRiskPayload>,
+  payload: Awaited<ReturnType<typeof buildRiskPayload>>,
   input: RiskCreateInput,
   actor: RiskCreateActor,
 ) {
@@ -545,7 +555,7 @@ export async function saveRiskAssessmentDraft(
   }
   if (!riskNumber) riskNumber = generateRiskNumber(existingRecords.length);
 
-  const payload = buildRiskPayload(input, actor, riskNumber, 'Draft');
+  const payload = await buildRiskPayload(input, actor, riskNumber, 'Draft');
 
   if (draftId) {
     await updateRecord(RISK_ASSESSMENT_COLLECTION, draftId, payload, {
@@ -602,7 +612,7 @@ export async function submitRiskAssessmentCreate(
   }
   if (!riskNumber) riskNumber = generateRiskNumber(existingRecords.length);
 
-  const payload = buildRiskPayload(input, actor, riskNumber, 'Under Review');
+  const payload = await buildRiskPayload(input, actor, riskNumber, 'Under Review');
 
   let recordId = draftId || '';
   if (draftId) {

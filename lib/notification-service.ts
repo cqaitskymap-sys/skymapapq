@@ -1,10 +1,11 @@
 import {
   collection, doc, addDoc, updateDoc, query, where, orderBy, limit,
-  arrayUnion, onSnapshot, getDoc, getDocs, type Unsubscribe,
+  arrayUnion, onSnapshot, getDoc, getDocs, writeBatch, type Unsubscribe,
 } from 'firebase/firestore';
 import { createAuditLog } from '@/lib/audit-trail';
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import { ADMIN_COLLECTIONS } from '@/lib/admin/constants';
+import { canDeleteRecords } from '@/lib/permissions';
 
 export const NOTIFICATIONS_COLLECTION = 'notifications';
 
@@ -73,9 +74,12 @@ function buildNotificationId() {
   return `NTF-${Date.now().toString(36).toUpperCase()}`;
 }
 
-export function applyTemplateVariables(template: string, vars: TemplateVariables): string {
+export function applyTemplateVariables(
+  template: string,
+  vars: TemplateVariables | Record<string, string | undefined | null>,
+): string {
   return template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => {
-    const val = vars[key as keyof TemplateVariables];
+    const val = (vars as Record<string, string | undefined | null>)[key];
     return val !== undefined && val !== null ? String(val) : '';
   });
 }
@@ -206,6 +210,52 @@ export async function markNotificationRead(notificationId: string): Promise<bool
   return markNotificationAsRead(notificationId);
 }
 
+/**
+ * Permanently deletes all in-app notifications (Super Admin only).
+ * Use to clear leftover test/demo alerts so the inbox reflects live workflow events only.
+ */
+export async function clearAllNotifications(
+  actor: { id: string; name: string; role?: string | null },
+): Promise<{ success: boolean; deleted: number; error?: string }> {
+  if (!isFirebaseConfigured()) {
+    return { success: false, deleted: 0, error: 'Firebase is not configured.' };
+  }
+  if (!canDeleteRecords(actor.role)) {
+    return { success: false, deleted: 0, error: 'Only Super Admin can clear all notifications.' };
+  }
+  try {
+    const db = getFirebaseFirestore();
+    let deleted = 0;
+    // Firestore batches max 500 writes; page until empty.
+    for (;;) {
+      const snap = await getDocs(query(collection(db, NOTIFICATIONS_COLLECTION), limit(400)));
+      if (snap.empty) break;
+      const batch = writeBatch(db);
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+      deleted += snap.size;
+      if (snap.size < 400) break;
+    }
+    await createAuditLog({
+      moduleName: 'Admin',
+      collectionName: NOTIFICATIONS_COLLECTION,
+      recordId: 'clear-all',
+      actionType: 'Delete',
+      actionDescription: `Cleared ${deleted} notifications`,
+      user: { id: actor.id, name: actor.name },
+      status: 'Success',
+    });
+    return { success: true, deleted };
+  } catch (error) {
+    console.error('Failed to clear notifications:', error);
+    return {
+      success: false,
+      deleted: 0,
+      error: error instanceof Error ? error.message : 'Failed to clear notifications',
+    };
+  }
+}
+
 export async function markAllNotificationsRead(
   userId: string,
   actor?: { id: string; name: string },
@@ -332,7 +382,6 @@ export function normalizeNotification(raw: Record<string, unknown>): Notificatio
 }
 
 const NOTIFICATION_MODULE_ROUTES: Record<string, { base: string; detail?: boolean }> = {
-  training: { base: '/training/assignments' },
   document: { base: '/qms/dms', detail: true },
   documents: { base: '/qms/dms', detail: true },
   dms: { base: '/qms/dms', detail: true },
@@ -566,4 +615,52 @@ export function getNotificationStats(notifications: NotificationRecord[]) {
     failed: notifications.filter((n) => n.sentStatus === 'Failed').length,
     critical: notifications.filter((n) => n.priority === 'Critical').length,
   };
+}
+
+/**
+ * Rule-driven dispatch via Admin Notification Settings Cloud Function.
+ * Prefer this over ad-hoc createNotification when module events should honor configured rules.
+ */
+export async function dispatchNotificationEvent(payload: {
+  moduleName: string;
+  eventTrigger: string;
+  recordId: string;
+  documentNumber?: string;
+  title?: string;
+  message?: string;
+  fallbackUserId?: string;
+  userName?: string;
+  employeeName?: string;
+  department?: string;
+  workflow?: string;
+  approver?: string;
+  dueDate?: string;
+  status?: string;
+  assignedTo?: string;
+  createdBy?: string;
+  productName?: string;
+  batchNumber?: string;
+  siteName?: string;
+  moduleAlias?: string;
+}): Promise<{ delivered: number; queued: number; rulesMatched?: number; error?: string }> {
+  try {
+    const { getFirebaseFunctions } = await import('@/lib/firebase');
+    const { httpsCallable } = await import('firebase/functions');
+    const fn = httpsCallable(getFirebaseFunctions(), 'dispatchAdminNotificationEvent');
+    const result = await fn(payload);
+    const data = result.data as { delivered?: number; queued?: number; rulesMatched?: number };
+    return {
+      delivered: data.delivered || 0,
+      queued: data.queued || 0,
+      rulesMatched: data.rulesMatched,
+    };
+  } catch (e) {
+    const err = e as { message?: string };
+    console.error('dispatchNotificationEvent failed', e);
+    return {
+      delivered: 0,
+      queued: 0,
+      error: err.message || 'Unable to dispatch notification event',
+    };
+  }
 }

@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, Download, Eye, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { BarChart, Bar, Cell, PieChart, Pie, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
@@ -65,11 +66,15 @@ function RiskBadge({ level }: { level: string }) {
 
 export function SpcPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const productQuery = searchParams.get('product') || '';
+  const batchQuery = searchParams.get('batch') || '';
   const { user, profile } = useAuth();
   const role = profile?.role;
   const canCreate = cpvPermissions.canCreateSpc(role);
-  const canEdit = cpvPermissions.canEditSpc(role);
+  const canEdit = cpvPermissions.canEditSpc(role) || canCreate;
   const canReview = cpvPermissions.canReviewSpc(role);
+  void canReview;
   const canImportExport = cpvPermissions.canImportExportSpc(role);
 
   const [records, setRecords] = useState<SpcRecord[]>([]);
@@ -80,8 +85,8 @@ export function SpcPage() {
   const [wizardStep, setWizardStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
 
-  const [search, setSearch] = useState('');
-  const [productFilter, setProductFilter] = useState('all');
+  const [search, setSearch] = useState(batchQuery || '');
+  const [productFilter, setProductFilter] = useState(productQuery || 'all');
   const [chartFilter, setChartFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -102,7 +107,7 @@ export function SpcPage() {
     setError(null);
     try {
       const [rows, prods] = await Promise.all([fetchSpcRecords(), fetchProducts()]);
-      setRecords(rows);
+      setRecords(rows.filter((r) => !r.isDeleted));
       setProducts(prods);
     } catch {
       setError('Failed to load SPC records.');
@@ -114,6 +119,10 @@ export function SpcPage() {
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
+    if (productQuery) setProductFilter(productQuery);
+  }, [productQuery]);
+
+  useEffect(() => {
     if (wizardStep === 3 && form.dataSource && form.productName) {
       void fetchParametersForSpc(form.dataSource, form.productName).then(setParameters);
     }
@@ -122,7 +131,7 @@ export function SpcPage() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return records.filter((r) => {
-      if (productFilter !== 'all' && r.productName !== productFilter) return false;
+      if (productFilter !== 'all' && r.productName !== productFilter && r.productCode !== productFilter) return false;
       if (chartFilter !== 'all' && r.chartType !== chartFilter) return false;
       if (sourceFilter !== 'all' && r.dataSource !== sourceFilter) return false;
       if (statusFilter !== 'all' && r.spcStatus !== statusFilter) return false;
@@ -133,12 +142,22 @@ export function SpcPage() {
       if (dateTo && periodEnd > dateTo) return false;
       if (!q) return true;
       return r.productName.toLowerCase().includes(q) || r.parameterName.toLowerCase().includes(q)
-        || r.spcRecordId.toLowerCase().includes(q);
+        || r.spcRecordId.toLowerCase().includes(q)
+        || r.sourcePreview.some((p) => (p.batchNumber || '').toLowerCase().includes(q));
     });
   }, [records, search, productFilter, chartFilter, sourceFilter, statusFilter, riskFilter, workflowFilter, dateFrom, dateTo]);
 
   const summary = useMemo(() => summarizeSpcRecords(records), [records]);
   const charts = useMemo(() => buildSpcCharts(filtered), [filtered]);
+  const driftCount = useMemo(() => records.filter((r) => r.processDriftDetected).length, [records]);
+  const avgHealth = useMemo(() => {
+    if (!records.length) return 0;
+    return Math.round(records.reduce((s, r) => s + (r.healthScore || 0), 0) / records.length);
+  }, [records]);
+  const westernElectricTotal = useMemo(
+    () => records.reduce((s, r) => s + (r.westernElectricCount || 0), 0),
+    [records],
+  );
 
   const onProductChange = async (productId: string) => {
     const p = products.find((x) => x.id === productId);
@@ -193,6 +212,10 @@ export function SpcPage() {
       toast.error('At least 5 numeric data points required');
       return;
     }
+    if (!form.changeReason || form.changeReason.trim().length < 5) {
+      toast.error('Change reason (min 5 characters) is required');
+      return;
+    }
     setSubmitting(true);
     const { error: err } = await createSpcRecord(form as SpcFormData, sourcePreview, actor);
     setSubmitting(false);
@@ -206,14 +229,15 @@ export function SpcPage() {
 
   const exportList = () => {
     downloadCsv('spc-records.csv',
-      ['ID', 'Product', 'Parameter', 'Chart', 'Status', 'Violations', 'Risk'],
+      ['ID', 'Product', 'Parameter', 'Chart', 'Status', 'Violations', 'OOC', 'Risk', 'Health', 'Cpk'],
       filtered.map((r) => [
         r.spcRecordId, r.productName, r.parameterName, r.chartType,
-        r.spcStatus, r.ruleViolationsCount, r.riskLevel,
+        r.spcStatus, r.ruleViolationsCount, r.outOfControlPoints, r.riskLevel,
+        r.healthScore ?? '', r.cpk ?? '',
       ]),
     );
     void logSpcExport(actor, 'report', filtered.length);
-    toast.success('Export downloaded');
+    toast.success(`Exported ${filtered.length} records`);
   };
 
   const columns: ColumnDef<SpcRecord>[] = [
@@ -230,15 +254,16 @@ export function SpcPage() {
       header: '',
       render: (r) => (
         <div className="flex gap-1">
-          <Button variant="ghost" size="icon" onClick={() => router.push(`/cpv/control-charts/${r.id}`)}>
+          <Button variant="ghost" size="icon" onClick={() => router.push(`/cpv/statistical-process-control/${r.id}`)}>
             <Eye className="h-4 w-4" />
           </Button>
-          {canEdit && (
+          {canEdit && r.status !== 'Approved' && (
             <Button variant="ghost" size="icon" onClick={async () => {
-              const qaOverride = r.isLocked && r.status === 'Approved' && canReview;
-              const { error: err } = await regenerateSpcRecord(r.id, actor, r, qaOverride);
+              const reason = window.prompt('Change reason (min 5 chars)');
+              if (!reason || reason.trim().length < 5) { toast.error('Change reason required'); return; }
+              const { error: err } = await regenerateSpcRecord(r.id, actor, r, false, { changeReason: reason });
               if (err) toast.error(err);
-              else { toast.success(qaOverride ? 'Regenerated with QA override' : 'Regenerated'); await load(); }
+              else { toast.success('Regenerated'); await load(); }
             }}>
               <RefreshCw className="h-4 w-4" />
             </Button>
@@ -277,6 +302,10 @@ export function SpcPage() {
                   subgroupSize: 4,
                   reviewPeriodFrom: '',
                   reviewPeriodTo: '',
+                  conclusion: '',
+                  recommendation: '',
+                  remarks: '',
+                  changeReason: '',
                 });
                 setSourcePreview([]);
                 setCalcPreview(null);
@@ -290,13 +319,40 @@ export function SpcPage() {
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="no-print flex flex-wrap gap-1.5">
+        {[
+          { href: batchQuery ? `/cpv/cpp?batch=${encodeURIComponent(batchQuery)}` : productQuery ? `/cpv/cpp?product=${encodeURIComponent(productQuery)}` : '/cpv/cpp', label: 'CPP' },
+          { href: productQuery ? `/cpv/cqa?product=${encodeURIComponent(productQuery)}` : '/cpv/cqa', label: 'CQA' },
+          { href: '/cpv/yield-monitoring', label: 'Yield' },
+          { href: '/cpv/environmental-monitoring', label: 'Environmental' },
+          { href: '/cpv/utility-monitoring', label: 'Utility' },
+          { href: '/cpv/hold-time-monitoring', label: 'Hold Time' },
+          { href: '/cpv/process-capability', label: 'Process Capability' },
+          { href: '/cpv/trend-analysis', label: 'Trend Analysis' },
+          { href: '/cpv/batch-registration', label: 'Batch' },
+          { href: '/qms/deviation', label: 'Deviation' },
+          { href: '/qms/capa', label: 'CAPA' },
+          { href: '/cpv/risk-assessment', label: 'Risk' },
+          { href: '/admin/audit-trail', label: 'Audit Trail' },
+          { href: '/cpv/reports-analytics', label: 'Reports' },
+          { href: '/cpv/ai-analytics', label: 'AI Analytics' },
+        ].map((link) => (
+          <Link key={link.label} href={link.href} className="rounded-md border px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900">
+            {link.label}
+          </Link>
+        ))}
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
         <KpiCard label="Total SPC Records" value={summary.total} />
         <KpiCard label="In Control" value={summary.inControl} tone="green" />
         <KpiCard label="Out Of Control" value={summary.outOfControl} tone="red" />
         <KpiCard label="Warning" value={summary.warning} tone="amber" />
         <KpiCard label="Insufficient Data" value={summary.insufficient} />
         <KpiCard label="Rule Violations" value={summary.ruleViolations} />
+        <KpiCard label="Process Drift" value={driftCount} tone="amber" />
+        <KpiCard label="Avg Health" value={avgHealth} tone="blue" />
+        <KpiCard label="Western Electric" value={westernElectricTotal} tone="amber" />
         <KpiCard label="High Risk" value={summary.highRisk} tone="amber" />
         <KpiCard label="Critical Risk" value={summary.criticalRisk} tone="red" />
         <KpiCard label="CAPA Suggested" value={summary.capaSuggested} tone="amber" />
@@ -646,7 +702,19 @@ export function SpcPage() {
               <Textarea value={form.recommendation || ''} onChange={(e) => setForm((f) => ({ ...f, recommendation: e.target.value }))} />
               <Label>Remarks</Label>
               <Textarea value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} />
-              <Button onClick={() => setWizardStep(10)}>Review & Save</Button>
+              <Label>Change Reason * (ALCOA+)</Label>
+              <Textarea
+                value={form.changeReason || ''}
+                onChange={(e) => setForm((f) => ({ ...f, changeReason: e.target.value }))}
+                placeholder="Minimum 5 characters"
+              />
+              <Button onClick={() => {
+                if (!form.changeReason || form.changeReason.trim().length < 5) {
+                  toast.error('Change reason must be at least 5 characters');
+                  return;
+                }
+                setWizardStep(10);
+              }}>Preview Save</Button>
             </div>
           )}
 
@@ -656,15 +724,22 @@ export function SpcPage() {
               <p><strong>Parameter:</strong> {form.parameterName}</p>
               <p><strong>Chart:</strong> {form.chartType}</p>
               <p><strong>Status:</strong> {calcPreview.spcStatus}</p>
+              <p><strong>Data points:</strong> {calcPreview.dataPointsCount}</p>
+              <p><strong>Health / Confidence:</strong> {calcPreview.healthScore} / {calcPreview.confidenceScore}</p>
+              {calcPreview.processDriftDetected && <p className="text-amber-700">Process drift detected</p>}
               {calcPreview.capaSuggested && <p className="text-amber-700">CAPA suggested based on SPC signals.</p>}
+              <p className="text-muted-foreground">{calcPreview.aiRecommendation}</p>
             </div>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="gap-2">
             {wizardStep === 10 && (
-              <Button onClick={() => void saveSpc()} disabled={submitting}>
-                {submitting ? 'Saving…' : 'Save SPC Record'}
-              </Button>
+              <>
+                <Button variant="outline" onClick={() => setWizardStep(9)}>Back</Button>
+                <Button onClick={() => void saveSpc()} disabled={submitting}>
+                  {submitting ? 'Saving…' : 'Save SPC Record'}
+                </Button>
+              </>
             )}
           </DialogFooter>
         </DialogContent>

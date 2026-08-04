@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft } from 'lucide-react';
+import Link from 'next/link';
+import { ArrowLeft, Trash2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
 import {
   fetchStabilityResultById, fetchStabilityAuditTrail, fetchStabilityResults,
   approveStabilityResult, reviewStabilityResult, stabilityParameterTrendData,
-  updateStabilityAttachments,
+  updateStabilityAttachments, softDeleteStabilityResult,
 } from '@/lib/cpv-stability-monitoring-service';
 import type { StabilityResultRecord } from '@/lib/cpv-stability-monitoring';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
@@ -20,6 +22,12 @@ import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import { ElectronicSignatureDialog } from '@/components/electronic-signatures';
 
 function RiskBadge({ level }: { level: string }) {
   const cls = level === 'Critical' ? 'bg-red-900/10 text-red-900 border-red-300'
@@ -39,6 +47,15 @@ export function StabilityDetailView({ id }: { id: string }) {
   const [trend, setTrend] = useState<ReturnType<typeof stabilityParameterTrendData>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewReason, setReviewReason] = useState('Submitted for QA review');
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [approveReason, setApproveReason] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [esignOpen, setEsignOpen] = useState(false);
+  const [esignAction, setEsignAction] = useState<'approve' | 'delete'>('approve');
+  const [submitting, setSubmitting] = useState(false);
   const actor = { id: user?.uid || 'system', name: profile?.full_name || 'System', role: profile?.role || '' };
 
   const load = useCallback(async () => {
@@ -59,8 +76,50 @@ export function StabilityDetailView({ id }: { id: string }) {
 
   const saveAttachments = async (attachments: StabilityResultRecord['attachments']) => {
     if (!record) return;
-    const { result } = await updateStabilityAttachments(record.id, attachments, actor, record);
-    if (result) setRecord(result);
+    const { result, error: err } = await updateStabilityAttachments(record.id, attachments, actor, record, 'Attachment updated');
+    if (err) toast.error(err);
+    else if (result) setRecord(result);
+  };
+
+  const applyReview = async () => {
+    if (!record) return;
+    if (reviewReason.trim().length < 5) {
+      toast.error('Change reason must be at least 5 characters');
+      return;
+    }
+    setSubmitting(true);
+    const { error: err } = await reviewStabilityResult(record.id, actor, reviewReason);
+    setSubmitting(false);
+    setReviewOpen(false);
+    if (err) toast.error(err);
+    else { toast.success('Submitted for review'); await load(); }
+  };
+
+  const applyApprove = async () => {
+    if (!record) return;
+    setSubmitting(true);
+    const { error: err } = await approveStabilityResult(record.id, actor, approveReason, { esignConfirmed: true });
+    setSubmitting(false);
+    setEsignOpen(false);
+    setApproveOpen(false);
+    setApproveReason('');
+    if (err) toast.error(err);
+    else { toast.success('Stability result approved'); await load(); }
+  };
+
+  const applyDelete = async () => {
+    if (!record) return;
+    setSubmitting(true);
+    const { error: err } = await softDeleteStabilityResult(record.id, actor, deleteReason, { esignConfirmed: true });
+    setSubmitting(false);
+    setEsignOpen(false);
+    setDeleteOpen(false);
+    setDeleteReason('');
+    if (err) toast.error(err);
+    else {
+      toast.success('Stability result soft-deleted');
+      router.push('/cpv/stability-monitoring');
+    }
   };
 
   if (loading) return <div className="p-4 sm:p-6"><LoadingSkeleton rows={1} /></div>;
@@ -72,8 +131,7 @@ export function StabilityDetailView({ id }: { id: string }) {
         title={record.parameterName}
         description={`${record.batchNumber} · ${record.pullingInterval} · ${record.stabilityStudyNumber}`}
         trail={[
-          { label: 'Dashboard', href: '/dashboard' },
-          { label: 'Continued Process Verification', href: '/cpv/dashboard' },
+          { label: 'CPV Dashboard', href: '/cpv/dashboard' },
           { label: 'Stability Monitoring', href: '/cpv/stability-monitoring' },
           { label: record.stabilityMonitoringId },
         ]}
@@ -83,16 +141,42 @@ export function StabilityDetailView({ id }: { id: string }) {
               <ArrowLeft className="h-4 w-4 mr-1" />Back
             </Button>
             {canReview && record.reviewStatus === 'Draft' && (
-              <Button size="sm" onClick={async () => { await reviewStabilityResult(record.id, actor, record); await load(); }}>Submit Review</Button>
+              <Button size="sm" onClick={() => { setReviewReason('Submitted for QA review'); setReviewOpen(true); }}>Submit Review</Button>
             )}
-            {canReview && record.reviewStatus === 'Under Review' && (
-              <Button size="sm" onClick={async () => { await approveStabilityResult(record.id, actor, record); await load(); }}>
-                Approve
+            {canReview && (record.reviewStatus === 'Under Review' || record.reviewStatus === 'Draft') && (
+              <Button size="sm" onClick={() => { setApproveReason(''); setApproveOpen(true); }}>Approve</Button>
+            )}
+            {canReview && record.reviewStatus !== 'Approved' && !record.isDeleted && (
+              <Button size="sm" variant="destructive" onClick={() => { setDeleteReason(''); setDeleteOpen(true); }}>
+                <Trash2 className="mr-1 h-4 w-4" />Soft Delete
               </Button>
             )}
           </>
         }
       />
+
+      <div className="no-print flex flex-wrap gap-1.5">
+        {[
+          { href: record.cpvProductId ? `/cpv/product-master/${record.cpvProductId}` : `/cpv/product-master?search=${encodeURIComponent(record.productCode)}`, label: 'Product' },
+          { href: `/cpv/batch-registration?search=${encodeURIComponent(record.batchNumber)}`, label: 'Batch' },
+          { href: `/cpv/cpp?batch=${encodeURIComponent(record.batchNumber)}`, label: 'CPP' },
+          { href: `/cpv/cqa?batch=${encodeURIComponent(record.batchNumber)}`, label: 'CQA' },
+          { href: `/cpv/yield-monitoring?batch=${encodeURIComponent(record.batchNumber)}`, label: 'Yield' },
+          { href: '/cpv/environmental-monitoring', label: 'Environmental' },
+          { href: `/cpv/utility-monitoring?batch=${encodeURIComponent(record.batchNumber)}`, label: 'Utility' },
+          { href: '/qms/deviation', label: 'Deviation' },
+          { href: '/qms/capa', label: 'CAPA' },
+          { href: '/cpv/risk-assessment', label: 'Risk' },
+          { href: '/admin/audit-trail', label: 'Audit Trail' },
+          { href: '/cpv/reports-analytics', label: 'Reports' },
+          { href: '/cpv/statistical-process-control', label: 'SPC' },
+          { href: '/cpv/trend-analysis', label: 'Trends' },
+        ].map((link) => (
+          <Link key={link.href + link.label} href={link.href} className="rounded-md border px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900">
+            {link.label}
+          </Link>
+        ))}
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard label="Observed Result" value={String(record.observedResult)} />
@@ -179,6 +263,53 @@ export function StabilityDetailView({ id }: { id: string }) {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={reviewOpen} onOpenChange={setReviewOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Submit for Review</DialogTitle><DialogDescription>Provide a change reason for this review submission.</DialogDescription></DialogHeader>
+          <div className="space-y-2"><Label>Change Reason *</Label><Textarea value={reviewReason} onChange={(e) => setReviewReason(e.target.value)} /></div>
+          <DialogFooter><Button variant="outline" onClick={() => setReviewOpen(false)}>Cancel</Button><Button disabled={submitting} onClick={() => void applyReview()}>Submit</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={approveOpen && !esignOpen} onOpenChange={setApproveOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Approve Stability Result</DialogTitle><DialogDescription>Change reason and electronic signature are required (Part 11 / ALCOA+).</DialogDescription></DialogHeader>
+          <div className="space-y-2"><Label>Change Reason *</Label><Textarea value={approveReason} onChange={(e) => setApproveReason(e.target.value)} /></div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveOpen(false)}>Cancel</Button>
+            <Button disabled={submitting} onClick={() => {
+              if (approveReason.trim().length < 5) { toast.error('Change reason must be at least 5 characters'); return; }
+              setEsignAction('approve'); setEsignOpen(true);
+            }}>Continue to E-Sign</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteOpen && !esignOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Soft-Delete Stability Result</DialogTitle><DialogDescription>Archive this record with a change reason and electronic signature.</DialogDescription></DialogHeader>
+          <div className="space-y-2"><Label>Change Reason *</Label><Textarea value={deleteReason} onChange={(e) => setDeleteReason(e.target.value)} /></div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>Cancel</Button>
+            <Button variant="destructive" disabled={submitting} onClick={() => {
+              if (deleteReason.trim().length < 5) { toast.error('Change reason must be at least 5 characters'); return; }
+              setEsignAction('delete'); setEsignOpen(true);
+            }}>Continue to E-Sign</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ElectronicSignatureDialog
+        open={esignOpen}
+        onOpenChange={setEsignOpen}
+        moduleName="Stability Monitoring"
+        recordId={record.id}
+        documentNumber={record.stabilityMonitoringId}
+        actionType={esignAction === 'approve' ? 'Approve' : 'Soft Delete'}
+        onSuccess={() => { if (esignAction === 'approve') void applyApprove(); else void applyDelete(); }}
+        onCancel={() => setEsignOpen(false)}
+      />
     </div>
   );
 }

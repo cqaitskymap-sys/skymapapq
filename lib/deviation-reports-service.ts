@@ -15,6 +15,7 @@ import {
 } from '@/lib/deviation-reports-records';
 import { DEVIATION_COLLECTIONS, type DeviationReportRecord } from '@/lib/deviation-types';
 import { listDeviations } from '@/lib/deviation-service';
+import { polishQmsReportTexts } from '@/lib/ai/client';
 
 export type { ReportActor, ReportFilterInput, DeviationReportFormData };
 
@@ -121,9 +122,20 @@ export async function generateDeviationReport(
     status: form.status,
   };
   const analytics = await previewDeviationReport(filters);
+  const polished = await polishQmsReportTexts({
+    module: 'Deviation Reports',
+    summary: analytics.summary,
+    recommendations: analytics.summary,
+    management_summary: analytics.summary,
+    context: { reportType: form.report_type, metrics: analytics.metrics, filters },
+  });
+  const enrichedAnalytics = {
+    ...analytics,
+    summary: polished.summary || polished.management_summary || analytics.summary,
+  };
   const year = new Date(form.review_period_to).getFullYear();
   const reportNumber = generateReportNumber(year, existingCount);
-  const payload = mapReportToRecord(form, analytics, actor, reportNumber);
+  const payload = mapReportToRecord(form, enrichedAnalytics, actor, reportNumber);
   try {
     const ref = await addDoc(collection(getFirebaseFirestore(), DEVIATION_COLLECTIONS.reports), payload);
     const record = { id: ref.id, ...payload };

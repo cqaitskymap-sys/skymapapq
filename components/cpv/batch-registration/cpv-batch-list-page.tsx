@@ -1,8 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Plus, Download, Upload, Eye, Pencil, CheckCircle, Ban, PauseCircle } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Plus, Download, Upload, Eye, Pencil, CheckCircle, Ban, PauseCircle, FilterX, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
@@ -25,9 +25,10 @@ import {
   changeCpvBatchStatus,
   importCpvBatchFromAdmin,
   logCpvBatchExport,
+  buildCpvBatchesExportRows,
 } from '@/lib/cpv-batch-registration-service';
 import type { CpvProductRecord } from '@/lib/cpv-product-master';
-import { downloadCsv } from '@/lib/export-utils';
+import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ResponsiveDataTable } from '@/components/cpv/product-master/responsive-data-table';
 import { CpvBatchFormSheet } from './cpv-batch-form-sheet';
@@ -39,12 +40,14 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
+import { ElectronicSignatureDialog } from '@/components/electronic-signatures';
 import type { ColumnDef } from '@/components/admin/admin-data-table';
 
 function ReleaseBadge({ status }: { status: string }) {
@@ -59,6 +62,8 @@ function ReleaseBadge({ status }: { status: string }) {
 
 export function CpvBatchListPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const productQuery = searchParams.get('product') || '';
   const { user, profile } = useAuth();
   const role = profile?.role;
   const canManage = cpvPermissions.canManageCpvBatches(role);
@@ -76,18 +81,25 @@ export function CpvBatchListPage() {
   const [submitting, setSubmitting] = useState(false);
   const [actionTarget, setActionTarget] = useState<{ batch: CpvBatchRecord; action: 'release' | 'reject' | 'hold' } | null>(null);
   const [actionReason, setActionReason] = useState('');
+  const [esignOpen, setEsignOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importBatchId, setImportBatchId] = useState('');
   const [importProductId, setImportProductId] = useState('');
+  const [importReason, setImportReason] = useState('Import from Admin Batch Master');
 
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(productQuery);
   const [statusFilter, setStatusFilter] = useState('all');
   const [releaseFilter, setReleaseFilter] = useState('all');
   const [periodFilter, setPeriodFilter] = useState('all');
+  const [siteFilter, setSiteFilter] = useState('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
 
   const actor = { id: user?.uid || 'system', name: profile?.full_name || 'System' };
+
+  useEffect(() => {
+    if (productQuery) setSearch(productQuery);
+  }, [productQuery]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,12 +122,18 @@ export function CpvBatchListPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const sites = useMemo(
+    () => Array.from(new Set(batches.map((b) => b.manufacturingSite).filter(Boolean))).sort(),
+    [batches],
+  );
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return batches.filter((b) => {
       if (statusFilter !== 'all' && b.batchStatus !== statusFilter) return false;
       if (releaseFilter !== 'all' && b.releaseStatus !== releaseFilter) return false;
       if (periodFilter !== 'all' && b.cpvReviewPeriod !== periodFilter) return false;
+      if (siteFilter !== 'all' && b.manufacturingSite !== siteFilter) return false;
       if (dateFrom && toMonthYearValue(b.manufacturingDate) < dateFrom) return false;
       if (dateTo && toMonthYearValue(b.manufacturingDate) > dateTo) return false;
       if (!q) return true;
@@ -124,12 +142,25 @@ export function CpvBatchListPage() {
         || b.productName.toLowerCase().includes(q)
         || b.productCode.toLowerCase().includes(q)
         || b.customerName.toLowerCase().includes(q)
+        || (b.cpvBatchId || '').toLowerCase().includes(q)
+        || (b.manufacturingOrderNumber || '').toLowerCase().includes(q)
+        || (b.workOrderNumber || '').toLowerCase().includes(q)
+        || (b.manufacturingSite || '').toLowerCase().includes(q)
       );
     });
-  }, [batches, search, statusFilter, releaseFilter, periodFilter, dateFrom, dateTo]);
+  }, [batches, search, statusFilter, releaseFilter, periodFilter, siteFilter, dateFrom, dateTo]);
 
   const summary = useMemo(() => summarizeCpvBatches(batches), [batches]);
 
+  const clearFilters = () => {
+    setSearch('');
+    setStatusFilter('all');
+    setReleaseFilter('all');
+    setPeriodFilter('all');
+    setSiteFilter('all');
+    setDateFrom('');
+    setDateTo('');
+  };
   const handleSave = async (data: CpvBatchFormData) => {
     setSubmitting(true);
     try {
@@ -152,6 +183,15 @@ export function CpvBatchListPage() {
 
   const handleStatusAction = async () => {
     if (!actionTarget) return;
+    if (actionReason.trim().length < 5) {
+      toast.error('Change reason must be at least 5 characters');
+      return;
+    }
+    setEsignOpen(true);
+  };
+
+  const applyStatusChange = async () => {
+    if (!actionTarget) return;
     const { batch, action } = actionTarget;
     const statusMap = { release: 'Released', reject: 'Rejected', hold: 'Hold' } as const;
     setSubmitting(true);
@@ -161,8 +201,10 @@ export function CpvBatchListPage() {
       actor,
       batch,
       actionReason,
+      { esignConfirmed: true },
     );
     setSubmitting(false);
+    setEsignOpen(false);
     setActionTarget(null);
     setActionReason('');
     if (err) toast.error(err);
@@ -175,27 +217,27 @@ export function CpvBatchListPage() {
       toast.error('Select admin batch and CPV product');
       return;
     }
+    if (importReason.trim().length < 5) {
+      toast.error('Import reason must be at least 5 characters');
+      return;
+    }
     setSubmitting(true);
-    const { error: err } = await importCpvBatchFromAdmin(importBatchId, importProductId, actor);
+    const { error: err } = await importCpvBatchFromAdmin(importBatchId, importProductId, actor, importReason);
     setSubmitting(false);
     if (err) toast.error(err);
     else {
-      toast.success('Batch imported from Admin Batch Master');
+      toast.success('Batch imported as Planned — advance workflow after review');
       setImportOpen(false);
       await load();
     }
   };
 
   const handleExport = async () => {
-    const headers = ['CPV Batch ID', 'Batch Number', 'Product', 'Mfg Date', 'Expiry', 'Batch Status', 'Release Status'];
-    const rows = filtered.map((b) => [
-      b.cpvBatchId, b.batchNumber, b.productName, formatMonthYear(b.manufacturingDate), formatMonthYear(b.expiryDate), b.batchStatus, b.releaseStatus,
-    ]);
-    downloadCsv(`cpv-batches-${Date.now()}.csv`, headers, rows);
-    await logCpvBatchExport(actor, filtered.length);
-    toast.success('Export generated (placeholder CSV)');
+    const { headers, rows } = buildCpvBatchesExportRows(filtered);
+    downloadCsv(`cpv-batches-${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+    await logCpvBatchExport(actor, filtered.length, 'CSV');
+    toast.success(`Exported ${filtered.length} CPV batches`);
   };
-
   const columns: ColumnDef<CpvBatchRecord>[] = [
     { key: 'cpvBatchId', header: 'CPV Batch ID' },
     { key: 'batchNumber', header: 'Batch No' },
@@ -221,28 +263,32 @@ export function CpvBatchListPage() {
   }
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div id="cpv-batch-registration-root" className="space-y-6 p-4 sm:p-6">
       <CpvPageHeader
         title="CPV Batch Registration"
         description="Register and manage batches under Continued Process Verification"
         trail={[
+          { label: 'Dashboard', href: '/dashboard' },
           { label: 'Continued Process Verification', href: '/cpv/dashboard' },
           { label: 'Batch Registration' },
         ]}
         actions={
           <>
             {canImportExport && (
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => setImportOpen(true)}>
+              <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => setImportOpen(true)}>
                 <Upload className="h-4 w-4" />Import
               </Button>
             )}
             {canImportExport && (
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => void handleExport()}>
+              <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => void handleExport()}>
                 <Download className="h-4 w-4" />Export
               </Button>
             )}
+            <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => printPage()}>
+              <Printer className="h-4 w-4" />Print
+            </Button>
             {canManage && !isReadOnly && (
-              <Button size="sm" className="gap-2" onClick={() => { setEditing(null); setFormOpen(true); }}>
+              <Button size="sm" className="gap-2 no-print" onClick={() => { setEditing(null); setFormOpen(true); }}>
                 <Plus className="h-4 w-4" />Register Batch
               </Button>
             )}
@@ -262,12 +308,12 @@ export function CpvBatchListPage() {
         <KpiCard label="Due For Review" value={summary.dueForReview} tone="amber" />
       </div>
 
-      <Card>
+      <Card className="no-print">
         <CardContent className="p-4 space-y-4">
-          <div className="grid gap-3 lg:grid-cols-6">
+          <div className="grid gap-3 lg:grid-cols-7">
             <div className="lg:col-span-2">
               <Label className="text-xs text-muted-foreground">Search</Label>
-              <Input className="mt-1" placeholder="Batch, product, customer..." value={search} onChange={(e) => setSearch(e.target.value)} />
+              <Input className="mt-1" placeholder="Batch, product, MO/WO, site, customer..." value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
             <div>
               <Label className="text-xs text-muted-foreground">Batch Status</Label>
@@ -290,6 +336,16 @@ export function CpvBatchListPage() {
               </Select>
             </div>
             <div>
+              <Label className="text-xs text-muted-foreground">Site</Label>
+              <Select value={siteFilter} onValueChange={setSiteFilter}>
+                <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {sites.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
               <Label className="text-xs text-muted-foreground">Review Period</Label>
               <Select value={periodFilter} onValueChange={setPeriodFilter}>
                 <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
@@ -299,15 +355,20 @@ export function CpvBatchListPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <Label className="text-xs text-muted-foreground">Mfg From</Label>
-                <Input type="month" className="mt-1 h-9" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <div className="flex items-end gap-2">
+              <div className="grid flex-1 grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Mfg From</Label>
+                  <Input type="month" className="mt-1 h-9" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Mfg To</Label>
+                  <Input type="month" className="mt-1 h-9" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                </div>
               </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">Mfg To</Label>
-                <Input type="month" className="mt-1 h-9" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-              </div>
+              <Button variant="ghost" size="sm" className="h-9" onClick={clearFilters}>
+                <FilterX className="h-3.5 w-3.5" />
+              </Button>
             </div>
           </div>
 
@@ -363,31 +424,53 @@ export function CpvBatchListPage() {
         submitting={submitting}
       />
 
-      <Dialog open={Boolean(actionTarget)} onOpenChange={(v) => { if (!v) { setActionTarget(null); setActionReason(''); } }}>
+      <Dialog open={Boolean(actionTarget) && !esignOpen} onOpenChange={(v) => { if (!v) { setActionTarget(null); setActionReason(''); } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
               {actionTarget?.action === 'release' ? 'Release batch?' : actionTarget?.action === 'reject' ? 'Reject batch?' : 'Hold batch?'}
             </DialogTitle>
+            <DialogDescription>
+              Electronic signature is required. Workflow transitions are validated on the server.
+            </DialogDescription>
           </DialogHeader>
-          {(actionTarget?.action === 'hold' || actionTarget?.action === 'reject') && (
-            <div className="py-2">
-              <Label>Reason *</Label>
-              <Input className="mt-1" placeholder="Enter reason..." value={actionReason} onChange={(e) => setActionReason(e.target.value)} />
-            </div>
-          )}
+          <div className="py-2">
+            <Label>Change Reason *</Label>
+            <Textarea
+              className="mt-1"
+              rows={3}
+              placeholder="Enter reason (min 5 characters)..."
+              value={actionReason}
+              onChange={(e) => setActionReason(e.target.value)}
+            />
+          </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setActionTarget(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setActionTarget(null); setActionReason(''); }}>Cancel</Button>
             <Button
               variant={actionTarget?.action === 'reject' ? 'destructive' : 'default'}
-              disabled={submitting || ((actionTarget?.action === 'hold' || actionTarget?.action === 'reject') && !actionReason.trim())}
+              disabled={submitting}
               onClick={() => void handleStatusAction()}
             >
-              {submitting ? 'Processing...' : 'Confirm'}
+              Continue to E-Sign
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ElectronicSignatureDialog
+        open={esignOpen}
+        onOpenChange={(v) => { setEsignOpen(v); if (!v) setSubmitting(false); }}
+        moduleName="CPV Batch Registration"
+        recordId={actionTarget?.batch.id || 'cpv-batch'}
+        documentNumber={actionTarget?.batch.cpvBatchId}
+        actionType={
+          actionTarget?.action === 'release' ? 'Release'
+            : actionTarget?.action === 'reject' ? 'Reject'
+              : 'Hold'
+        }
+        onSuccess={() => { void applyStatusChange(); }}
+        onCancel={() => setEsignOpen(false)}
+      />
 
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
         <DialogContent>
@@ -415,10 +498,14 @@ export function CpvBatchListPage() {
                 </SelectContent>
               </Select>
             </div>
+            <div>
+              <Label>Change Reason *</Label>
+              <Textarea className="mt-1" rows={2} value={importReason} onChange={(e) => setImportReason(e.target.value)} />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setImportOpen(false)}>Cancel</Button>
-            <Button onClick={() => void handleImport()} disabled={submitting}>Import</Button>
+            <Button onClick={() => void handleImport()} disabled={submitting}>Import as Planned</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

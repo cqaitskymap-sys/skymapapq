@@ -15,12 +15,17 @@ export const PM_MATERIAL_TYPES = [
 
 export const PM_MATERIAL_CATEGORIES = [
   'Vial', 'Rubber Stopper', 'Flip Off Seal', 'Label', 'Carton',
-  'Package Insert / Leaflet', 'Shipper Box', 'PVC Film', 'BOPP Tape', 'Other',
+  'Package Insert / Leaflet', 'Shipper Box', 'PVC Film', 'BOPP Tape',
+  'Bottle', 'Cap', 'Closure', 'Foil', 'Blister', 'Insert', 'Leaflet',
+  'Tube', 'Sachet', 'Pouch', 'Printed Material', 'Other',
 ] as const;
 
 export const PM_QC_STATUSES = QC_STATUSES;
 export const PM_RECONCILIATION_STATUSES = ['Matched', 'Mismatch', 'Not Applicable'] as const;
-export const PM_COMPLIANCE_STATUSES = ['Complies', 'Does Not Comply', 'Alert', 'Action'] as const;
+export const PM_COMPLIANCE_STATUSES = [
+  'Complies', 'Does Not Comply', 'Alert', 'Action', 'OOS', 'OOT',
+] as const;
+export const PM_VERIFY_OPTIONS = ['Yes', 'No', 'N/A', 'Pass', 'Fail', 'Pending', ''] as const;
 
 export const DEFAULT_PM_MATERIALS = [
   'Glass Vial 2ml', 'Rubber Stopper 13mm', 'Flip Off Seal 13mm', 'Label', 'Carton',
@@ -29,9 +34,26 @@ export const DEFAULT_PM_MATERIALS = [
 
 export const PM_FORM_MATERIAL_OPTIONS = ['Primary Material', 'Secondary Material'] as const;
 
-const LABEL_CATEGORIES = ['Label', 'Package Insert / Leaflet'];
+const LABEL_CATEGORIES = [
+  'Label', 'Package Insert / Leaflet', 'Insert', 'Leaflet', 'Printed Material', 'Carton',
+];
 
 const requiredText = z.string().trim().min(1, 'Required');
+const optionalNum = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v),
+  z.coerce.number().optional(),
+);
+
+function parseComparableDate(value: string): Date | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^\d{4}-\d{2}$/.test(trimmed)) {
+    const [y, m] = trimmed.split('-').map(Number);
+    return new Date(y, m - 1, 1);
+  }
+  const dt = new Date(trimmed);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
 
 export const packingMaterialMonitoringFormSchema = z.object({
   cpvProductId: requiredText,
@@ -48,33 +70,74 @@ export const packingMaterialMonitoringFormSchema = z.object({
   vendorName: requiredText,
   vendorStatus: z.string().trim().default('Active'),
   avlStatus: z.string().trim().default('Approved'),
+  vendorCode: z.string().trim().default(''),
   grnNumber: z.string().trim().default(''),
+  purchaseOrderNumber: z.string().trim().default(''),
   arNumber: requiredText,
   coaNumber: z.string().trim().default(''),
   materialLotNumber: z.string().trim().default(''),
+  supplierBatchNumber: z.string().trim().default(''),
   mfgDate: requiredText,
   expDate: requiredText,
+  retestDate: z.string().trim().default(''),
+  shelfLifeMonths: z.string().trim().default(''),
   receivedQuantity: z.coerce.number().min(0).default(0),
+  acceptedQuantity: z.coerce.number().min(0).default(0),
+  rejectedQuantity: z.coerce.number().min(0).default(0),
+  quarantineQuantity: z.coerce.number().min(0).default(0),
+  returnedQuantity: z.coerce.number().min(0).default(0),
   issuedQuantity: z.coerce.number().min(0, 'Required'),
   usedQuantity: z.coerce.number().min(0, 'Required'),
-  rejectedQuantity: z.coerce.number().min(0).default(0),
-  returnedQuantity: z.coerce.number().min(0).default(0),
   unit: requiredText,
   storageCondition: z.string().trim().default(''),
+  warehouseLocation: z.string().trim().default(''),
+  storageArea: z.string().trim().default(''),
+  site: z.string().trim().default(''),
+  department: z.string().trim().default('Warehouse'),
+  shift: z.string().trim().default(''),
   qcStatus: z.enum(PM_QC_STATUSES),
+  qaStatus: z.string().trim().default(''),
+  releaseStatus: z.string().trim().default(''),
+  samplingStatus: z.string().trim().default(''),
   coaAvailable: z.enum(COA_AVAILABLE_OPTIONS),
   specificationNumber: z.string().trim().default(''),
+  specificationVersion: z.string().trim().default(''),
+  artworkVersion: z.string().trim().default(''),
+  barcode: z.string().trim().default(''),
+  qrCode: z.string().trim().default(''),
+  rfid: z.string().trim().default(''),
+  artworkVerified: z.string().trim().default(''),
+  barcodeVerified: z.string().trim().default(''),
+  labelVerified: z.string().trim().default(''),
+  packagingIntegrity: z.string().trim().default(''),
+  damageInspection: z.string().trim().default(''),
+  printingVerified: z.string().trim().default(''),
+  dimensionCheck: z.string().trim().default(''),
+  sealIntegrity: z.string().trim().default(''),
   stpNumber: z.string().trim().default(''),
+  testParameter: z.string().trim().default(''),
+  observedResult: z.union([z.coerce.number(), z.string()]).optional(),
+  lowerLimit: optionalNum,
+  upperLimit: optionalNum,
+  testUnit: z.string().trim().optional().default(''),
   testResultSummary: z.string().trim().default(''),
   remarks: z.string().trim().default(''),
+  effectiveDate: z.string().trim().default(''),
+  reviewDate: z.string().trim().default(''),
+  version: z.string().trim().default('1.0'),
+  description: z.string().trim().default(''),
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => {
-  const mfg = new Date(d.mfgDate);
-  const exp = new Date(d.expDate);
-  return !Number.isNaN(mfg.getTime()) && !Number.isNaN(exp.getTime()) && exp > mfg;
+  const mfg = parseComparableDate(d.mfgDate);
+  const exp = parseComparableDate(d.expDate);
+  return !!mfg && !!exp && exp > mfg;
 }, { message: 'EXP date must be after MFG date', path: ['expDate'] }).refine((d) => d.usedQuantity <= d.issuedQuantity, {
   message: 'Used quantity cannot exceed standard quantity',
   path: ['usedQuantity'],
-});
+}).refine((d) => {
+  if (!d.testParameter || d.lowerLimit == null || d.upperLimit == null) return true;
+  return d.lowerLimit < d.upperLimit;
+}, { message: 'Upper limit must be greater than lower limit', path: ['upperLimit'] });
 
 export type PackingMaterialMonitoringFormData = z.infer<typeof packingMaterialMonitoringFormSchema>;
 
@@ -97,12 +160,15 @@ export interface PackingMaterialMonitoringRecord extends PackingMaterialMonitori
   riskLevel: string;
   deviationRequired: boolean;
   linkedDeviationNumber: string;
+  oosRequired?: boolean;
+  linkedOosNumber?: string;
   capaRequired: boolean;
   linkedCapaNumber: string;
   reviewStatus: 'Draft' | 'Under Review' | 'Approved';
   isLocked: boolean;
   attachments: PackingMaterialAttachment[];
   warehouseReceiptId: string;
+  changeReason: string;
   createdAt: string;
   updatedAt: string;
   createdBy: string;
@@ -125,6 +191,7 @@ export interface PackingMaterialSummary {
   expiredMaterials: number;
   highRisk: number;
   deviationTriggered: number;
+  oosTriggered: number;
 }
 
 export function calculateBalanceQuantity(
@@ -147,13 +214,35 @@ export function evaluateReconciliationStatus(
   return balance === 0 ? 'Matched' : 'Mismatch';
 }
 
+function parseDate(d: string): Date | null {
+  return parseComparableDate(d);
+}
+
 export function isMaterialExpired(expDate: string): boolean {
   if (!expDate) return false;
-  const exp = new Date(expDate);
-  if (Number.isNaN(exp.getTime())) return false;
+  const exp = parseDate(expDate);
+  if (!exp) return false;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return exp < today;
+}
+
+export function evaluateTestResultStatus(
+  observed: number | string | undefined,
+  lower?: number,
+  upper?: number,
+): string | null {
+  if (observed === undefined || observed === '' || lower == null || upper == null) return null;
+  const num = Number(observed);
+  if (!Number.isFinite(num)) return 'Does Not Comply';
+  if (num < lower || num > upper) return 'OOS';
+  const range = upper - lower;
+  if (range > 0) {
+    const alertLow = lower + range * 0.1;
+    const alertHigh = upper - range * 0.1;
+    if (num < alertLow || num > alertHigh) return 'OOT';
+  }
+  return 'Complies';
 }
 
 export function evaluatePackingCompliance(input: {
@@ -165,6 +254,13 @@ export function evaluatePackingCompliance(input: {
   usedQuantity: number;
   issuedQuantity: number;
   reconciliationStatus: string;
+  artworkVerified?: string;
+  barcodeVerified?: string;
+  packagingIntegrity?: string;
+  testParameter?: string;
+  observedResult?: number | string;
+  lowerLimit?: number;
+  upperLimit?: number;
 }): string {
   const vendorOk = input.vendorStatus === 'Active';
   const avlOk = ['Approved', 'Conditional Approved', 'Conditionally Approved'].includes(input.avlStatus);
@@ -173,22 +269,43 @@ export function evaluatePackingCompliance(input: {
   const notExpired = !isMaterialExpired(input.expDate);
   const qtyOk = input.usedQuantity <= input.issuedQuantity;
   const reconOk = input.reconciliationStatus === 'Matched' || input.reconciliationStatus === 'Not Applicable';
-  if (!vendorOk || !avlOk || !qcOk || !coaOk || !notExpired || !qtyOk || !reconOk) return 'Does Not Comply';
+  const artworkOk = !input.artworkVerified || ['Yes', 'Pass', 'N/A', ''].includes(input.artworkVerified);
+  const barcodeOk = !input.barcodeVerified || ['Yes', 'Pass', 'N/A', ''].includes(input.barcodeVerified);
+  const integrityOk = !input.packagingIntegrity || ['Yes', 'Pass', 'N/A', ''].includes(input.packagingIntegrity);
+  const testStatus = input.testParameter
+    ? evaluateTestResultStatus(input.observedResult, input.lowerLimit, input.upperLimit)
+    : null;
+
+  if (!vendorOk || !avlOk || !qcOk || !coaOk || !notExpired || !qtyOk || !reconOk
+    || !artworkOk || !barcodeOk || !integrityOk) {
+    return 'Does Not Comply';
+  }
+  if (testStatus === 'OOS') return 'OOS';
+  if (testStatus === 'OOT') return 'OOT';
+  if (testStatus === 'Does Not Comply') return 'Does Not Comply';
   return 'Complies';
 }
 
 export function evaluatePackingRisk(
-  record: Pick<PackingMaterialMonitoringRecord, 'expDate' | 'avlStatus' | 'qcStatus' | 'coaAvailable' | 'reconciliationStatus' | 'materialCategory' | 'complianceStatus'>,
+  record: Pick<
+    PackingMaterialMonitoringRecord,
+    'expDate' | 'avlStatus' | 'qcStatus' | 'coaAvailable' | 'reconciliationStatus' | 'materialCategory' | 'complianceStatus'
+  > & { artworkVerified?: string; barcodeVerified?: string },
   issueCount: number,
 ): string {
   const labelMismatch = LABEL_CATEGORIES.includes(record.materialCategory)
     && record.reconciliationStatus === 'Mismatch';
-  if (isMaterialExpired(record.expDate) || record.qcStatus === 'Rejected' || labelMismatch) return 'Critical';
+  const artworkFail = ['No', 'Fail'].includes(String(record.artworkVerified || ''));
+  const barcodeFail = ['No', 'Fail'].includes(String(record.barcodeVerified || ''));
+  if (isMaterialExpired(record.expDate) || record.qcStatus === 'Rejected' || labelMismatch || artworkFail || barcodeFail) {
+    return 'Critical';
+  }
   if (issueCount >= 3) return 'High';
   if (!['Approved', 'Conditional Approved', 'Conditionally Approved'].includes(record.avlStatus)) return 'High';
   if (record.reconciliationStatus === 'Mismatch') return 'High';
   if (record.coaAvailable !== 'Yes') return 'Medium';
-  if (record.complianceStatus === 'Alert' || record.complianceStatus === 'Action') return 'Medium';
+  if (record.complianceStatus === 'OOS') return 'High';
+  if (['OOT', 'Alert', 'Action'].includes(record.complianceStatus)) return 'Medium';
   return 'Low';
 }
 
@@ -210,6 +327,7 @@ export function summarizePackingRecords(records: PackingMaterialMonitoringRecord
     expiredMaterials: records.filter((r) => isMaterialExpired(r.expDate)).length,
     highRisk: records.filter((r) => r.riskLevel === 'High' || r.riskLevel === 'Critical').length,
     deviationTriggered: records.filter((r) => r.deviationRequired || r.linkedDeviationNumber).length,
+    oosTriggered: records.filter((r) => r.oosRequired || r.linkedOosNumber || r.complianceStatus === 'OOS').length,
   };
 }
 

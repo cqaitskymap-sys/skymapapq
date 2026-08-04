@@ -60,9 +60,9 @@ export default function CreatePqrPage() {
     try {
       const pqrNumber = pqrPreview || await generatePqrNumber(selected.product_code, reviewYear);
       const { id } = await createPqrDocument({
-        company_name: 'Skymap Pharmaceuticals Pvt. Ltd., Roorkee',
-        site_name: 'Roorkee Plant',
-        address: 'Roorkee, Uttarakhand, India',
+        company_name: String(process.env.NEXT_PUBLIC_COMPANY_NAME || profile?.full_name || 'Organization'),
+        site_name: String(selected.product_code ? `${selected.product_code} Site` : 'Manufacturing Site'),
+        address: '',
         document_title: `Product Quality Review for ${selected.product_name}`,
         product_name: selected.product_name,
         product_id: selected.id,
@@ -73,7 +73,7 @@ export default function CreatePqrPage() {
         pqr_number: pqrNumber,
         page_number: '1',
         revision_number: '00',
-        format_number: 'SOP/QA/055/F01-03',
+        format_number: '',
         review_period_from: periodFrom,
         review_period_to: periodTo,
         pqr_year: reviewYear,
@@ -101,7 +101,8 @@ export default function CreatePqrPage() {
         role: profile?.role,
       });
 
-      toast.success('PQR created with auto-generated data from all modules');
+      toast.success('PQR created');
+      // Prefer modern create wizard for new work; legacy detail still works for pqr_documents
       router.push(`/dashboard/pqr/${id}`);
     } catch (e) {
       toast.error((e as Error).message || 'Failed to create PQR');

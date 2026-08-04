@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { ProductAccessGuard } from '@/components/admin/products/product-access-guard';
 import { ProductForm } from '@/components/admin/products/product-form';
-import { ProductBulkImport } from '@/components/admin/products/product-bulk-import';
 import { PageHeader } from '@/components/admin/dashboard/page-header';
 import { ErrorCard } from '@/components/admin/dashboard/error-card';
 import { useAuth } from '@/contexts/auth-context';
@@ -44,7 +43,6 @@ function CreateProductContent() {
   return (
     <div className="space-y-6">
       <PageHeader title="Create Product" description="Add a new pharmaceutical product master record" basePath="/admin" />
-      <ProductBulkImport auditMeta={auditMeta} onImported={() => router.push('/admin/products')} />
       <ProductForm onSubmit={onSubmit} onCancel={() => router.push('/admin/products')} submitting={submitting} />
     </div>
   );

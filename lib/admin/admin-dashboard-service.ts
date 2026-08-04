@@ -309,7 +309,6 @@ export async function fetchAdminDashboardData(
       safeCount(ADMIN_COLLECTIONS.users, [where('userStatus', '==', 'Pending Approval')], warnings),
       safeCount(ADMIN_COLLECTIONS.auditLogs, [], warnings),
       safeCount(ADMIN_COLLECTIONS.auditTrail, [], warnings),
-      safeCount('training_assignments', [where('status', 'in', ['Assigned', 'In Progress', 'Overdue'])], warnings),
       safeCount('sop_reviews', [where('status', '==', 'in_progress')], warnings),
       countOpenRecords('capa_records', 'status', ['Closed', 'closed'], warnings),
       countOpenRecords('deviations', 'status', ['Closed', 'closed'], warnings),
@@ -337,7 +336,7 @@ export async function fetchAdminDashboardData(
 
   const [
     totalUsers, activeUsers, inactiveUsers, lockedUsers, totalRoles, totalDepartments,
-    totalSites, pendingApprovalCount, auditLogCount, auditTrailCount, pendingTrainings,
+    totalSites, pendingApprovalCount, auditLogCount, auditTrailCount,
     pendingSopReviews, openCapa, openDeviations, openAudits, openRisks, totalEquipment,
     openComplaints, openChangeControls, openValidations, unreadNotifications,
   ] = metrics;
@@ -497,7 +496,6 @@ export async function fetchAdminDashboardData(
   return {
     kpis,
     moduleKpis: [
-      { label: 'Pending Trainings', value: pendingTrainings, href: '/training/assignments' },
       { label: 'Pending SOP Reviews', value: pendingSopReviews, href: '/qms/documents/sop' },
       { label: 'Open CAPA', value: openCapa, href: '/qms/capa' },
       { label: 'Open Deviations', value: openDeviations, href: '/qms/deviation' },

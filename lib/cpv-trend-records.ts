@@ -107,6 +107,7 @@ export const trendAnalysisFormSchema = z.object({
   conclusion: z.string().trim().default(''),
   recommendation: z.string().trim().default(''),
   remarks: z.string().trim().default(''),
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => {
   const from = new Date(d.reviewPeriodFrom);
   const to = new Date(d.reviewPeriodTo);
@@ -143,9 +144,42 @@ export interface TrendAnalysisRecord extends TrendAnalysisFormData, Record<strin
   batchCount: number;
   dataPointsCount: number;
   mean: number;
+  median: number;
+  mode: number | null;
   minimumValue: number;
   maximumValue: number;
+  range: number;
+  variance: number;
   standardDeviation: number;
+  movingAverage: number;
+  weightedAverage: number;
+  rollingAverage: number;
+  regressionSlope: number;
+  regressionIntercept: number;
+  regressionR2: number;
+  correlation: number;
+  covariance: number;
+  zScoreMean: number;
+  sigmaLevel: number;
+  cp: number;
+  cpk: number;
+  pp: number;
+  ppk: number;
+  ucl: number;
+  lcl: number;
+  ewmaLast: number;
+  cusumHighLast: number;
+  cusumLowLast: number;
+  outlierCount: number;
+  forecastNext: number;
+  forecastSeries: number[];
+  processDriftDetected: boolean;
+  qualityDegradation: boolean;
+  healthScore: number;
+  confidenceScore: number;
+  aiRecommendation: string;
+  goldenBatchNumber: string;
+  goldenBatchDelta: number;
   trendDirection: typeof TREND_DIRECTIONS[number];
   trendStatus: typeof TREND_STATUSES[number];
   riskLevel: typeof RISK_LEVELS[number];
@@ -154,12 +188,17 @@ export interface TrendAnalysisRecord extends TrendAnalysisFormData, Record<strin
   alertCount: number;
   actionCount: number;
   capaSuggested: boolean;
+  deviationRequired: boolean;
   generatedBy: string;
   generatedDate: string;
   reviewedBy: string;
   reviewDate: string;
+  approvedBy: string;
+  approvalDate: string;
   status: typeof WORKFLOW_STATUSES[number];
   linkedRiskId: string;
+  linkedDeviationNumber: string;
+  linkedCapaNumber: string;
   isLocked: boolean;
   chartData: TrendChartPoint[];
   sourcePreview: TrendSourcePoint[];
@@ -188,9 +227,42 @@ export interface TrendCalculationResult {
   batchCount: number;
   dataPointsCount: number;
   mean: number;
+  median: number;
+  mode: number | null;
   minimumValue: number;
   maximumValue: number;
+  range: number;
+  variance: number;
   standardDeviation: number;
+  movingAverage: number;
+  weightedAverage: number;
+  rollingAverage: number;
+  regressionSlope: number;
+  regressionIntercept: number;
+  regressionR2: number;
+  correlation: number;
+  covariance: number;
+  zScoreMean: number;
+  sigmaLevel: number;
+  cp: number;
+  cpk: number;
+  pp: number;
+  ppk: number;
+  ucl: number;
+  lcl: number;
+  ewmaLast: number;
+  cusumHighLast: number;
+  cusumLowLast: number;
+  outlierCount: number;
+  forecastNext: number;
+  forecastSeries: number[];
+  processDriftDetected: boolean;
+  qualityDegradation: boolean;
+  healthScore: number;
+  confidenceScore: number;
+  aiRecommendation: string;
+  goldenBatchNumber: string;
+  goldenBatchDelta: number;
   trendDirection: typeof TREND_DIRECTIONS[number];
   trendStatus: typeof TREND_STATUSES[number];
   riskLevel: typeof RISK_LEVELS[number];
@@ -199,6 +271,7 @@ export interface TrendCalculationResult {
   alertCount: number;
   actionCount: number;
   capaSuggested: boolean;
+  deviationRequired: boolean;
   chartData: TrendChartPoint[];
   values: number[];
 }
@@ -386,20 +459,123 @@ function evaluateTrendRisk(
   return 'Low';
 }
 
-export function calculateTrendAnalysis(points: TrendSourcePoint[], parameterName = ''): TrendCalculationResult {
-  const sorted = points
-    .filter((p) => Number.isFinite(p.value))
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+function linearRegression(values: number[]): { slope: number; intercept: number; r2: number } {
+  const n = values.length;
+  if (n < 2) return { slope: 0, intercept: values[0] || 0, r2: 0 };
+  let sumX = 0;
+  let sumY = 0;
+  let sumXY = 0;
+  let sumXX = 0;
+  let sumYY = 0;
+  for (let i = 0; i < n; i++) {
+    const x = i;
+    const y = values[i];
+    sumX += x;
+    sumY += y;
+    sumXY += x * y;
+    sumXX += x * x;
+    sumYY += y * y;
+  }
+  const denom = n * sumXX - sumX * sumX;
+  const slope = denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
+  const intercept = (sumY - slope * sumX) / n;
+  const ssTot = sumYY - (sumY * sumY) / n;
+  const ssRes = values.reduce((s, y, i) => {
+    const pred = intercept + slope * i;
+    return s + (y - pred) ** 2;
+  }, 0);
+  const r2 = ssTot === 0 ? 1 : Math.max(0, Math.min(1, 1 - ssRes / ssTot));
+  return { slope, intercept, r2 };
+}
 
-  const values = sorted.map((p) => p.value);
-  const batchCount = new Set(sorted.map((p) => p.batchNumber)).size;
-  const empty: TrendCalculationResult = {
+function computeEwma(values: number[], lambda = 0.2): number[] {
+  if (!values.length) return [];
+  const out: number[] = [values[0]];
+  for (let i = 1; i < values.length; i++) {
+    out.push(lambda * values[i] + (1 - lambda) * out[i - 1]);
+  }
+  return out;
+}
+
+function computeCusum(values: number[], mean: number, k = 0.5): { high: number[]; low: number[] } {
+  const high: number[] = [];
+  const low: number[] = [];
+  let sh = 0;
+  let sl = 0;
+  values.forEach((v) => {
+    sh = Math.max(0, sh + (v - mean) - k);
+    sl = Math.max(0, sl + (mean - v) - k);
+    high.push(round(sh));
+    low.push(round(sl));
+  });
+  return { high, low };
+}
+
+function buildAiRecommendation(input: {
+  direction: typeof TREND_DIRECTIONS[number];
+  status: typeof TREND_STATUSES[number];
+  drift: boolean;
+  oos: number;
+  oot: number;
+  cpk: number;
+  slope: number;
+  parameterName: string;
+  health: number;
+}): string {
+  const tips: string[] = [];
+  if (input.oos > 0) tips.push(`${input.oos} OOS point(s) on ${input.parameterName} — initiate deviation investigation.`);
+  if (input.oot > 0) tips.push(`${input.oot} OOT signal(s) — tighten monitoring and review control strategy.`);
+  if (input.drift) tips.push('Process drift detected — compare against golden batch and evaluate special causes.');
+  if (input.direction === 'Increasing' || input.direction === 'Decreasing') {
+    tips.push(`${input.direction} trend (slope ${round(input.slope, 4)}) — forecast risk of specification breach.`);
+  }
+  if (input.cpk > 0 && input.cpk < 1.33) tips.push(`Cpk ${input.cpk} below pharma target (≥1.33) — reduce variation or re-center.`);
+  if (input.status === 'Action Required') tips.push('Action limits breached — escalate to QA and consider CAPA.');
+  if (!tips.length) tips.push(`Trend ${input.status} with health score ${input.health} — continue routine CPV monitoring.`);
+  return tips.join(' ');
+}
+
+function emptyCalc(batchCount: number, values: number[]): TrendCalculationResult {
+  return {
     batchCount,
     dataPointsCount: values.length,
     mean: 0,
+    median: 0,
+    mode: null,
     minimumValue: 0,
     maximumValue: 0,
+    range: 0,
+    variance: 0,
     standardDeviation: 0,
+    movingAverage: 0,
+    weightedAverage: 0,
+    rollingAverage: 0,
+    regressionSlope: 0,
+    regressionIntercept: 0,
+    regressionR2: 0,
+    correlation: 0,
+    covariance: 0,
+    zScoreMean: 0,
+    sigmaLevel: 0,
+    cp: 0,
+    cpk: 0,
+    pp: 0,
+    ppk: 0,
+    ucl: 0,
+    lcl: 0,
+    ewmaLast: 0,
+    cusumHighLast: 0,
+    cusumLowLast: 0,
+    outlierCount: 0,
+    forecastNext: 0,
+    forecastSeries: [],
+    processDriftDetected: false,
+    qualityDegradation: false,
+    healthScore: 0,
+    confidenceScore: 0,
+    aiRecommendation: 'Insufficient data — collect at least 3 points.',
+    goldenBatchNumber: '',
+    goldenBatchDelta: 0,
     trendDirection: 'No Data',
     trendStatus: 'Insufficient Data',
     riskLevel: 'Low',
@@ -408,19 +584,55 @@ export function calculateTrendAnalysis(points: TrendSourcePoint[], parameterName
     alertCount: 0,
     actionCount: 0,
     capaSuggested: false,
+    deviationRequired: false,
     chartData: [],
     values,
   };
+}
 
-  if (values.length < 3) return empty;
+export function calculateTrendAnalysis(points: TrendSourcePoint[], parameterName = ''): TrendCalculationResult {
+  const sorted = points
+    .filter((p) => Number.isFinite(p.value))
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-  const mean = values.reduce((s, v) => s + v, 0) / values.length;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+  const values = sorted.map((p) => p.value);
+  const batchCount = new Set(sorted.map((p) => p.batchNumber)).size;
+  if (values.length < 3) return emptyCalc(batchCount, values);
+
+  const n = values.length;
+  const mean = values.reduce((s, v) => s + v, 0) / n;
+  const sortedVals = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(n / 2);
+  const median = n % 2 ? sortedVals[mid] : (sortedVals[mid - 1] + sortedVals[mid]) / 2;
+  const freq = new Map<number, number>();
+  sortedVals.forEach((v) => freq.set(v, (freq.get(v) || 0) + 1));
+  let mode: number | null = null;
+  let maxF = 1;
+  freq.forEach((f, v) => { if (f > maxF) { maxF = f; mode = v; } });
+
+  const min = sortedVals[0];
+  const max = sortedVals[n - 1];
+  const range = max - min;
+  const variance = n > 1 ? values.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1) : 0;
   const sd = Math.sqrt(variance);
+
+  const window = Math.min(5, n);
+  const recent = values.slice(-window);
+  const movingAverage = recent.reduce((s, v) => s + v, 0) / recent.length;
+  const weightSum = recent.reduce((s, _, i) => s + (i + 1), 0);
+  const weightedAverage = recent.reduce((s, v, i) => s + v * (i + 1), 0) / weightSum;
+  const rollingAverage = movingAverage;
+
+  const { slope, intercept, r2 } = linearRegression(values);
+  const xs = values.map((_, i) => i);
+  const xMean = (n - 1) / 2;
+  const cov = values.reduce((s, y, i) => s + (xs[i] - xMean) * (y - mean), 0) / (n - 1 || 1);
+  const xVar = xs.reduce((s, x) => s + (x - xMean) ** 2, 0) / (n - 1 || 1);
+  const correlation = sd > 0 && xVar > 0 ? cov / (Math.sqrt(xVar) * sd) : 0;
+
   const direction = detectTrendDirection(values);
   const consecutiveAlert = detectConsecutiveDirectionAlert(values);
+  const processDriftDetected = Math.abs(slope) > (sd || 1) * 0.05 && (direction === 'Increasing' || direction === 'Decreasing');
 
   let oosCount = 0;
   let ootCount = 0;
@@ -447,22 +659,119 @@ export function calculateTrendAnalysis(points: TrendSourcePoint[], parameterName
 
   if (consecutiveAlert) alertCount += 1;
 
+  let outlierCount = 0;
+  if (n >= 4) {
+    const q1 = sortedVals[Math.floor(n * 0.25)];
+    const q3 = sortedVals[Math.floor(n * 0.75)];
+    const iqr = q3 - q1;
+    outlierCount = sortedVals.filter((v) => v < q1 - 1.5 * iqr || v > q3 + 1.5 * iqr).length;
+  }
+
+  const lslCandidates = sorted.map((p) => p.lsl).filter((v): v is number => Number.isFinite(v));
+  const uslCandidates = sorted.map((p) => p.usl).filter((v): v is number => Number.isFinite(v));
+  const lsl = lslCandidates.length ? Math.min(...lslCandidates) : NaN;
+  const usl = uslCandidates.length ? Math.max(...uslCandidates) : NaN;
+  let cp = 0;
+  let cpk = 0;
+  let pp = 0;
+  let ppk = 0;
+  if (Number.isFinite(lsl) && Number.isFinite(usl) && usl > lsl && sd > 0) {
+    const withinSd = (() => {
+      const mrs = values.slice(1).map((v, i) => Math.abs(v - values[i]));
+      const mrBar = mrs.length ? mrs.reduce((s, v) => s + v, 0) / mrs.length : 0;
+      return mrBar > 0 ? mrBar / 1.128 : sd;
+    })();
+    cp = (usl - lsl) / (6 * withinSd);
+    cpk = Math.min((usl - mean) / (3 * withinSd), (mean - lsl) / (3 * withinSd));
+    pp = (usl - lsl) / (6 * sd);
+    ppk = Math.min((usl - mean) / (3 * sd), (mean - lsl) / (3 * sd));
+  }
+
+  const ucl = mean + 3 * sd;
+  const lcl = mean - 3 * sd;
+  const ewma = computeEwma(values);
+  const cusum = computeCusum(values, mean, sd * 0.5 || 0.5);
+  const forecastSeries = [1, 2, 3].map((h) => round(intercept + slope * (n - 1 + h)));
+  const forecastNext = forecastSeries[0] || round(mean);
+
+  const goldenSlice = sorted.slice(0, Math.max(1, Math.floor(n * 0.3)));
+  const goldenIdx = goldenSlice.reduce((best, p, i) => {
+    const d = Math.abs(p.value - mean);
+    return d < Math.abs(goldenSlice[best].value - mean) ? i : best;
+  }, 0);
+  const golden = goldenSlice[goldenIdx];
+  const goldenBatchNumber = golden?.batchNumber || '';
+  const goldenBatchDelta = golden ? round(Math.abs(values[n - 1] - golden.value)) : 0;
+
   let trendStatus: typeof TREND_STATUSES[number] = 'Normal';
   if (oosCount > 0) trendStatus = 'OOS';
   else if (actionCount > 0) trendStatus = 'Action Required';
   else if (ootCount > 0) trendStatus = 'OOT';
-  else if (alertCount > 0 || consecutiveAlert) trendStatus = 'Alert';
+  else if (alertCount > 0 || consecutiveAlert || processDriftDetected) trendStatus = 'Alert';
 
   const riskLevel = evaluateTrendRisk(trendStatus, parameterName);
-  const capaSuggested = oosCount > 0 || (alertCount + ootCount) >= 2;
+  const capaSuggested = oosCount > 0 || (alertCount + ootCount) >= 2 || processDriftDetected;
+  const deviationRequired = oosCount > 0 || trendStatus === 'Action Required';
+  const qualityDegradation = processDriftDetected || ootCount > 0 || (cpk > 0 && cpk < 1.0);
+
+  let healthScore = 100;
+  if (oosCount) healthScore -= Math.min(40, oosCount * 15);
+  if (ootCount) healthScore -= Math.min(25, ootCount * 8);
+  if (alertCount) healthScore -= Math.min(15, alertCount * 3);
+  if (processDriftDetected) healthScore -= 10;
+  if (outlierCount) healthScore -= Math.min(10, outlierCount * 2);
+  if (cpk > 0 && cpk < 1.33) healthScore -= 10;
+  healthScore = Math.max(0, Math.min(100, healthScore));
+
+  const confidenceScore = Math.max(20, Math.min(99, round(40 + Math.min(40, n * 2) + r2 * 20 - outlierCount * 2, 1)));
+  const sigmaLevel = cpk > 0 ? round(cpk * 3) : (sd > 0 ? round(Math.abs(mean) / sd) : 0);
+  const zScoreMean = sd > 0 ? round((values[n - 1] - mean) / sd) : 0;
+
+  const aiRecommendation = buildAiRecommendation({
+    direction, status: trendStatus, drift: processDriftDetected,
+    oos: oosCount, oot: ootCount, cpk: round(cpk), slope, parameterName, health: healthScore,
+  });
 
   return {
     batchCount,
-    dataPointsCount: values.length,
+    dataPointsCount: n,
     mean: round(mean),
+    median: round(median),
+    mode: mode == null ? null : round(mode),
     minimumValue: round(min),
     maximumValue: round(max),
+    range: round(range),
+    variance: round(variance),
     standardDeviation: round(sd),
+    movingAverage: round(movingAverage),
+    weightedAverage: round(weightedAverage),
+    rollingAverage: round(rollingAverage),
+    regressionSlope: round(slope, 6),
+    regressionIntercept: round(intercept),
+    regressionR2: round(r2, 4),
+    correlation: round(correlation, 4),
+    covariance: round(cov),
+    zScoreMean,
+    sigmaLevel,
+    cp: round(cp),
+    cpk: round(cpk),
+    pp: round(pp),
+    ppk: round(ppk),
+    ucl: round(ucl),
+    lcl: round(lcl),
+    ewmaLast: round(ewma[ewma.length - 1] || mean),
+    cusumHighLast: cusum.high[cusum.high.length - 1] || 0,
+    cusumLowLast: cusum.low[cusum.low.length - 1] || 0,
+    outlierCount,
+    forecastNext,
+    forecastSeries,
+    processDriftDetected,
+    qualityDegradation,
+    healthScore: round(healthScore, 1),
+    confidenceScore,
+    aiRecommendation,
+    goldenBatchNumber,
+    goldenBatchDelta,
     trendDirection: direction,
     trendStatus,
     riskLevel,
@@ -471,6 +780,7 @@ export function calculateTrendAnalysis(points: TrendSourcePoint[], parameterName
     alertCount,
     actionCount,
     capaSuggested,
+    deviationRequired,
     chartData,
     values,
   };

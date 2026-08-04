@@ -3,11 +3,12 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { toast } from 'sonner';
-import { Eye, EyeOff, FlaskConical, Loader2, UserPlus } from 'lucide-react';
+import { Eye, EyeOff, Loader2, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -68,11 +69,18 @@ export default function SignupPage() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 flex items-center justify-center p-4">
       <div className="relative w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 bg-blue-600 rounded-2xl shadow-lg mb-4">
-            <FlaskConical className="h-7 w-7 text-white" />
+          <div className="inline-flex items-center justify-center w-14 h-14 overflow-hidden rounded-2xl shadow-lg mb-4">
+            <Image
+              src="/logo-1.png"
+              alt="Skymap Pharmaceuticals"
+              width={56}
+              height={56}
+              className="h-14 w-14 object-contain"
+              priority
+            />
           </div>
           <h1 className="text-2xl font-bold text-white">Request Access</h1>
-          <p className="text-slate-400 text-sm">PharmaQMS Enterprise Platform</p>
+          <p className="text-slate-400 text-sm">SKYMAP QMS Enterprise Platform</p>
         </div>
 
         <Card className="border-slate-700/50 bg-slate-800/60 backdrop-blur-xl shadow-2xl">

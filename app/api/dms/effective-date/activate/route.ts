@@ -1,19 +1,14 @@
 import { NextResponse } from 'next/server';
 import { runScheduledEffectiveDateActivation } from '@/lib/effective-date-service';
+import { assertCronAuthorized } from '@/lib/cron-auth';
 
 /**
  * Cron endpoint for scheduled document activation.
  * Set EFFECTIVE_DATE_CRON_SECRET in env and pass as Authorization: Bearer <secret>
- * Configure in Cloud Scheduler, Vercel Cron, or Firebase scheduled functions caller.
  */
 export async function POST(request: Request) {
-  const secret = process.env.EFFECTIVE_DATE_CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get('authorization');
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-  }
+  const denied = assertCronAuthorized(request, 'EFFECTIVE_DATE_CRON_SECRET');
+  if (denied) return denied;
 
   try {
     const result = await runScheduledEffectiveDateActivation();

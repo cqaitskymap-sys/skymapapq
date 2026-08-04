@@ -1,8 +1,10 @@
 'use client';
 
 import { useCallback, useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useForm } from 'react-hook-form';
-import { RefreshCw, Shield, KeyRound, Clock, Upload, Palette, Wrench, Cloud, FileText, Settings } from 'lucide-react';
+import { toast } from 'sonner';
+import { RefreshCw, Shield, KeyRound, Clock, Upload, Palette, Wrench, Cloud, FileText, Settings, ExternalLink, Download } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -24,6 +26,7 @@ import {
   type FirebaseHealthStatus,
 } from '@/lib/admin/system-settings-service';
 import { fetchCompanySites } from '@/lib/admin/company-site-service';
+import { useSystemSettings } from '@/contexts/system-settings-context';
 import { SettingsStatusBadge } from './settings-status-badge';
 import { useSettingsForm, SectionSaveBar } from './system-settings-shell';
 
@@ -39,10 +42,13 @@ export function GeneralSettingsSection() {
     );
   }, []);
 
-  const onSave = async () => {
+  const onSave = async (opts: { changeReason: string; esignConfirmed: boolean }) => {
     setSaving(true);
-    await saveSection('general', form.getValues());
-    setSaving(false);
+    try {
+      await saveSection('general', form.getValues(), opts);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -124,10 +130,13 @@ export function SecuritySettingsSection() {
   const [saving, setSaving] = useState(false);
   const form = useForm<Partial<SystemSettings>>({ defaultValues: settings });
 
-  const onSave = async () => {
+  const onSave = async (opts: { changeReason: string; esignConfirmed: boolean }) => {
     setSaving(true);
-    await saveSection('security', form.getValues());
-    setSaving(false);
+    try {
+      await saveSection('security', form.getValues(), opts);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const toggles: { key: keyof SystemSettings; label: string }[] = [
@@ -169,10 +178,13 @@ export function PasswordPolicySection() {
   const form = useForm<Partial<SystemSettings>>({ defaultValues: settings });
   const preview = buildPasswordPolicyPreview({ ...settings, ...form.watch() } as SystemSettings);
 
-  const onSave = async () => {
+  const onSave = async (opts: { changeReason: string; esignConfirmed: boolean }) => {
     setSaving(true);
-    await saveSection('password policy', form.getValues());
-    setSaving(false);
+    try {
+      await saveSection('password policy', form.getValues(), opts);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const toggles: { key: keyof SystemSettings; label: string }[] = [
@@ -216,10 +228,13 @@ export function SessionSettingsSection() {
   const [saving, setSaving] = useState(false);
   const form = useForm<Partial<SystemSettings>>({ defaultValues: settings });
 
-  const onSave = async () => {
+  const onSave = async (opts: { changeReason: string; esignConfirmed: boolean }) => {
     setSaving(true);
-    await saveSection('session', form.getValues());
-    setSaving(false);
+    try {
+      await saveSection('session', form.getValues(), opts);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -245,10 +260,13 @@ export function FileUploadSettingsSection() {
   const [saving, setSaving] = useState(false);
   const form = useForm<Partial<SystemSettings>>({ defaultValues: settings });
 
-  const onSave = async () => {
+  const onSave = async (opts: { changeReason: string; esignConfirmed: boolean }) => {
     setSaving(true);
-    await saveSection('file upload', form.getValues());
-    setSaving(false);
+    try {
+      await saveSection('file upload', form.getValues(), opts);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const toggles: { key: keyof SystemSettings; label: string }[] = [
@@ -284,10 +302,13 @@ export function ThemeSettingsSection() {
   const [saving, setSaving] = useState(false);
   const form = useForm<Partial<SystemSettings>>({ defaultValues: settings });
 
-  const onSave = async () => {
+  const onSave = async (opts: { changeReason: string; esignConfirmed: boolean }) => {
     setSaving(true);
-    await saveSection('theme', form.getValues());
-    setSaving(false);
+    try {
+      await saveSection('theme', form.getValues(), opts);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -340,10 +361,13 @@ export function MaintenanceSettingsSection() {
   const form = useForm<Partial<SystemSettings>>({ defaultValues: settings });
   const canEditMaintenance = canEditSecurity;
 
-  const onSave = async () => {
+  const onSave = async (opts: { changeReason: string; esignConfirmed: boolean }) => {
     setSaving(true);
-    await saveSection('maintenance', form.getValues());
-    setSaving(false);
+    try {
+      await saveSection('maintenance', form.getValues(), opts);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -398,9 +422,16 @@ export function FirebaseHealthSection() {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base flex items-center gap-2"><Cloud className="h-5 w-5" />Firebase Health</CardTitle>
-        <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-          <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />Refresh
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link href="/admin/firebase-status">
+              <ExternalLink className="h-4 w-4 mr-1" />Full Status
+            </Link>
+          </Button>
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
+            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />Refresh
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {health && (
@@ -434,10 +465,13 @@ export function SystemLogsSection() {
   const [saving, setSaving] = useState(false);
   const form = useForm<Partial<SystemSettings>>({ defaultValues: settings });
 
-  const onSave = async () => {
+  const onSave = async (opts: { changeReason: string; esignConfirmed: boolean }) => {
     setSaving(true);
-    await saveSection('system logs', form.getValues());
-    setSaving(false);
+    try {
+      await saveSection('system logs', form.getValues(), opts);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -461,6 +495,363 @@ export function SystemLogsSection() {
             onCheckedChange={(v) => form.setValue('enablePerformanceLogs', v)} />
         </div>
         <SectionSaveBar section="system logs" onSave={onSave} readOnly={!canEditSecurity} saving={saving} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function useSectionSave(section: string) {
+  const { settings, saveSection, canEdit, canEditSecurity } = useSettingsForm();
+  const [saving, setSaving] = useState(false);
+  const form = useForm<Partial<SystemSettings>>({ defaultValues: settings });
+  const onSave = async (opts: { changeReason: string; esignConfirmed: boolean }) => {
+    setSaving(true);
+    try {
+      await saveSection(section, form.getValues(), opts);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return { form, saving, onSave, canEdit, canEditSecurity, settings };
+}
+
+export function OrganizationSettingsSection() {
+  const { form, saving, onSave, canEdit } = useSectionSave('organization');
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Organization Settings</CardTitle></CardHeader>
+      <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-2"><Label>Company Name</Label><Input {...form.register('companyName')} disabled={!canEdit} /></div>
+        <div className="space-y-2"><Label>Business Unit</Label><Input {...form.register('businessUnit')} disabled={!canEdit} /></div>
+        <div className="space-y-2"><Label>Default Dashboard</Label><Input {...form.register('defaultDashboard')} disabled={!canEdit} /></div>
+        <div className="space-y-2"><Label>Landing Page</Label><Input {...form.register('landingPage')} disabled={!canEdit} /></div>
+        <div className="sm:col-span-2"><SectionSaveBar section="organization" onSave={onSave} readOnly={!canEdit} saving={saving} /></div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function BrandingSettingsSection() {
+  const { form, saving, onSave, canEdit } = useSectionSave('branding');
+  const primary = form.watch('primaryColor') || '#2563eb';
+  const secondary = form.watch('secondaryColor') || '#0f172a';
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader><CardTitle className="text-base">Branding</CardTitle></CardHeader>
+        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-2"><Label>Company Logo URL</Label><Input {...form.register('companyLogo')} disabled={!canEdit} /></div>
+          <div className="space-y-2"><Label>Favicon URL</Label><Input {...form.register('faviconUrl')} disabled={!canEdit} /></div>
+          <div className="space-y-2"><Label>Primary Color</Label><Input type="color" {...form.register('primaryColor')} disabled={!canEdit} className="h-10 w-20" /></div>
+          <div className="space-y-2"><Label>Secondary Color</Label><Input type="color" {...form.register('secondaryColor')} disabled={!canEdit} className="h-10 w-20" /></div>
+          <div className="sm:col-span-2"><SectionSaveBar section="branding" onSave={onSave} readOnly={!canEdit} saving={saving} /></div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle className="text-sm">Live Preview</CardTitle></CardHeader>
+        <CardContent>
+          <div className="rounded-lg border p-6" style={{ borderColor: primary, background: `linear-gradient(135deg, ${primary}15, ${secondary}10)` }}>
+            <p className="text-lg font-semibold" style={{ color: primary }}>{form.watch('applicationName') || 'Application'}</p>
+            <p className="text-sm text-muted-foreground">Theme preview — primary / secondary accents</p>
+            <div className="mt-3 flex gap-2">
+              <span className="h-8 w-8 rounded" style={{ background: primary }} />
+              <span className="h-8 w-8 rounded" style={{ background: secondary }} />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+export function LocalizationSettingsSection() {
+  const { form, saving, onSave, canEdit } = useSectionSave('localization');
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Localization</CardTitle></CardHeader>
+      <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-2"><Label>Default Language</Label><Input {...form.register('defaultLanguage')} disabled={!canEdit} /></div>
+        <div className="space-y-2"><Label>Number Format</Label><Input {...form.register('numberFormat')} disabled={!canEdit} placeholder="en-IN" /></div>
+        <div className="space-y-2">
+          <Label>Timezone</Label>
+          <Select value={form.watch('timezone')} disabled={!canEdit} onValueChange={(v) => form.setValue('timezone', v)}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>{TIMEZONE_OPTIONS.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Currency</Label>
+          <Select value={form.watch('defaultCurrency')} disabled={!canEdit} onValueChange={(v) => form.setValue('defaultCurrency', v as SystemSettings['defaultCurrency'])}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>{CURRENCY_OPTIONS.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="sm:col-span-2"><SectionSaveBar section="localization" onSave={onSave} readOnly={!canEdit} saving={saving} /></div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function AuthenticationSettingsSection() {
+  const { form, saving, onSave, canEditSecurity } = useSectionSave('authentication');
+  const toggles: { key: keyof SystemSettings; label: string }[] = [
+    { key: 'enableTwoFactorAuth', label: 'Multi-Factor Authentication (MFA)' },
+    { key: 'enableGoogleLogin', label: 'Google Login (ready)' },
+    { key: 'enableMicrosoftLogin', label: 'Microsoft Login (ready)' },
+    { key: 'ssoReady', label: 'Single Sign-On Ready' },
+    { key: 'ldapReady', label: 'LDAP / Active Directory Ready' },
+    { key: 'oauthReady', label: 'OAuth Ready' },
+  ];
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Authentication Settings</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        {toggles.map(({ key, label }) => (
+          <div key={key} className="flex items-center justify-between">
+            <Label>{label}</Label>
+            <Switch checked={Boolean(form.watch(key))} disabled={!canEditSecurity}
+              onCheckedChange={(v) => form.setValue(key, v as never)} />
+          </div>
+        ))}
+        <p className="text-xs text-muted-foreground">Flags mark platform readiness. Secrets and IdP credentials remain in secure environment configuration.</p>
+        <SectionSaveBar section="authentication" onSave={onSave} readOnly={!canEditSecurity} saving={saving} />
+      </CardContent>
+    </Card>
+  );
+}
+
+export function ComplianceSettingsSection() {
+  const { form, saving, onSave, canEditSecurity } = useSectionSave('compliance');
+  const toggles: { key: keyof SystemSettings; label: string }[] = [
+    { key: 'enableFda21CfrPart11', label: 'FDA 21 CFR Part 11' },
+    { key: 'enableEuGmpAnnex11', label: 'EU GMP Annex 11' },
+    { key: 'enableAlcoaPlus', label: 'ALCOA+' },
+    { key: 'enableWhoGmp', label: 'WHO GMP' },
+    { key: 'enablePicsGmp', label: 'PIC/S GMP' },
+    { key: 'enableIchQ10', label: 'ICH Q10' },
+    { key: 'enableIso27001', label: 'ISO 27001' },
+    { key: 'enableGamp5', label: 'GAMP 5' },
+    { key: 'enableESignature', label: 'Electronic Signature' },
+    { key: 'enableAuditTrail', label: 'Audit Trail' },
+    { key: 'enableDocumentVersioning', label: 'Document Versioning' },
+    { key: 'enableApprovalWorkflow', label: 'Approval Workflow' },
+  ];
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Compliance Settings</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        {toggles.map(({ key, label }) => (
+          <div key={key} className="flex items-center justify-between">
+            <Label>{label}</Label>
+            <Switch checked={Boolean(form.watch(key))} disabled={!canEditSecurity}
+              onCheckedChange={(v) => form.setValue(key, v as never)} />
+          </div>
+        ))}
+        <div className="space-y-2"><Label>Record Retention Days</Label>
+          <Input type="number" {...form.register('recordRetentionDays', { valueAsNumber: true })} disabled={!canEditSecurity} />
+        </div>
+        <SectionSaveBar section="compliance" onSave={onSave} readOnly={!canEditSecurity} saving={saving} />
+      </CardContent>
+    </Card>
+  );
+}
+
+export function PerformanceSettingsSection() {
+  const { form, saving, onSave, canEdit } = useSectionSave('performance');
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Performance Settings</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between">
+          <Label>Enable Caching</Label>
+          <Switch checked={form.watch('enableCaching')} disabled={!canEdit}
+            onCheckedChange={(v) => form.setValue('enableCaching', v)} />
+        </div>
+        <div className="space-y-2"><Label>Cache TTL (seconds)</Label>
+          <Input type="number" {...form.register('cacheTtlSeconds', { valueAsNumber: true })} disabled={!canEdit} />
+        </div>
+        <div className="flex items-center justify-between">
+          <Label>Enable Beta Features</Label>
+          <Switch checked={form.watch('enableBetaFeatures')} disabled={!canEdit}
+            onCheckedChange={(v) => form.setValue('enableBetaFeatures', v)} />
+        </div>
+        <div className="flex items-center justify-between">
+          <Label>Enable Experimental Features</Label>
+          <Switch checked={form.watch('enableExperimentalFeatures')} disabled={!canEdit}
+            onCheckedChange={(v) => form.setValue('enableExperimentalFeatures', v)} />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Module-level feature flags are managed in <Link href="/admin/module-configuration" className="text-blue-600 underline">Module Configuration</Link>.
+        </p>
+        <SectionSaveBar section="performance" onSave={onSave} readOnly={!canEdit} saving={saving} />
+      </CardContent>
+    </Card>
+  );
+}
+
+export function ApiSettingsSection() {
+  const { form, saving, onSave, canEditSecurity } = useSectionSave('api');
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">API Settings</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between">
+          <Label>Enable REST API surface</Label>
+          <Switch checked={form.watch('enableRestApi')} disabled={!canEditSecurity}
+            onCheckedChange={(v) => form.setValue('enableRestApi', v)} />
+        </div>
+        <div className="flex items-center justify-between">
+          <Label>Enable Webhooks</Label>
+          <Switch checked={form.watch('enableWebhooks')} disabled={!canEditSecurity}
+            onCheckedChange={(v) => form.setValue('enableWebhooks', v)} />
+        </div>
+        <p className="text-xs text-muted-foreground">API keys and JWT secrets are never stored in Firestore — configure via secure environment variables.</p>
+        <SectionSaveBar section="api" onSave={onSave} readOnly={!canEditSecurity} saving={saving} />
+      </CardContent>
+    </Card>
+  );
+}
+
+export function IntegrationsSettingsSection() {
+  const { form, saving, onSave, canEditSecurity } = useSectionSave('integrations');
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Integration Settings</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between">
+          <Label>SMTP Configured</Label>
+          <Switch checked={form.watch('smtpConfigured')} disabled={!canEditSecurity}
+            onCheckedChange={(v) => form.setValue('smtpConfigured', v)} />
+        </div>
+        <div className="flex items-center justify-between">
+          <Label>SMS Gateway Configured</Label>
+          <Switch checked={form.watch('smsGatewayConfigured')} disabled={!canEditSecurity}
+            onCheckedChange={(v) => form.setValue('smsGatewayConfigured', v)} />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+          {[
+            { href: '/admin/firebase-status', label: 'Firebase' },
+            { href: '/admin/system-health', label: 'System Health' },
+            { href: '/admin/notifications', label: 'Notification Engine' },
+            { href: '/admin/email-sms-templates', label: 'Email & SMS Templates' },
+            { href: '/admin/backup', label: 'Backup' },
+            { href: '/admin/module-configuration', label: 'Module Configuration' },
+          ].map((i) => (
+            <Link key={i.href} href={i.href} className="rounded border px-3 py-2 hover:bg-slate-50 dark:hover:bg-slate-900">{i.label}</Link>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">ERP / SAP / LIMS / MES / SCADA / Azure / AWS connectors are marked ready via environment configuration — no secrets in this document.</p>
+        <SectionSaveBar section="integrations" onSave={onSave} readOnly={!canEditSecurity} saving={saving} />
+      </CardContent>
+    </Card>
+  );
+}
+
+export function VersionsSettingsSection() {
+  const [rows, setRows] = useState<Awaited<ReturnType<typeof import('@/lib/admin/system-settings-service').fetchSystemSettingsVersions>>>([]);
+  const [loading, setLoading] = useState(true);
+  const [rolling, setRolling] = useState<string | null>(null);
+  const { canEditSecurity, onSaved } = useSettingsForm();
+  const { refresh: refreshGlobal } = useSystemSettings();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { fetchSystemSettingsVersions } = await import('@/lib/admin/system-settings-service');
+    setRows(await fetchSystemSettingsVersions());
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const rollback = async (versionId: string) => {
+    setRolling(versionId);
+    try {
+      const { rollbackSystemSettings } = await import('@/lib/admin/system-settings-service');
+      const result = await rollbackSystemSettings(versionId, {
+        changeReason: `Rollback to version ${versionId}`,
+        esignConfirmed: true,
+      });
+      if (result) {
+        onSaved(result);
+        await refreshGlobal();
+        toast.success('Configuration rolled back');
+        await load();
+      }
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setRolling(null);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="text-base">Configuration Versions</CardTitle>
+        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+          <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />Refresh
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No versions yet. Save a section after Cloud Functions deploy.</p>
+        ) : rows.map((r) => (
+          <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 border rounded-md px-3 py-2 text-sm">
+            <div>
+              <p className="font-medium">v{r.version} · {r.action || 'Update'} · {r.section}</p>
+              <p className="text-xs text-muted-foreground">
+                {r.createdAt ? new Date(r.createdAt).toLocaleString() : '—'} · {r.createdByName || '—'}
+                {r.electronicSignatureApplied ? ' · E-Sign' : ''}
+              </p>
+              <p className="text-xs text-muted-foreground">{r.reason}</p>
+            </div>
+            {canEditSecurity && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={rolling === (r.id || r.versionId)}
+                onClick={() => rollback(r.id || r.versionId || '')}
+              >
+                Rollback
+              </Button>
+            )}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+export function ReportsSettingsSection() {
+  const { settings } = useSettingsForm();
+  const handle = async () => {
+    if (!settings) return;
+    const { exportSystemSettingsJson, logSystemSettingsExport } = await import('@/lib/admin/system-settings-service');
+    const json = exportSystemSettingsJson(settings);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `system_settings_report_${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    await logSystemSettingsExport('System settings compliance report export');
+    toast.success('Report exported');
+  };
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">System Settings Reports</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Export the current published configuration for compliance review. Version history is available under Versions.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+          <div className="border rounded-md p-3">Config version: <strong>{settings.configVersion || 1}</strong></div>
+          <div className="border rounded-md p-3">Status: <strong>{settings.configurationStatus || 'Published'}</strong></div>
+          <div className="border rounded-md p-3">Environment: <strong>{settings.environment}</strong></div>
+          <div className="border rounded-md p-3">Retention: <strong>{settings.recordRetentionDays || 2555} days</strong></div>
+        </div>
+        <Button onClick={handle}><Download className="h-4 w-4 mr-1" />Export Compliance Snapshot</Button>
       </CardContent>
     </Card>
   );

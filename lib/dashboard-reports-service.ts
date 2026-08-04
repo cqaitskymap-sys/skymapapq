@@ -65,7 +65,10 @@ async function fetchCollectionReports(
       .map((docSnap) => normalizeReportRow(docSnap.id, docSnap.data() as Record<string, unknown>, source))
       .filter((row) => !row.reportType.toLowerCase().includes('deleted'));
   } catch (error) {
-    console.error(`fetchCollectionReports ${source.collection}`, error);
+    const code = String((error as { code?: string })?.code || '');
+    if (code !== 'permission-denied') {
+      console.error(`fetchCollectionReports ${source.collection}`, error);
+    }
     return [];
   }
 }

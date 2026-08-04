@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeRole } from '@/lib/permissions';
 import type { PqrBatchReviewRecord } from '@/lib/pqr-batch-review-records';
 import { computeBatchSummary } from '@/lib/pqr-batch-review-records';
 import type { PqrMaterialReviewRecord } from '@/lib/pqr-material-review-records';
@@ -85,8 +86,12 @@ export interface PqrSummaryMetrics {
   totalCapa: number;
   openCapa: number;
   closedCapa: number;
+  totalChangeControls: number;
+  openChangeControls: number;
+  closedChangeControls: number;
   averageCpk: number;
   averagePpk: number;
+  hasCapabilityData: boolean;
   totalRisks: number;
   highRisks: number;
   criticalRisks: number;
@@ -97,6 +102,7 @@ export interface PqrSummaryMetrics {
   criticalOos: boolean;
   sterilityFailure: boolean;
   endotoxinFailure: boolean;
+  avgYieldPct: number | null;
 }
 
 export interface PqrSummaryConclusionRecord {
@@ -139,6 +145,10 @@ export interface PqrSummaryConclusionRecord {
   finalApprovalComments: string;
   eSignatureApplied: boolean;
   eSignatureMeaning: string;
+  eSignatureReason?: string;
+  eSignatureAt?: string;
+  eSignatureBy?: string;
+  eSignatureByName?: string;
   metrics: PqrSummaryMetrics;
   status: PqrSummaryStatus | string;
   createdAt: string;
@@ -179,8 +189,14 @@ export type SummaryApprovalFormData = z.infer<typeof summaryApprovalSchema>;
 const str = (v: unknown, fb = '') => (v === null || v === undefined ? fb : String(v));
 const num = (v: unknown, fb = 0) => { const n = Number(v); return Number.isFinite(n) ? n : fb; };
 
+/** Honest compliance % — empty denominators are 0, never invented 100%. */
 function pct(compliant: number, total: number): number {
-  return total ? Math.round((compliant / total) * 1000) / 10 : 100;
+  return total > 0 ? Math.round((compliant / total) * 1000) / 10 : 0;
+}
+
+export function formatCompliancePct(value: number, total: number): string {
+  if (total <= 0) return 'N/A';
+  return `${value}%`;
 }
 
 function isOpenStatus(status: string): boolean {
@@ -200,8 +216,12 @@ export function computeQualityScore(metrics: Partial<PqrSummaryMetrics>): { scor
   score -= (metrics.openCapa ?? 0) * 3;
   score -= (metrics.criticalRisks ?? 0) * 5;
   score -= (metrics.highRisks ?? 0) * 3;
-  if ((metrics.averageCpk ?? 1.33) < 1.33) score -= 5;
-  if ((metrics.averageCpk ?? 1.33) < 1.0) score -= 10;
+  // Only apply Cpk deductions when real capability data exists (never invent a low-Cpk penalty from 0).
+  if (metrics.hasCapabilityData) {
+    const cpk = metrics.averageCpk ?? 0;
+    if (cpk > 0 && cpk < 1.33) score -= 5;
+    if (cpk > 0 && cpk < 1.0) score -= 10;
+  }
   if (metrics.recallExists) score -= 10;
   score = Math.max(0, Math.min(100, Math.round(score)));
   const band = PQR_QUALITY_SCORE_BANDS.find((b) => score >= b.min)?.label || 'Unsatisfactory';
@@ -246,14 +266,17 @@ export function buildSummaryMetrics(data: ConsolidatedReviewData): PqrSummaryMet
   const openDev = data.deviations.filter((d) => isOpenStatus(str(d.status))).length;
   const openOos = data.oos.filter((d) => isOpenStatus(str(d.status))).length;
   const openCapa = data.capa.filter((d) => isOpenStatus(str(d.status))).length;
+  const openCc = data.changeControls.filter((d) => isOpenStatus(str(d.status))).length;
   const closedDev = data.deviations.length - openDev;
   const closedOos = data.oos.length - openOos;
   const closedCapa = data.capa.length - openCapa;
+  const closedCc = data.changeControls.length - openCc;
 
   const cpkVals = data.capability.map((c) => num(c.cpk ?? c.Cpk)).filter((v) => v > 0);
   const ppkVals = data.capability.map((c) => num(c.ppk ?? c.Ppk)).filter((v) => v > 0);
   const avgCpk = cpkVals.length ? cpkVals.reduce((a, b) => a + b, 0) / cpkVals.length : 0;
   const avgPpk = ppkVals.length ? ppkVals.reduce((a, b) => a + b, 0) / ppkVals.length : 0;
+  const hasCapabilityData = cpkVals.length > 0 || ppkVals.length > 0;
 
   const highRisks = data.risks.filter((r) => str(r.riskLevel).toLowerCase() === 'high').length
     + data.stability.filter((r) => r.riskLevel === 'High').length
@@ -262,6 +285,13 @@ export function buildSummaryMetrics(data: ConsolidatedReviewData): PqrSummaryMet
     + data.stability.filter((r) => r.riskLevel === 'Critical').length
     + data.equipment.filter((r) => r.riskLevel === 'Critical').length
     + utilSum.openCriticalRisks;
+
+  // Unique risk inventory: QMS risk docs + section-derived high/critical (not double-counted into total).
+  const totalRisks = data.risks.length + highRisks + criticalRisks
+    - data.risks.filter((r) => {
+      const lvl = str(r.riskLevel).toLowerCase();
+      return lvl === 'high' || lvl === 'critical';
+    }).length;
 
   const recallExists = data.recalls.length > 0;
   const repeatedOot = stabSum.ootResults >= 2 || data.stability.some((r) => r.ootCount >= 2);
@@ -273,6 +303,11 @@ export function buildSummaryMetrics(data: ConsolidatedReviewData): PqrSummaryMet
     r.parameterName.toLowerCase().includes('endotoxin') && (r.resultStatus === 'OOS' || r.oosCount > 0),
   );
 
+  const matActive = data.materials.filter((r) => !r.isDeleted).length;
+  const packActive = data.packaging.filter((r) => !r.isDeleted).length;
+  const equipActive = data.equipment.filter((r) => !r.isDeleted).length;
+  const stabActive = data.stability.filter((r) => !r.isDeleted).length;
+
   const partial: PqrSummaryMetrics = {
     totalBatchesManufactured: batchSum.totalBatches,
     totalReleasedBatches: batchSum.releasedBatches,
@@ -280,15 +315,13 @@ export function buildSummaryMetrics(data: ConsolidatedReviewData): PqrSummaryMet
     batchReleasePct: batchSum.releasePct,
     batchRejectionPct: batchSum.rejectionPct,
     totalMaterialLots: matSum.totalMaterialLots,
-    materialCompliancePct: pct(matCompliant, data.materials.filter((r) => !r.isDeleted).length),
+    materialCompliancePct: pct(matCompliant, matActive),
     totalPackagingLots: packSum.totalPackagingLots,
-    packagingCompliancePct: pct(packCompliant, data.packaging.filter((r) => !r.isDeleted).length),
-    equipmentCompliancePct: pct(equipCompliant, data.equipment.filter((r) => !r.isDeleted).length),
+    packagingCompliancePct: pct(packCompliant, packActive),
+    equipmentCompliancePct: pct(equipCompliant, equipActive),
     utilityCompliancePct: pct(utilCompliant, utilTotal),
     environmentalCompliancePct: pct(envCompliant, envTotal),
-    stabilityCompliancePct: stabSum.compliantResults && data.stability.length
-      ? pct(stabSum.compliantResults, data.stability.filter((r) => !r.isDeleted).length)
-      : 100,
+    stabilityCompliancePct: pct(stabSum.compliantResults, stabActive),
     totalDeviations: data.deviations.length,
     openDeviations: openDev,
     closedDeviations: closedDev,
@@ -298,9 +331,13 @@ export function buildSummaryMetrics(data: ConsolidatedReviewData): PqrSummaryMet
     totalCapa: data.capa.length,
     openCapa,
     closedCapa,
+    totalChangeControls: data.changeControls.length,
+    openChangeControls: openCc,
+    closedChangeControls: closedCc,
     averageCpk: Math.round(avgCpk * 1000) / 1000,
     averagePpk: Math.round(avgPpk * 1000) / 1000,
-    totalRisks: data.risks.length + highRisks + criticalRisks,
+    hasCapabilityData,
+    totalRisks: Math.max(0, totalRisks),
     highRisks,
     criticalRisks,
     recallExists,
@@ -308,6 +345,7 @@ export function buildSummaryMetrics(data: ConsolidatedReviewData): PqrSummaryMet
     criticalOos,
     sterilityFailure,
     endotoxinFailure,
+    avgYieldPct: batchSum.avgYieldPct,
     qualityScore: 0,
     qualityScoreBand: 'Excellent',
   };
@@ -335,7 +373,11 @@ export function determineOverallStatuses(metrics: PqrSummaryMetrics): {
     };
   }
 
-  if (metrics.repeatedOot || metrics.highRisks > 0 || metrics.averageCpk < 1.33) {
+  if (
+    metrics.repeatedOot
+    || metrics.highRisks > 0
+    || (metrics.hasCapabilityData && metrics.averageCpk > 0 && metrics.averageCpk < 1.33)
+  ) {
     return {
       overallQualityStatus: 'Satisfactory With Observation',
       overallProcessStatus: 'Controlled With Monitoring',
@@ -347,7 +389,8 @@ export function determineOverallStatuses(metrics: PqrSummaryMetrics): {
 
   if (
     metrics.batchReleasePct >= 95 && !metrics.criticalOos && !metrics.recallExists
-    && metrics.averageCpk >= 1.33 && metrics.criticalRisks === 0
+    && metrics.criticalRisks === 0
+    && (!metrics.hasCapabilityData || metrics.averageCpk >= 1.33)
   ) {
     return {
       overallQualityStatus: 'Satisfactory',
@@ -391,8 +434,11 @@ export function generateRecommendations(metrics: PqrSummaryMetrics, data: Consol
   const items: string[] = [];
   if (metrics.batchRejectionPct > 5) items.push('Review manufacturing process and investigate batch rejection trends.');
   if (metrics.repeatedOot) items.push('Increase monitoring frequency and perform trend investigation for repeated OOT.');
-  if (metrics.averageCpk < 1.33) items.push('Perform process capability improvement activity for parameters with Cpk below 1.33.');
+  if (metrics.hasCapabilityData && metrics.averageCpk > 0 && metrics.averageCpk < 1.33) {
+    items.push('Perform process capability improvement activity for parameters with Cpk below 1.33.');
+  }
   if (metrics.totalDeviations >= 3) items.push('Review effectiveness of CAPA implementation for repeated deviations.');
+  if (metrics.openChangeControls > 0) items.push('Close open change controls impacting the product within approved timelines.');
   if (computePackagingSummary(data.packaging).reconciliationMismatchCount > 0) {
     items.push('Strengthen packaging material reconciliation process.');
   }
@@ -401,7 +447,9 @@ export function generateRecommendations(metrics: PqrSummaryMetrics, data: Consol
   }
   if (metrics.openCapa > 0) items.push('Close open CAPA records within approved timelines.');
   if (metrics.openOos > 0) items.push('Complete investigation and disposition of open OOS records.');
-  if (metrics.stabilityCompliancePct < 100) items.push('Evaluate stability data trends and assess shelf-life impact.');
+  if (metrics.stabilityCompliancePct < 100 && data.stability.filter((r) => !r.isDeleted).length > 0) {
+    items.push('Evaluate stability data trends and assess shelf-life impact.');
+  }
   if (!items.length) {
     items.push('Continue routine PQR monitoring and maintain current control strategy.');
   }
@@ -447,7 +495,7 @@ export function generateSectionNarratives(
         : ''
     }`,
     riskAssessmentSummary:
-      `${metrics.totalRisks} risk items identified; ${metrics.highRisks} high and ${metrics.criticalRisks} critical.`,
+      `${metrics.totalRisks} risk items identified; ${metrics.highRisks} high and ${metrics.criticalRisks} critical. ${metrics.totalChangeControls} change control(s) linked (${metrics.openChangeControls} open).`,
     trendAnalysisSummary:
       `${data.trends.length + data.capaTrends.length} trend analysis record(s) reviewed during the period.${
         data.capaTrends.length
@@ -455,11 +503,15 @@ export function generateSectionNarratives(
           : ''
       }`,
     cpvSummary:
-      `${data.cpvReviews.length} CPV review(s); average Cpk ${metrics.averageCpk}, average Ppk ${metrics.averagePpk}.`,
+      `${data.cpvReviews.length} CPV review(s); ${
+        metrics.hasCapabilityData
+          ? `average Cpk ${metrics.averageCpk}, average Ppk ${metrics.averagePpk}.`
+          : 'no process capability values available for the review period.'
+      }`,
   };
 }
 
-export function buildSummaryCharts(data: ConsolidatedReviewData, metrics: PqrSummaryMetrics): PqrSummaryCharts {
+export function buildSummaryCharts(data: ConsolidatedReviewData, metrics?: PqrSummaryMetrics | null): PqrSummaryCharts {
   const monthCount = (rows: Record<string, unknown>[], field = 'createdAt') => {
     const map = new Map<string, number>();
     rows.forEach((r) => {
@@ -513,32 +565,46 @@ export function buildSummaryCharts(data: ConsolidatedReviewData, metrics: PqrSum
     oosTrend: monthCount(data.oos),
     capaTrend: monthCount(data.capa),
     riskDistribution: Array.from(riskMap.entries()).map(([level, count]) => ({ level, count })),
-    qualityScoreTrend: [{ month: 'Current', score: metrics.qualityScore }],
+    qualityScoreTrend: metrics ? [{ month: 'Current', score: metrics.qualityScore }] : [],
     cpkTrend: Array.from(cpkMonth.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([month, v]) => ({
       month, cpk: v.n ? Math.round((v.sum / v.n) * 1000) / 1000 : 0,
     })),
     stabilityTrend: Array.from(stabMonth.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([month, v]) => ({ month, ...v })),
-    yieldTrend: [],
+    yieldTrend: (() => {
+      const yieldMonth = new Map<string, { sum: number; n: number }>();
+      data.batches.forEach((b) => {
+        const m = (b.releaseDate || b.manufacturingDate || b.createdAt || '').slice(0, 7);
+        const y = b.yieldPct != null ? Number(b.yieldPct) : NaN;
+        if (!m || !Number.isFinite(y)) return;
+        const cur = yieldMonth.get(m) || { sum: 0, n: 0 };
+        cur.sum += y;
+        cur.n += 1;
+        yieldMonth.set(m, cur);
+      });
+      return Array.from(yieldMonth.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([month, v]) => ({ month, yield: v.n ? Math.round((v.sum / v.n) * 10) / 10 : 0 }));
+    })(),
   };
 }
 
 export function canViewSummaryConclusion(role?: string): boolean {
   return [
-    'super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'qa_executive',
+    'super_admin', 'admin', 'qa_manager', 'head_qa', 'qa_executive',
     'management', 'production_manager', 'auditor', 'viewer',
-  ].includes(role || '');
+  ].includes(normalizeRole(role));
 }
 
 export function canManageSummaryConclusion(role?: string): boolean {
-  return ['super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'qa_executive'].includes(role || '');
+  return ['super_admin', 'admin', 'qa_manager', 'head_qa', 'qa_executive'].includes(normalizeRole(role));
 }
 
 export function canApproveSummaryConclusion(role?: string): boolean {
-  return ['super_admin', 'admin', 'head_qa', 'qa_manager', 'management'].includes(role || '');
+  return ['super_admin', 'admin', 'head_qa', 'qa_manager', 'management'].includes(normalizeRole(role));
 }
 
 export function canExportSummaryConclusion(role?: string): boolean {
-  return ['super_admin', 'admin', 'qa', 'head_qa', 'qa_manager', 'auditor', 'management'].includes(role || '');
+  return ['super_admin', 'admin', 'qa_manager', 'head_qa', 'auditor', 'management'].includes(normalizeRole(role));
 }
 
 export function qualityStatusColor(status: string): string {
@@ -576,4 +642,218 @@ export function scoreGaugeColor(score: number): string {
   if (score >= 60) return '#d97706';
   if (score >= 40) return '#ea580c';
   return '#dc2626';
+}
+
+export interface PqrSectionCompletionItem {
+  key: string;
+  label: string;
+  href: string;
+  status: 'Completed' | 'In Progress' | 'Pending';
+  recordCount: number;
+  lastUpdated?: string;
+}
+
+export interface PqrApprovalReadinessItem {
+  key: string;
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface PqrSummaryFinding {
+  id: string;
+  category: string;
+  sourceModule: string;
+  description: string;
+  severity: 'Critical' | 'Major' | 'Minor' | 'Observation';
+  status: string;
+}
+
+/** Derive section completion from consolidated review data (source-of-truth counts). */
+export function buildSectionCompletion(data: ConsolidatedReviewData): PqrSectionCompletionItem[] {
+  const countActive = <T extends { isDeleted?: boolean; updatedAt?: string }>(rows: T[]) =>
+    rows.filter((r) => !r.isDeleted);
+  const latest = <T extends { updatedAt?: string }>(rows: T[]) =>
+    rows.map((r) => r.updatedAt || '').filter(Boolean).sort().reverse()[0];
+
+  const sections: Array<{ key: string; label: string; href: string; rows: Array<{ isDeleted?: boolean; updatedAt?: string }> }> = [
+    { key: 'batches', label: 'Batch Review', href: '/pqr/batches', rows: data.batches },
+    { key: 'materials', label: 'Material Review', href: '/pqr/materials', rows: data.materials },
+    { key: 'packaging', label: 'Packaging Review', href: '/pqr/packaging', rows: data.packaging },
+    { key: 'equipment', label: 'Equipment Review', href: '/pqr/equipment-review', rows: data.equipment },
+    { key: 'utility', label: 'Utility & Environmental Review', href: '/pqr/utility-review', rows: data.utilityEnv },
+    { key: 'stability', label: 'Stability Review', href: '/pqr/stability', rows: data.stability },
+  ];
+
+  return sections.map((s) => {
+    const active = countActive(s.rows);
+    return {
+      key: s.key,
+      label: s.label,
+      href: s.href,
+      status: active.length > 0 ? 'Completed' : 'Pending',
+      recordCount: active.length,
+      lastUpdated: latest(active),
+    };
+  });
+}
+
+/** Approval readiness checklist based on real consolidated data + summary record. */
+export function buildApprovalReadiness(
+  data: ConsolidatedReviewData,
+  record: PqrSummaryConclusionRecord | null,
+): { ready: boolean; items: PqrApprovalReadinessItem[] } {
+  const sections = buildSectionCompletion(data);
+  const items: PqrApprovalReadinessItem[] = sections.map((s) => ({
+    key: s.key,
+    label: `${s.label} Complete`,
+    ok: s.status === 'Completed',
+    detail: s.status === 'Completed'
+      ? `${s.recordCount} record(s)`
+      : 'No review records for this PQR',
+  }));
+
+  items.push({
+    key: 'summary',
+    label: 'Summary Generated',
+    ok: Boolean(record?.executiveSummary?.trim() && record?.finalConclusion?.trim()),
+    detail: record?.executiveSummary?.trim() ? `Status: ${record.status}` : 'Generate and complete executive summary / conclusion',
+  });
+  items.push({
+    key: 'recommendations',
+    label: 'Recommendations Present',
+    ok: Boolean(record?.recommendations?.trim()),
+    detail: record?.recommendations?.trim() ? 'Present' : 'Recommendations required',
+  });
+  items.push({
+    key: 'critical',
+    label: 'Critical Findings Reviewed',
+    ok: !(record?.metrics?.criticalOos || record?.metrics?.sterilityFailure || record?.metrics?.endotoxinFailure)
+      || Boolean(record?.finalApprovalComments?.trim() || record?.qaComments?.trim()),
+    detail: (record?.metrics?.criticalOos || record?.metrics?.sterilityFailure)
+      ? 'Critical OOS/sterility/endotoxin findings require documented review comments'
+      : 'No blocking critical findings',
+  });
+  items.push({
+    key: 'open-critical-capa',
+    label: 'Open CAPA Reviewed',
+    ok: (record?.metrics?.openCapa ?? 0) === 0 || Boolean(record?.qaComments?.trim()),
+    detail: (record?.metrics?.openCapa ?? 0) > 0
+      ? `${record?.metrics?.openCapa} open CAPA — document review in QA comments`
+      : 'No open CAPA',
+  });
+  items.push({
+    key: 'esign',
+    label: 'E-Signature (on Approve)',
+    ok: record?.status === 'Approved' ? Boolean(record.eSignatureApplied) : true,
+    detail: record?.status === 'Approved'
+      ? (record.eSignatureApplied ? 'Applied' : 'Missing')
+      : 'Required at final approval',
+  });
+
+  return { ready: items.every((i) => i.ok), items };
+}
+
+/** Traceable findings derived from source review data — not invented. */
+export function buildSummaryFindings(data: ConsolidatedReviewData, metrics: PqrSummaryMetrics): PqrSummaryFinding[] {
+  const findings: PqrSummaryFinding[] = [];
+  let n = 0;
+  const nextId = () => `FND-${++n}`;
+
+  if (metrics.sterilityFailure) {
+    findings.push({
+      id: nextId(), category: 'Stability', sourceModule: 'Stability Review',
+      description: 'Sterility failure observed in stability results', severity: 'Critical', status: 'Open',
+    });
+  }
+  if (metrics.endotoxinFailure) {
+    findings.push({
+      id: nextId(), category: 'Stability', sourceModule: 'Stability Review',
+      description: 'Endotoxin failure observed in stability results', severity: 'Critical', status: 'Open',
+    });
+  }
+  if (metrics.criticalOos) {
+    findings.push({
+      id: nextId(), category: 'OOS', sourceModule: 'OOS / Stability',
+      description: `${metrics.totalOos} OOS record(s) in review scope (${metrics.openOos} open)`,
+      severity: 'Critical', status: metrics.openOos > 0 ? 'Open' : 'Closed',
+    });
+  }
+  if (metrics.repeatedOot) {
+    findings.push({
+      id: nextId(), category: 'OOT', sourceModule: 'Stability Review',
+      description: 'Repeated OOT results observed during the review period',
+      severity: 'Major', status: 'Open',
+    });
+  }
+  if (metrics.totalRejectedBatches > 0) {
+    findings.push({
+      id: nextId(), category: 'Batch', sourceModule: 'Batch Review',
+      description: `${metrics.totalRejectedBatches} rejected batch(es)`,
+      severity: 'Major', status: 'Closed',
+    });
+  }
+  if (metrics.openDeviations > 0) {
+    findings.push({
+      id: nextId(), category: 'Deviation', sourceModule: 'Deviation',
+      description: `${metrics.openDeviations} open deviation(s) in review scope`,
+      severity: 'Major', status: 'Open',
+    });
+  }
+  if (metrics.openCapa > 0) {
+    findings.push({
+      id: nextId(), category: 'CAPA', sourceModule: 'CAPA',
+      description: `${metrics.openCapa} open CAPA record(s)`,
+      severity: 'Major', status: 'Open',
+    });
+  }
+  if (metrics.criticalRisks > 0) {
+    findings.push({
+      id: nextId(), category: 'Risk', sourceModule: 'Risk Assessment',
+      description: `${metrics.criticalRisks} critical risk item(s)`,
+      severity: 'Critical', status: 'Open',
+    });
+  }
+  if (metrics.recallExists) {
+    findings.push({
+      id: nextId(), category: 'Recall', sourceModule: 'Recall',
+      description: 'Recall record(s) linked to product/period',
+      severity: 'Critical', status: 'Open',
+    });
+  }
+  const util = computeUtilityEnvSummary(data.utilityEnv);
+  if (util.excursionRecords > 0) {
+    findings.push({
+      id: nextId(), category: 'Utility/Environmental', sourceModule: 'Utility & Environmental Review',
+      description: `${util.excursionRecords} utility/environmental excursion(s)`,
+      severity: 'Major', status: 'Open',
+    });
+  }
+  if (!findings.length && metrics.qualityScore >= 75) {
+    findings.push({
+      id: nextId(), category: 'Observation', sourceModule: 'Summary',
+      description: 'No critical or major adverse findings identified from consolidated PQR data',
+      severity: 'Observation', status: 'Closed',
+    });
+  }
+  return findings;
+}
+
+/** Normalize legacy/partial summary docs so UI never crashes on missing metrics. */
+export function normalizeSummaryMetrics(raw?: Partial<PqrSummaryMetrics> | null): PqrSummaryMetrics {
+  const empty = buildSummaryMetrics({
+    batches: [], materials: [], packaging: [], equipment: [], utilityEnv: [], stability: [],
+    deviations: [], oos: [], capa: [], changeControls: [], risks: [], cpvReviews: [],
+    capability: [], trends: [], capaTrends: [], recalls: [],
+  });
+  if (!raw) return empty;
+  return {
+    ...empty,
+    ...raw,
+    hasCapabilityData: Boolean(raw.hasCapabilityData ?? ((raw.averageCpk ?? 0) > 0 || (raw.averagePpk ?? 0) > 0)),
+    totalChangeControls: raw.totalChangeControls ?? 0,
+    openChangeControls: raw.openChangeControls ?? 0,
+    closedChangeControls: raw.closedChangeControls ?? 0,
+    avgYieldPct: raw.avgYieldPct ?? null,
+  };
 }

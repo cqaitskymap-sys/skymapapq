@@ -17,6 +17,7 @@ import {
   cpvProductFormSchema,
   CPV_PRODUCT_STATUSES,
   CPV_REVIEW_FREQUENCIES,
+  CPV_LIFECYCLE_STATUSES,
   type CpvProductFormData,
   type CpvProductRecord,
 } from '@/lib/cpv-product-master';
@@ -35,6 +36,64 @@ interface CpvProductFormSheetProps {
   submitting?: boolean;
 }
 
+const emptyDefaults: CpvProductFormData = {
+  adminProductId: '',
+  productCode: '',
+  productName: '',
+  genericName: '',
+  brandName: '',
+  productCategory: '',
+  productFamily: '',
+  strength: '',
+  dosageForm: '',
+  routeOfAdministration: '',
+  packSize: '',
+  packType: '',
+  market: 'Domestic',
+  manufacturingSite: '',
+  businessUnit: '',
+  department: '',
+  productOwner: '',
+  lifecycleStatus: '',
+  developmentStage: '',
+  validationStatus: '',
+  marketStatus: '',
+  version: '1.0',
+  revision: '00',
+  effectiveDate: '',
+  reviewDate: '',
+  expiryDate: '',
+  description: '',
+  manufacturingProcess: '',
+  productionLine: '',
+  manufacturingArea: '',
+  packagingProcess: '',
+  shelfLife: '',
+  storageCondition: '',
+  standardBatchSize: '',
+  manufacturingLicenseNumber: '',
+  mfrNumber: '',
+  bmrNumber: '',
+  bprNumber: '',
+  specificationNumber: '',
+  specificationVersion: '',
+  stpNumber: '',
+  upperSpecificationLimit: '',
+  lowerSpecificationLimit: '',
+  targetValue: '',
+  samplingPlan: '',
+  testingFrequency: '',
+  cpvStatus: 'Draft',
+  cpvStartDate: today(),
+  cpvReviewFrequency: 'Yearly',
+  cpvOwner: '',
+  qaReviewer: '',
+  remarks: '',
+  changeReason: '',
+  linkedCppParameterIds: [],
+  linkedCqaParameterIds: [],
+};
+
 export function CpvProductFormSheet({
   open,
   onOpenChange,
@@ -45,51 +104,45 @@ export function CpvProductFormSheet({
 }: CpvProductFormSheetProps) {
   const form = useForm<CpvProductFormData>({
     resolver: zodResolver(cpvProductFormSchema),
-    defaultValues: {
-      adminProductId: '',
-      productCode: '',
-      productName: '',
-      genericName: '',
-      brandName: '',
-      strength: '',
-      dosageForm: '',
-      routeOfAdministration: '',
-      packSize: '',
-      market: 'Domestic',
-      shelfLife: '',
-      storageCondition: '',
-      standardBatchSize: '',
-      manufacturingLicenseNumber: '',
-      mfrNumber: '',
-      bmrNumber: '',
-      bprNumber: '',
-      specificationNumber: '',
-      stpNumber: '',
-      cpvStatus: 'Active',
-      cpvStartDate: today(),
-      cpvReviewFrequency: 'Yearly',
-      cpvOwner: '',
-      qaReviewer: '',
-      remarks: '',
-      linkedCppParameterIds: [],
-      linkedCqaParameterIds: [],
-    },
+    defaultValues: emptyDefaults,
   });
 
   useEffect(() => {
     if (!open) return;
     if (editing) {
       form.reset({
+        ...emptyDefaults,
         adminProductId: editing.adminProductId,
         productCode: editing.productCode,
         productName: editing.productName,
         genericName: editing.genericName,
         brandName: editing.brandName,
+        productCategory: editing.productCategory || '',
+        productFamily: editing.productFamily || '',
         strength: editing.strength,
         dosageForm: editing.dosageForm,
         routeOfAdministration: editing.routeOfAdministration,
         packSize: editing.packSize,
-        market: editing.market,
+        packType: editing.packType || '',
+        market: editing.market || 'Domestic',
+        manufacturingSite: editing.manufacturingSite || '',
+        businessUnit: editing.businessUnit || '',
+        department: editing.department || '',
+        productOwner: editing.productOwner || '',
+        lifecycleStatus: editing.lifecycleStatus || '',
+        developmentStage: editing.developmentStage || '',
+        validationStatus: editing.validationStatus || '',
+        marketStatus: editing.marketStatus || '',
+        version: editing.version || '1.0',
+        revision: editing.revision || '00',
+        effectiveDate: editing.effectiveDate || '',
+        reviewDate: editing.reviewDate || '',
+        expiryDate: editing.expiryDate || '',
+        description: editing.description || '',
+        manufacturingProcess: editing.manufacturingProcess || '',
+        productionLine: editing.productionLine || '',
+        manufacturingArea: editing.manufacturingArea || '',
+        packagingProcess: editing.packagingProcess || '',
         shelfLife: editing.shelfLife,
         storageCondition: editing.storageCondition,
         standardBatchSize: editing.standardBatchSize,
@@ -98,46 +151,25 @@ export function CpvProductFormSheet({
         bmrNumber: editing.bmrNumber,
         bprNumber: editing.bprNumber,
         specificationNumber: editing.specificationNumber,
+        specificationVersion: editing.specificationVersion || '',
         stpNumber: editing.stpNumber,
+        upperSpecificationLimit: editing.upperSpecificationLimit || '',
+        lowerSpecificationLimit: editing.lowerSpecificationLimit || '',
+        targetValue: editing.targetValue || '',
+        samplingPlan: editing.samplingPlan || '',
+        testingFrequency: editing.testingFrequency || '',
         cpvStatus: editing.cpvStatus,
         cpvStartDate: editing.cpvStartDate,
         cpvReviewFrequency: editing.cpvReviewFrequency,
         cpvOwner: editing.cpvOwner,
         qaReviewer: editing.qaReviewer,
         remarks: editing.remarks,
+        changeReason: '',
         linkedCppParameterIds: editing.linkedCppParameterIds || [],
         linkedCqaParameterIds: editing.linkedCqaParameterIds || [],
       });
     } else {
-      form.reset({
-        adminProductId: '',
-        productCode: '',
-        productName: '',
-        genericName: '',
-        brandName: '',
-        strength: '',
-        dosageForm: '',
-        routeOfAdministration: '',
-        packSize: '',
-        market: 'Domestic',
-        shelfLife: '',
-        storageCondition: '',
-        standardBatchSize: '',
-        manufacturingLicenseNumber: '',
-        mfrNumber: '',
-        bmrNumber: '',
-        bprNumber: '',
-        specificationNumber: '',
-        stpNumber: '',
-        cpvStatus: 'Active',
-        cpvStartDate: today(),
-        cpvReviewFrequency: 'Yearly',
-        cpvOwner: '',
-        qaReviewer: '',
-        remarks: '',
-        linkedCppParameterIds: [],
-        linkedCqaParameterIds: [],
-      });
+      form.reset({ ...emptyDefaults, cpvStartDate: today() });
     }
   }, [open, editing, form]);
 
@@ -159,11 +191,11 @@ export function CpvProductFormSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
+      <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{editing ? 'Edit CPV Product' : 'Add Product to CPV'}</SheetTitle>
           <SheetDescription>
-            Register or update a product under Continued Process Verification scope.
+            Register or update a product under Continued Process Verification. Change reason is required (ALCOA+ / Part 11).
           </SheetDescription>
         </SheetHeader>
         <Form {...form}>
@@ -208,6 +240,12 @@ export function CpvProductFormSheet({
               <FormField control={form.control} name="brandName" render={({ field }) => (
                 <FormItem><FormLabel>Brand Name</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
+              <FormField control={form.control} name="productCategory" render={({ field }) => (
+                <FormItem><FormLabel>Category</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="productFamily" render={({ field }) => (
+                <FormItem><FormLabel>Product Family</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
               <FormField control={form.control} name="strength" render={({ field }) => (
                 <FormItem><FormLabel>Strength *</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
               )} />
@@ -226,6 +264,9 @@ export function CpvProductFormSheet({
               <FormField control={form.control} name="packSize" render={({ field }) => (
                 <FormItem><FormLabel>Pack Size</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
+              <FormField control={form.control} name="packType" render={({ field }) => (
+                <FormItem><FormLabel>Pack Type</FormLabel><FormControl><Input {...field} placeholder="e.g. Blister, Vial" /></FormControl></FormItem>
+              )} />
               <FormField control={form.control} name="market" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Market</FormLabel>
@@ -237,6 +278,36 @@ export function CpvProductFormSheet({
                   </Select>
                 </FormItem>
               )} />
+              <FormField control={form.control} name="manufacturingSite" render={({ field }) => (
+                <FormItem><FormLabel>Manufacturing Site</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="businessUnit" render={({ field }) => (
+                <FormItem><FormLabel>Business Unit</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="department" render={({ field }) => (
+                <FormItem><FormLabel>Department</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="lifecycleStatus" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Lifecycle</FormLabel>
+                  <Select value={field.value || '__none'} onValueChange={(v) => field.onChange(v === '__none' ? '' : v)}>
+                    <FormControl><SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
+                    <SelectContent>
+                      <SelectItem value="__none">—</SelectItem>
+                      {CPV_LIFECYCLE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="version" render={({ field }) => (
+                <FormItem><FormLabel>Version</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="revision" render={({ field }) => (
+                <FormItem><FormLabel>Revision</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="effectiveDate" render={({ field }) => (
+                <FormItem><FormLabel>Effective Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
+              )} />
               <FormField control={form.control} name="shelfLife" render={({ field }) => (
                 <FormItem><FormLabel>Shelf Life</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
@@ -246,6 +317,12 @@ export function CpvProductFormSheet({
               <FormField control={form.control} name="standardBatchSize" render={({ field }) => (
                 <FormItem><FormLabel>Standard Batch Size</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
+              <FormField control={form.control} name="productionLine" render={({ field }) => (
+                <FormItem><FormLabel>Production Line</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="manufacturingArea" render={({ field }) => (
+                <FormItem><FormLabel>Manufacturing Area</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
               <FormField control={form.control} name="manufacturingLicenseNumber" render={({ field }) => (
                 <FormItem><FormLabel>Mfg License No.</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
@@ -253,13 +330,25 @@ export function CpvProductFormSheet({
                 <FormItem><FormLabel>MFR Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="bmrNumber" render={({ field }) => (
-                <FormItem><FormLabel>BMR Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>BMR / MBR</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="bprNumber" render={({ field }) => (
                 <FormItem><FormLabel>BPR Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="specificationNumber" render={({ field }) => (
                 <FormItem><FormLabel>Specification Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="specificationVersion" render={({ field }) => (
+                <FormItem><FormLabel>Spec Version</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="lowerSpecificationLimit" render={({ field }) => (
+                <FormItem><FormLabel>LSL</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="upperSpecificationLimit" render={({ field }) => (
+                <FormItem><FormLabel>USL</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="targetValue" render={({ field }) => (
+                <FormItem><FormLabel>Target</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="stpNumber" render={({ field }) => (
                 <FormItem><FormLabel>STP Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
@@ -298,10 +387,20 @@ export function CpvProductFormSheet({
               )} />
             </div>
 
+            <FormField control={form.control} name="manufacturingProcess" render={({ field }) => (
+              <FormItem><FormLabel>Manufacturing Process</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
+            )} />
+            <FormField control={form.control} name="description" render={({ field }) => (
+              <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
+            )} />
             <FormField control={form.control} name="remarks" render={({ field }) => (
+              <FormItem><FormLabel>Remarks</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
+            )} />
+            <FormField control={form.control} name="changeReason" render={({ field }) => (
               <FormItem>
-                <FormLabel>Remarks</FormLabel>
-                <FormControl><Textarea rows={3} {...field} /></FormControl>
+                <FormLabel>Change Reason * (ALCOA+ / Part 11)</FormLabel>
+                <FormControl><Textarea rows={2} placeholder="Describe why this create/update is being performed" {...field} /></FormControl>
+                <FormMessage />
               </FormItem>
             )} />
 

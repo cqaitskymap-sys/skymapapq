@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import type { PqrOption } from '@/lib/pqr-batch-review-records';
 import {
+  DEFAULT_STABILITY_LIMITS,
   DEFAULT_STABILITY_PARAMETERS,
   STABILITY_PULLING_INTERVALS,
   STABILITY_STORAGE_CONDITIONS,
@@ -40,9 +41,9 @@ const defaults = (pqr: PqrOption): StabilityReviewFormData => ({
   studyStartDate: '',
   parameterName: 'Assay',
   observedResult: '',
-  lowerLimit: 90,
-  upperLimit: 110,
-  unit: '%',
+  lowerLimit: 0,
+  upperLimit: 1,
+  unit: '',
   resultStatus: 'Complies',
   samplePullStatus: 'Pending',
   ootCount: 0,
@@ -107,6 +108,14 @@ export function StabilityReviewFormDialog({
         <DialogHeader><DialogTitle>{record ? 'Edit Stability Review' : 'Add Stability Review Record'}</DialogTitle></DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <div className="rounded-md border bg-slate-50 p-3 text-sm grid gap-1 sm:grid-cols-2">
+              <p><span className="text-muted-foreground">PQR:</span> {pqr.pqrNumber}</p>
+              <p><span className="text-muted-foreground">Product:</span> {pqr.productName} ({pqr.productCode})</p>
+              <p><span className="text-muted-foreground">Period:</span> {pqr.reviewPeriodFrom || '—'} — {pqr.reviewPeriodTo || '—'}</p>
+              {(pqr.strength || pqr.dosageForm) && (
+                <p><span className="text-muted-foreground">Strength / Form:</span> {[pqr.strength, pqr.dosageForm].filter(Boolean).join(' / ')}</p>
+              )}
+            </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField control={form.control} name="batchNumber" render={({ field }) => (
                 <FormItem><FormLabel>Batch Number *</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
@@ -140,7 +149,18 @@ export function StabilityReviewFormDialog({
               )} />
               <FormField control={form.control} name="parameterName" render={({ field }) => (
                 <FormItem><FormLabel>Parameter *</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
+                  <Select
+                    value={field.value}
+                    onValueChange={(v) => {
+                      field.onChange(v);
+                      const lim = DEFAULT_STABILITY_LIMITS[v];
+                      if (lim) {
+                        form.setValue('lowerLimit', lim.lower);
+                        form.setValue('upperLimit', lim.upper);
+                        form.setValue('unit', lim.unit || '');
+                      }
+                    }}
+                  >
                     <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                     <SelectContent>{DEFAULT_STABILITY_PARAMETERS.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent>
                   </Select>
@@ -162,10 +182,13 @@ export function StabilityReviewFormDialog({
                 <FormItem><FormLabel>Actual Pulling Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
               <FormField control={form.control} name="lowerLimit" render={({ field }) => (
-                <FormItem><FormLabel>Lower Limit *</FormLabel><FormControl><Input type="number" {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>Lower Limit *</FormLabel><FormControl><Input type="number" step="any" {...field} /></FormControl><FormMessage /></FormItem>
               )} />
               <FormField control={form.control} name="upperLimit" render={({ field }) => (
-                <FormItem><FormLabel>Upper Limit *</FormLabel><FormControl><Input type="number" {...field} /></FormControl><FormMessage /></FormItem>
+                <FormItem><FormLabel>Upper Limit *</FormLabel><FormControl><Input type="number" step="any" {...field} /></FormControl><FormMessage /></FormItem>
+              )} />
+              <FormField control={form.control} name="unit" render={({ field }) => (
+                <FormItem><FormLabel>Unit</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="resultStatus" render={({ field }) => (
                 <FormItem><FormLabel>Result Status</FormLabel>
@@ -177,6 +200,14 @@ export function StabilityReviewFormDialog({
               )} />
               <FormField control={form.control} name="impactOnShelfLife" render={({ field }) => (
                 <FormItem><FormLabel>Impact On Shelf Life</FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                    <SelectContent><SelectItem value="No">No</SelectItem><SelectItem value="Yes">Yes</SelectItem></SelectContent>
+                  </Select>
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="impactOnProductQuality" render={({ field }) => (
+                <FormItem><FormLabel>Impact On Product Quality</FormLabel>
                   <Select value={field.value} onValueChange={field.onChange}>
                     <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                     <SelectContent><SelectItem value="No">No</SelectItem><SelectItem value="Yes">Yes</SelectItem></SelectContent>

@@ -22,10 +22,14 @@ export function ParameterTrendChart({
   data,
   title,
   height = 320,
+  ucl,
+  lcl,
 }: {
   data: TrendChartPoint[];
   title?: string;
   height?: number;
+  ucl?: number;
+  lcl?: number;
 }) {
   if (!data.length) {
     return (
@@ -57,6 +61,8 @@ export function ParameterTrendChart({
           {usl != null && <ReferenceLine y={usl} stroke="#dc2626" strokeDasharray="6 4" label={{ value: 'USL', fontSize: 10 }} />}
           {target != null && <ReferenceLine y={target} stroke="#059669" strokeDasharray="4 4" label={{ value: 'Target', fontSize: 10 }} />}
           {mean != null && <ReferenceLine y={mean} stroke="#7c3aed" strokeDasharray="4 4" label={{ value: 'Mean', fontSize: 10 }} />}
+          {Number.isFinite(ucl) && <ReferenceLine y={ucl} stroke="#9333ea" strokeDasharray="2 4" label={{ value: 'UCL', fontSize: 10 }} />}
+          {Number.isFinite(lcl) && <ReferenceLine y={lcl} stroke="#9333ea" strokeDasharray="2 4" label={{ value: 'LCL', fontSize: 10 }} />}
           <Line
             type="monotone"
             dataKey="value"

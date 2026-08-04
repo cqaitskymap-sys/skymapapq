@@ -6,21 +6,14 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import {
-  createRecord,
-  getRecord,
-  getRecords,
-  updateRecord,
-  type DocumentActor,
-} from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchProducts, normalizeProduct } from '@/lib/admin/product-service';
 import { fetchParameters, normalizeParameter } from '@/lib/admin/parameter-service';
 import type { AdminProduct, Parameter } from '@/lib/admin/schemas';
 import {
   CPV_PRODUCT_COLLECTION,
-  CPV_PRODUCT_MODULE,
   buildCpvProductId,
   computeNextReviewDueDate,
   isCpvProductOperational,
@@ -30,50 +23,10 @@ import {
 } from '@/lib/cpv-product-master';
 
 const LEGACY_COLLECTION = 'cpv_config_products';
-const MODULE_NAME = CPV_PRODUCT_MODULE;
 
 export interface CpvProductActor {
   id: string;
   name: string;
-}
-
-function actorContext(actor: CpvProductActor) {
-  return {
-    moduleName: MODULE_NAME,
-    actor: { id: actor.id, name: actor.name } as DocumentActor,
-  };
-}
-
-async function logCpvProductAudit(
-  actionType: string,
-  recordId: string,
-  actor: CpvProductActor,
-  oldValue?: unknown,
-  newValue?: unknown,
-  documentNumber?: string,
-) {
-  await createAuditLog({
-    moduleName: MODULE_NAME,
-    collectionName: CPV_PRODUCT_COLLECTION,
-    recordId,
-    documentNumber,
-    actionType,
-    oldValue,
-    newValue,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-
-  await writeAuditTrail({
-    collectionName: CPV_PRODUCT_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue,
-    newValue,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: MODULE_NAME,
-  });
 }
 
 function str(v: unknown, fallback = ''): string {
@@ -81,21 +34,59 @@ function str(v: unknown, fallback = ''): string {
   return String(v);
 }
 
-function normalizeCpvProduct(raw: Record<string, unknown>): CpvProductRecord {
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const msg = String((e as { message?: string }).message || '');
+    if (msg) return msg.replace(/^Firebase:\s*/i, '').replace(/\s*\(.*\)$/, '').trim() || fallback;
+  }
+  return fallback;
+}
+
+function isProductMasterDoc(raw: Record<string, unknown>): boolean {
+  // Exclude Product CPV Settings-shaped docs that may historically share the collection.
+  if (raw.recordType === 'cpv_product_master') return true;
+  if (raw.cpvProductId || raw.adminProductId) return true;
+  if (typeof raw.cpvRequired === 'boolean' && !raw.adminProductId && !raw.cpvProductId) return false;
+  return Boolean(raw.productCode && raw.productName);
+}
+
+export function normalizeCpvProduct(raw: Record<string, unknown>): CpvProductRecord {
   const productCode = str(raw.productCode);
   return {
     id: str(raw.id),
     cpvProductId: str(raw.cpvProductId, buildCpvProductId(productCode)),
+    recordType: str(raw.recordType, 'cpv_product_master'),
     adminProductId: str(raw.adminProductId || raw.productId),
     productCode,
     productName: str(raw.productName),
     genericName: str(raw.genericName),
     brandName: str(raw.brandName),
+    productCategory: str(raw.productCategory || raw.category),
+    productFamily: str(raw.productFamily || raw.family),
     strength: str(raw.strength),
     dosageForm: str(raw.dosageForm),
     routeOfAdministration: str(raw.routeOfAdministration || raw.route),
     packSize: str(raw.packSize),
+    packType: str(raw.packType),
     market: str(raw.market),
+    manufacturingSite: str(raw.manufacturingSite),
+    businessUnit: str(raw.businessUnit),
+    department: str(raw.department),
+    productOwner: str(raw.productOwner),
+    lifecycleStatus: str(raw.lifecycleStatus),
+    developmentStage: str(raw.developmentStage),
+    validationStatus: str(raw.validationStatus),
+    marketStatus: str(raw.marketStatus),
+    version: str(raw.version, '1.0'),
+    revision: str(raw.revision, '00'),
+    effectiveDate: str(raw.effectiveDate),
+    reviewDate: str(raw.reviewDate),
+    expiryDate: str(raw.expiryDate),
+    description: str(raw.description),
+    manufacturingProcess: str(raw.manufacturingProcess),
+    productionLine: str(raw.productionLine),
+    manufacturingArea: str(raw.manufacturingArea),
+    packagingProcess: str(raw.packagingProcess),
     shelfLife: str(raw.shelfLife),
     storageCondition: str(raw.storageCondition),
     standardBatchSize: str(raw.standardBatchSize || raw.batchSize),
@@ -106,8 +97,14 @@ function normalizeCpvProduct(raw: Record<string, unknown>): CpvProductRecord {
     bmrNumber: str(raw.bmrNumber),
     bprNumber: str(raw.bprNumber),
     specificationNumber: str(raw.specificationNumber),
+    specificationVersion: str(raw.specificationVersion),
     stpNumber: str(raw.stpNumber),
-    cpvStatus: (str(raw.cpvStatus || raw.status, 'Active') as CpvProductRecord['cpvStatus']),
+    upperSpecificationLimit: str(raw.upperSpecificationLimit),
+    lowerSpecificationLimit: str(raw.lowerSpecificationLimit),
+    targetValue: str(raw.targetValue),
+    samplingPlan: str(raw.samplingPlan),
+    testingFrequency: str(raw.testingFrequency),
+    cpvStatus: (str(raw.cpvStatus || raw.status, 'Draft') as CpvProductRecord['cpvStatus']),
     cpvStartDate: str(raw.cpvStartDate),
     cpvReviewFrequency: (str(raw.cpvReviewFrequency, 'Yearly') as CpvProductRecord['cpvReviewFrequency']),
     cpvOwner: str(raw.cpvOwner),
@@ -128,6 +125,7 @@ function normalizeCpvProduct(raw: Record<string, unknown>): CpvProductRecord {
     updatedByName: str(raw.updatedByName),
     isDeleted: Boolean(raw.isDeleted),
     status: str(raw.status || raw.cpvStatus),
+    changeReason: str(raw.changeReason),
   };
 }
 
@@ -154,6 +152,9 @@ export function adminProductToCpvAutofill(product: AdminProduct): Partial<CpvPro
     specificationNumber: p.specificationNumber || '',
     stpNumber: p.stpNumber || '',
     remarks: p.remarks || '',
+    productCategory: str((p as Record<string, unknown>).productCategory || (p as Record<string, unknown>).category),
+    productFamily: str((p as Record<string, unknown>).productFamily || (p as Record<string, unknown>).family),
+    manufacturingSite: str((p as Record<string, unknown>).manufacturingSite),
   };
 }
 
@@ -198,19 +199,24 @@ export async function fetchCpvProducts(): Promise<CpvProductRecord[]> {
   if (!isFirebaseConfigured()) return [];
   try {
     const primary = await getRecords<CpvProductRecord>(CPV_PRODUCT_COLLECTION);
-    const normalized = primary.map((r) => normalizeCpvProduct(r as unknown as Record<string, unknown>));
+    const normalized = primary
+      .map((r) => normalizeCpvProduct(r as unknown as Record<string, unknown>))
+      .filter((r) => !r.isDeleted && isProductMasterDoc(r as unknown as Record<string, unknown>));
     if (normalized.length > 0) return normalized;
 
     const legacy = await safeQueryCollection(LEGACY_COLLECTION);
-    return legacy.map((r) => normalizeCpvProduct({
-      ...r,
-      cpvStatus: r.status === 'Inactive' ? 'Inactive' : 'Active',
-      cpvStartDate: r.cpvStartDate || r.createdAt || new Date().toISOString().split('T')[0],
-      cpvReviewFrequency: 'Yearly',
-      cpvOwner: r.cpvOwner || 'QA',
-      linkedCppParameterIds: [],
-      linkedCqaParameterIds: [],
-    }));
+    return legacy
+      .filter((r) => isProductMasterDoc(r) || Boolean(r.productCode || r.product))
+      .map((r) => normalizeCpvProduct({
+        ...r,
+        productName: r.productName || r.product,
+        cpvStatus: r.status === 'Inactive' ? 'Inactive' : (r.cpvStatus || 'Active'),
+        cpvStartDate: r.cpvStartDate || r.createdAt || new Date().toISOString().split('T')[0],
+        cpvReviewFrequency: r.cpvReviewFrequency || r.reviewFrequency || 'Yearly',
+        cpvOwner: r.cpvOwner || 'QA',
+        linkedCppParameterIds: [],
+        linkedCqaParameterIds: [],
+      }));
   } catch (e) {
     console.error('fetchCpvProducts failed', e);
     return [];
@@ -225,7 +231,9 @@ export async function fetchCpvProductById(id: string): Promise<CpvProductRecord 
       const all = await fetchCpvProducts();
       return all.find((p) => p.id === id) ?? null;
     }
-    return normalizeCpvProduct(record as unknown as Record<string, unknown>);
+    const normalized = normalizeCpvProduct(record as unknown as Record<string, unknown>);
+    if (normalized.isDeleted) return null;
+    return normalized;
   } catch (e) {
     console.error('fetchCpvProductById failed', e);
     return null;
@@ -240,7 +248,7 @@ export async function isDuplicateActiveCpvProductCode(
   return products.some((p) => {
     if (excludeId && p.id === excludeId) return false;
     if (p.productCode.toLowerCase() !== productCode.toLowerCase()) return false;
-    return p.cpvStatus === 'Active' || p.cpvStatus === 'Under Review';
+    return ['Active', 'Under Review', 'Approved', 'Draft'].includes(p.cpvStatus);
   });
 }
 
@@ -285,7 +293,10 @@ export async function fetchProductBatches(product: CpvProductRecord): Promise<Re
     merged.push(...rows.filter((r) => {
       const pn = str(r.productName || r.product_name || r.product);
       const pc = str(r.productCode || r.product_code);
-      return names.some((n) => pn === n || pc === n);
+      const cpvId = str(r.cpvProductId || r.cpv_product_id);
+      return names.some((n) => pn === n || pc === n)
+        || (product.cpvProductId && cpvId === product.cpvProductId)
+        || (product.id && str(r.cpvProductDocId) === product.id);
     }));
   }
   return merged.slice(0, 50);
@@ -329,7 +340,7 @@ export async function fetchProductAuditTrail(recordId: string): Promise<Record<s
 
 export async function createCpvProduct(
   data: CpvProductFormData,
-  actor: CpvProductActor,
+  _actor: CpvProductActor,
 ): Promise<{ product: CpvProductRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) {
     return { product: null, error: 'Firebase is not configured.' };
@@ -338,33 +349,22 @@ export async function createCpvProduct(
     if (await isDuplicateActiveCpvProductCode(data.productCode)) {
       return { product: null, error: 'An active CPV product with this code already exists.' };
     }
-    const nextReviewDueDate = computeNextReviewDueDate(data.cpvStartDate, data.cpvReviewFrequency);
-    const payload = {
-      ...data,
-      cpvProductId: buildCpvProductId(data.productCode),
-      nextReviewDueDate,
-      status: data.cpvStatus,
-      createdByName: actor.name,
-      updatedByName: actor.name,
-    };
-    const created = await createRecord(
-      CPV_PRODUCT_COLLECTION,
-      payload as Omit<CpvProductRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorContext(actor),
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminCpvProduct',
     );
-    const product = normalizeCpvProduct(created as unknown as Record<string, unknown>);
-    await logCpvProductAudit('create CPV product', product.id, actor, null, product, product.cpvProductId);
-    return { product, error: null };
+    const result = await fn({ ...data, changeReason: data.changeReason });
+    return { product: normalizeCpvProduct(result.data), error: null };
   } catch (e) {
     console.error('createCpvProduct failed', e);
-    return { product: null, error: 'Failed to create CPV product.' };
+    return { product: null, error: cfErrorMessage(e, 'Failed to create CPV product.') };
   }
 }
 
 export async function updateCpvProduct(
   id: string,
   data: Partial<CpvProductFormData>,
-  actor: CpvProductActor,
+  _actor: CpvProductActor,
   existing: CpvProductRecord,
 ): Promise<{ product: CpvProductRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) {
@@ -374,164 +374,224 @@ export async function updateCpvProduct(
     if (data.productCode && await isDuplicateActiveCpvProductCode(data.productCode, id)) {
       return { product: null, error: 'An active CPV product with this code already exists.' };
     }
-    const cpvStartDate = data.cpvStartDate ?? existing.cpvStartDate;
-    const frequency = data.cpvReviewFrequency ?? existing.cpvReviewFrequency;
-    const nextReviewDueDate = computeNextReviewDueDate(cpvStartDate, frequency);
-    const updates = {
-      ...data,
-      nextReviewDueDate,
-      status: data.cpvStatus ?? existing.cpvStatus,
-      updatedByName: actor.name,
-    };
-    const updated = await updateRecord(
-      CPV_PRODUCT_COLLECTION,
-      id,
-      updates as Partial<CpvProductRecord>,
-      actorContext(actor),
+    const changeReason = data.changeReason || existing.changeReason || '';
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { product: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'updateAdminCpvProduct',
     );
-    if (!updated) return { product: null, error: 'Product not found.' };
-    const product = normalizeCpvProduct(updated as unknown as Record<string, unknown>);
-    await logCpvProductAudit('edit CPV product', id, actor, existing, product, product.cpvProductId);
-    return { product, error: null };
+    const result = await fn({
+      ...existing,
+      ...data,
+      id,
+      changeReason,
+    });
+    return { product: normalizeCpvProduct(result.data), error: null };
   } catch (e) {
     console.error('updateCpvProduct failed', e);
-    return { product: null, error: 'Failed to update CPV product.' };
+    return { product: null, error: cfErrorMessage(e, 'Failed to update CPV product.') };
   }
 }
 
 export async function setCpvProductStatus(
   id: string,
   cpvStatus: CpvProductRecord['cpvStatus'],
-  actor: CpvProductActor,
-  existing: CpvProductRecord,
+  _actor: CpvProductActor,
+  _existing: CpvProductRecord,
+  options?: { changeReason?: string; esignConfirmed?: boolean },
 ): Promise<{ product: CpvProductRecord | null; error: string | null }> {
-  const action = cpvStatus === 'Active' ? 'activate product' : 'deactivate product';
-  const result = await updateCpvProduct(id, { cpvStatus }, actor, existing);
-  if (result.product) {
-    await logCpvProductAudit(action, id, actor, existing.cpvStatus, cpvStatus, existing.cpvProductId);
+  if (!isFirebaseConfigured()) {
+    return { product: null, error: 'Firebase is not configured.' };
   }
-  return result;
+  try {
+    const reason = options?.changeReason || '';
+    if (reason.trim().length < 5) {
+      return { product: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'setAdminCpvProductStatus',
+    );
+    const result = await fn({
+      id,
+      cpvStatus,
+      changeReason: reason,
+      esignConfirmed: options?.esignConfirmed === true,
+    });
+    return { product: normalizeCpvProduct(result.data), error: null };
+  } catch (e) {
+    console.error('setCpvProductStatus failed', e);
+    return { product: null, error: cfErrorMessage(e, 'Failed to update product status.') };
+  }
 }
 
 export async function linkCpvParameter(
   productId: string,
   parameterId: string,
   type: 'CPP' | 'CQA',
-  actor: CpvProductActor,
-  existing: CpvProductRecord,
+  _actor: CpvProductActor,
+  _existing: CpvProductRecord,
 ): Promise<{ product: CpvProductRecord | null; error: string | null }> {
-  const field = type === 'CPP' ? 'linkedCppParameterIds' : 'linkedCqaParameterIds';
-  const current = existing[field] || [];
-  if (current.includes(parameterId)) {
-    return { product: existing, error: null };
-  }
-  const updates = { [field]: [...current, parameterId] };
-  const result = await updateCpvProduct(productId, updates, actor, existing);
-  if (result.product) {
-    await logCpvProductAudit(
-      type === 'CPP' ? 'link CPP parameter' : 'link CQA parameter',
-      productId,
-      actor,
-      current,
-      updates[field],
-      existing.cpvProductId,
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'linkAdminCpvParameter',
     );
+    const result = await fn({
+      id: productId,
+      parameterId,
+      type,
+      changeReason: `Link ${type} parameter`,
+    });
+    return { product: normalizeCpvProduct(result.data), error: null };
+  } catch (e) {
+    console.error('linkCpvParameter failed', e);
+    return { product: null, error: cfErrorMessage(e, 'Failed to link parameter.') };
   }
-  return result;
 }
 
 export async function unlinkCpvParameter(
   productId: string,
   parameterId: string,
   type: 'CPP' | 'CQA',
-  actor: CpvProductActor,
-  existing: CpvProductRecord,
+  _actor: CpvProductActor,
+  _existing: CpvProductRecord,
 ): Promise<{ product: CpvProductRecord | null; error: string | null }> {
-  const field = type === 'CPP' ? 'linkedCppParameterIds' : 'linkedCqaParameterIds';
-  const current = existing[field] || [];
-  const updates = { [field]: current.filter((id) => id !== parameterId) };
-  const result = await updateCpvProduct(productId, updates, actor, existing);
-  if (result.product) {
-    await logCpvProductAudit(
-      type === 'CPP' ? 'unlink CPP parameter' : 'unlink CQA parameter',
-      productId,
-      actor,
-      current,
-      updates[field],
-      existing.cpvProductId,
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'unlinkAdminCpvParameter',
     );
+    const result = await fn({
+      id: productId,
+      parameterId,
+      type,
+      changeReason: `Unlink ${type} parameter`,
+    });
+    return { product: normalizeCpvProduct(result.data), error: null };
+  } catch (e) {
+    console.error('unlinkCpvParameter failed', e);
+    return { product: null, error: cfErrorMessage(e, 'Failed to unlink parameter.') };
   }
-  return result;
 }
 
 export async function importCpvProductFromAdmin(
   adminProductId: string,
-  cpvFields: Pick<CpvProductFormData, 'cpvStartDate' | 'cpvReviewFrequency' | 'cpvOwner' | 'qaReviewer' | 'cpvStatus' | 'remarks'>,
-  actor: CpvProductActor,
+  cpvFields: Pick<CpvProductFormData, 'cpvStartDate' | 'cpvReviewFrequency' | 'cpvOwner' | 'qaReviewer' | 'cpvStatus' | 'remarks' | 'changeReason'>,
+  _actor: CpvProductActor,
 ): Promise<{ product: CpvProductRecord | null; error: string | null }> {
-  const products = await fetchAdminProductsForImport();
-  const adminProduct = products.find((p) => p.id === adminProductId);
-  if (!adminProduct) return { product: null, error: 'Admin product not found.' };
-
-  const autofill = adminProductToCpvAutofill(adminProduct);
-  const data: CpvProductFormData = {
-    ...autofill,
-    adminProductId,
-    productCode: autofill.productCode || '',
-    productName: autofill.productName || '',
-    strength: autofill.strength || '',
-    dosageForm: autofill.dosageForm || '',
-    cpvStartDate: cpvFields.cpvStartDate,
-    cpvReviewFrequency: cpvFields.cpvReviewFrequency,
-    cpvOwner: cpvFields.cpvOwner,
-    qaReviewer: cpvFields.qaReviewer || '',
-    cpvStatus: cpvFields.cpvStatus || 'Active',
-    remarks: cpvFields.remarks || '',
-    linkedCppParameterIds: [],
-    linkedCqaParameterIds: [],
-  } as CpvProductFormData;
-
-  const result = await createCpvProduct(data, actor);
-  if (result.product) {
-    await logCpvProductAudit(
-      'import from Product Master',
-      result.product.id,
-      actor,
-      null,
-      { adminProductId, productCode: data.productCode },
-      result.product.cpvProductId,
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'importAdminCpvProduct',
     );
+    const result = await fn({
+      adminProductId,
+      ...cpvFields,
+      changeReason: cpvFields.changeReason || 'Import from Admin Product Master',
+    });
+    return { product: normalizeCpvProduct(result.data), error: null };
+  } catch (e) {
+    console.error('importCpvProductFromAdmin failed', e);
+    return { product: null, error: cfErrorMessage(e, 'Failed to import product.') };
   }
-  return result;
 }
 
-export function exportCpvProductsCsvPlaceholder(products: CpvProductRecord[]): string {
-  const headers = ['CPV Product ID', 'Product Code', 'Product Name', 'Strength', 'Dosage Form', 'CPV Status', 'Review Frequency', 'Owner'];
+export async function softDeleteCpvProduct(
+  id: string,
+  options: { changeReason: string; esignConfirmed: boolean },
+): Promise<{ success: boolean; error: string | null }> {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminCpvProduct');
+    await fn({
+      id,
+      changeReason: options.changeReason,
+      esignConfirmed: options.esignConfirmed,
+    });
+    return { success: true, error: null };
+  } catch (e) {
+    console.error('softDeleteCpvProduct failed', e);
+    return { success: false, error: cfErrorMessage(e, 'Failed to archive product.') };
+  }
+}
+
+export function buildCpvProductsExportRows(products: CpvProductRecord[]): {
+  headers: string[];
+  rows: (string | number)[][];
+} {
+  const headers = [
+    'CPV Product ID', 'Product Code', 'Product Name', 'Generic Name', 'Brand Name',
+    'Category', 'Family', 'Strength', 'Dosage Form', 'Pack Size', 'Pack Type',
+    'Market', 'Site', 'Business Unit', 'Department', 'Lifecycle', 'Version', 'Revision',
+    'CPV Status', 'Review Frequency', 'Next Review Due', 'Owner', 'QA Reviewer',
+    'Specification', 'Spec Version', 'LSL', 'USL', 'Target', 'CPP Links', 'CQA Links',
+  ];
   const rows = products.map((p) => [
     p.cpvProductId,
     p.productCode,
     p.productName,
+    p.genericName,
+    p.brandName,
+    p.productCategory || '',
+    p.productFamily || '',
     p.strength,
     p.dosageForm,
+    p.packSize,
+    p.packType || '',
+    p.market,
+    p.manufacturingSite || '',
+    p.businessUnit || '',
+    p.department || '',
+    p.lifecycleStatus || '',
+    p.version || '',
+    p.revision || '',
     p.cpvStatus,
     p.cpvReviewFrequency,
+    p.nextReviewDueDate || computeNextReviewDueDate(p.cpvStartDate, p.cpvReviewFrequency),
     p.cpvOwner,
+    p.qaReviewer,
+    p.specificationNumber,
+    p.specificationVersion || '',
+    p.lowerSpecificationLimit || '',
+    p.upperSpecificationLimit || '',
+    p.targetValue || '',
+    p.linkedCppParameterIds?.length || 0,
+    p.linkedCqaParameterIds?.length || 0,
   ]);
+  return { headers, rows };
+}
+
+/** @deprecated Use buildCpvProductsExportRows */
+export function exportCpvProductsCsvPlaceholder(products: CpvProductRecord[]): string {
+  const { headers, rows } = buildCpvProductsExportRows(products);
   return [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
 }
 
-export async function logCpvProductExport(actor: CpvProductActor, count: number): Promise<void> {
-  await logCpvProductAudit('export CPV product list', 'export', actor, null, { count });
+export async function logCpvProductExport(actor: CpvProductActor, count: number, format = 'CSV'): Promise<void> {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminCpvProductExport');
+    await fn({ count, format, changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logCpvProductExport CF failed (non-blocking)', e);
+  }
 }
 
+/**
+ * Gate for CPP/CQA/batch entry.
+ * If the product is registered in CPV Product Master, it must be operational.
+ * Unknown products are allowed only when the master list is empty (bootstrap).
+ */
 export async function isCpvProductActiveForEntry(productCodeOrName: string): Promise<boolean> {
   if (!productCodeOrName) return true;
   const products = await fetchCpvProducts();
+  if (!products.length) return true;
   const match = products.find((p) =>
     p.productCode.toLowerCase() === productCodeOrName.toLowerCase()
     || p.productName.toLowerCase() === productCodeOrName.toLowerCase(),
   );
-  if (!match) return true;
+  if (!match) return false;
   return isCpvProductOperational(match.cpvStatus);
 }
 

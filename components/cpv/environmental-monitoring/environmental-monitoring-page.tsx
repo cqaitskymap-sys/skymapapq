@@ -1,28 +1,30 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Plus, Download, Eye, Pencil, CheckCircle, Layers } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import { Plus, Download, Eye, Pencil, CheckCircle, Layers, FilterX, Printer, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie } from 'recharts';
 import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
 import {
-  summarizeEnvironmentalRecords, buildEnvironmentalChartSeries, CLEANROOM_GRADES,
-  EM_MONITORING_TYPES, EM_PROCESS_STAGES, EM_STATUSES,
-  evaluateEnvironmentalStatus, type EnvironmentalMonitoringFormData, type EnvironmentalMonitoringRecord,
+  summarizeEnvironmentalRecords, buildEnvironmentalChartSeries, CLEANROOM_GRADES, ISO_CLASSES,
+  EM_MONITORING_TYPES, EM_PROCESS_STAGES, EM_STATUSES, EM_DATA_SOURCES,
+  evaluateEnvironmentalStatus, environmentalMonitoringFormSchema,
+  type EnvironmentalMonitoringFormData, type EnvironmentalMonitoringRecord,
 } from '@/lib/cpv-environmental-monitoring';
 import {
   fetchEnvironmentalRecords, fetchEmBatchesForProduct, fetchEnvironmentalParameters, fetchAreaOptions,
   createEnvironmentalRecord, updateEnvironmentalRecord, approveEnvironmentalRecord, reviewEnvironmentalRecord,
-  bulkCreateEnvironmentalRecords, logEnvironmentalExport, environmentalParameterTrendData,
+  bulkCreateEnvironmentalRecords, logEnvironmentalExport, environmentalParameterTrendData, softDeleteEnvironmentalRecord,
 } from '@/lib/cpv-environmental-monitoring-service';
 import type { AreaRecord } from '@/lib/monitoring-mgmt-types';
 import { fetchActiveCpvProductsForBatch as fetchProducts } from '@/lib/cpv-batch-registration-service';
 import type { CpvProductRecord } from '@/lib/cpv-product-master';
 import type { Parameter } from '@/lib/admin/schemas';
 import { normalizeParameter } from '@/lib/admin/parameter-service';
-import { downloadCsv } from '@/lib/export-utils';
+import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ResponsiveDataTable } from '@/components/cpv/product-master/responsive-data-table';
 import { ParameterTrendChart } from '@/components/cpv/cpp-monitoring/parameter-trend-chart';
@@ -39,13 +41,25 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import type { ColumnDef } from '@/components/admin/admin-data-table';
+import { ElectronicSignatureDialog } from '@/components/electronic-signatures';
 
 const CHART_COLORS = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed'];
+type EsignAction = 'approve' | 'delete' | 'qa-override';
+type EnvironmentalSaveData = EnvironmentalMonitoringFormData;
+
+const defaultFormFields = (): Partial<EnvironmentalSaveData> => ({
+  building: '', block: '', floor: '', site: '', department: '', shift: '', zone: '',
+  ahuId: '', ahuName: '', isoClass: 'N/A', dataSource: 'Manual', sensorId: '',
+  alarmStatus: '', communicationStatus: 'OK', equipmentId: '', equipmentName: '',
+  specificationNumber: '', version: '1.0', effectiveDate: '', description: '',
+  changeReason: '', monitoringPointCode: '', monitoringPointName: '',
+  alertLimitLow: undefined, alertLimitHigh: undefined, actionLimitLow: undefined, actionLimitHigh: undefined,
+});
 
 function RiskBadge({ level }: { level: string }) {
   const cls = level === 'Critical' ? 'bg-red-900/10 text-red-900 border-red-300'
@@ -62,6 +76,9 @@ function GradeBadge({ grade }: { grade: string }) {
 
 export function EnvironmentalMonitoringPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const productQuery = searchParams.get('product') || '';
+  const batchQuery = searchParams.get('batch') || '';
   const { user, profile } = useAuth();
   const role = profile?.role;
   const canCreate = cpvPermissions.canCreateEnvironmental(role) && !cpvPermissions.isEnvironmentalViewOnly(role);
@@ -79,29 +96,48 @@ export function EnvironmentalMonitoringPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [editing, setEditing] = useState<EnvironmentalMonitoringRecord | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [approveTarget, setApproveTarget] = useState<EnvironmentalMonitoringRecord | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<EnvironmentalMonitoringRecord | null>(null);
+  const [actionReason, setActionReason] = useState('');
+  const [esignOpen, setEsignOpen] = useState(false);
+  const [esignAction, setEsignAction] = useState<EsignAction>('approve');
 
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(productQuery || batchQuery);
+  const [productFilter, setProductFilter] = useState('all');
+  const [batchFilter, setBatchFilter] = useState('all');
   const [gradeFilter, setGradeFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [riskFilter, setRiskFilter] = useState('all');
+  const [buildingFilter, setBuildingFilter] = useState('all');
   const [trendParam, setTrendParam] = useState('Room Temperature');
 
   const [formProductId, setFormProductId] = useState('');
   const [formBatches, setFormBatches] = useState<Awaited<ReturnType<typeof fetchEmBatchesForProduct>>>([]);
   const [formParams, setFormParams] = useState<Parameter[]>([]);
-  const [form, setForm] = useState<Partial<EnvironmentalMonitoringFormData>>({});
+  const [form, setForm] = useState<Partial<EnvironmentalSaveData>>(defaultFormFields());
 
   const [bulkProductId, setBulkProductId] = useState('');
   const [bulkBatchId, setBulkBatchId] = useState('');
   const [bulkAreaId, setBulkAreaId] = useState('');
   const [bulkMonitoringType, setBulkMonitoringType] = useState<string>(EM_MONITORING_TYPES[0]);
+  const [bulkReason, setBulkReason] = useState('Bulk environmental entry');
   const [bulkRows, setBulkRows] = useState<Array<{ param: Parameter; observed: string; remarks: string }>>([]);
 
   const actor = { id: user?.uid || 'system', name: profile?.full_name || 'System', role: role || '' };
   const now = new Date();
   const defaultDate = now.toISOString().split('T')[0];
   const defaultTime = now.toTimeString().slice(0, 5);
+
+  useEffect(() => {
+    if (productQuery) setSearch(productQuery);
+    else if (batchQuery) setSearch(batchQuery);
+  }, [productQuery, batchQuery]);
+
+  useEffect(() => {
+    if (productQuery) setProductFilter(productQuery);
+    if (batchQuery) setBatchFilter(batchQuery);
+  }, [productQuery, batchQuery]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -125,20 +161,43 @@ export function EnvironmentalMonitoringPage() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return records.filter((r) => {
+      if (productFilter !== 'all' && r.productName !== productFilter && r.productCode !== productFilter) return false;
+      if (batchFilter !== 'all' && r.batchNumber !== batchFilter) return false;
       if (gradeFilter !== 'all' && r.cleanroomGrade !== gradeFilter) return false;
       if (typeFilter !== 'all' && r.monitoringType !== typeFilter) return false;
       if (statusFilter !== 'all' && r.status !== statusFilter) return false;
       if (riskFilter !== 'all' && r.riskLevel !== riskFilter) return false;
+      if (buildingFilter !== 'all' && (r.building || '') !== buildingFilter) return false;
       if (!q) return true;
-      return r.productName.toLowerCase().includes(q) || r.batchNumber.toLowerCase().includes(q)
+      return r.productName.toLowerCase().includes(q) || r.productCode.toLowerCase().includes(q) || r.batchNumber.toLowerCase().includes(q)
         || r.areaName.toLowerCase().includes(q) || r.roomNumber.toLowerCase().includes(q)
-        || r.parameterName.toLowerCase().includes(q);
+        || r.parameterName.toLowerCase().includes(q) || (r.building || '').toLowerCase().includes(q);
     });
-  }, [records, search, gradeFilter, typeFilter, statusFilter, riskFilter]);
+  }, [records, search, productFilter, batchFilter, gradeFilter, typeFilter, statusFilter, riskFilter, buildingFilter]);
+
+  const clearFilters = () => {
+    setSearch(''); setProductFilter('all'); setBatchFilter('all'); setGradeFilter('all');
+    setTypeFilter('all'); setStatusFilter('all'); setRiskFilter('all'); setBuildingFilter('all');
+  };
 
   const summary = useMemo(() => summarizeEnvironmentalRecords(records), [records]);
   const charts = useMemo(() => buildEnvironmentalChartSeries(filtered), [filtered]);
   const trendData = useMemo(() => environmentalParameterTrendData(filtered, trendParam), [filtered, trendParam]);
+  const productNames = useMemo(() => Array.from(new Set(records.map((r) => r.productName))), [records]);
+  const batchNumbers = useMemo(() => Array.from(new Set(records.map((r) => r.batchNumber))), [records]);
+  const buildingNames = useMemo(() => Array.from(new Set(records.map((r) => r.building).filter(Boolean))) as string[], [records]);
+  const crossLinks = useMemo(() => [
+    { href: productQuery ? `/cpv/product-master?search=${encodeURIComponent(productQuery)}` : '/cpv/product-master', label: 'Product Master' },
+    { href: batchQuery ? `/cpv/batch-registration?search=${encodeURIComponent(batchQuery)}` : '/cpv/batch-registration', label: 'Batch' },
+    { href: batchQuery ? `/cpv/cpp?batch=${encodeURIComponent(batchQuery)}` : productQuery ? `/cpv/cpp?product=${encodeURIComponent(productQuery)}` : '/cpv/cpp', label: 'CPP' },
+    { href: batchQuery ? `/cpv/cqa?batch=${encodeURIComponent(batchQuery)}` : productQuery ? `/cpv/cqa?product=${encodeURIComponent(productQuery)}` : '/cpv/cqa', label: 'CQA' },
+    { href: '/cpv/utility-monitoring', label: 'Utility' }, { href: '/qms/equipment', label: 'Equipment' },
+    { href: '/qms/equipment/calibration-schedule', label: 'Calibration' }, { href: '/qms/equipment/preventive-maintenance', label: 'Maintenance' },
+    { href: '/qms/deviation', label: 'Deviation' }, { href: '/qms/capa', label: 'CAPA' },
+    { href: '/cpv/risk-assessment', label: 'Risk' }, { href: '/admin/audit-trail', label: 'Audit Trail' },
+    { href: '/cpv/reports-analytics', label: 'Reports' }, { href: '/cpv/statistical-process-control', label: 'SPC' },
+    { href: '/cpv/trend-analysis', label: 'Trends' },
+  ], [productQuery, batchQuery]);
 
   const formStatus = useMemo(() => {
     if (!form.observedValue || form.lowerLimit === undefined || form.upperLimit === undefined) return '';
@@ -210,6 +269,7 @@ export function EnvironmentalMonitoringPage() {
   const openCreate = () => {
     setEditing(null);
     setForm({
+      ...defaultFormFields(),
       monitoringDate: defaultDate,
       monitoringTime: defaultTime,
       recordedBy: profile?.full_name || '',
@@ -218,18 +278,32 @@ export function EnvironmentalMonitoringPage() {
       resultType: 'Numeric',
       autoDeviationRequired: true,
     });
+    const preselected = products.find((p) => p.productCode === productQuery || p.productName === productQuery);
+    if (preselected) void onFormProductChange(preselected.id);
     setFormOpen(true);
   };
 
-  const saveForm = async (qaOverride = false) => {
-    if (!form.cpvProductId || !form.batchNumber || !form.parameterCode || !form.observedValue || !form.areaName) {
-      toast.error('Complete required fields');
+  const parseFormData = (): EnvironmentalSaveData | null => {
+    const parsed = environmentalMonitoringFormSchema.safeParse(form);
+    if (!parsed.success) {
+      toast.error(parsed.error.issues[0]?.message || 'Validation failed');
+      return null;
+    }
+    return parsed.data;
+  };
+
+  const saveForm = async () => {
+    const data = parseFormData();
+    if (!data) return;
+    const qaOverride = Boolean(editing?.isLocked && editing.reviewStatus === 'Approved' && canQaOverride);
+    if (qaOverride) {
+      setEsignAction('qa-override');
+      setEsignOpen(true);
       return;
     }
     setSubmitting(true);
-    const data = form as EnvironmentalMonitoringFormData;
     if (editing) {
-      const { error: err } = await updateEnvironmentalRecord(editing.id, data, actor, editing, qaOverride || (editing.isLocked && canQaOverride));
+      const { error: err } = await updateEnvironmentalRecord(editing.id, data, actor, editing, false);
       if (err) toast.error(err);
       else { toast.success('Record updated'); setFormOpen(false); await load(); }
     } else {
@@ -240,10 +314,52 @@ export function EnvironmentalMonitoringPage() {
     setSubmitting(false);
   };
 
+  const applyQaOverride = async () => {
+    const data = parseFormData();
+    if (!data || !editing) return;
+    setSubmitting(true);
+    const { error: err } = await updateEnvironmentalRecord(editing.id, data, actor, editing, true, { esignConfirmed: true });
+    setSubmitting(false);
+    setEsignOpen(false);
+    if (err) toast.error(err);
+    else { toast.success('Record updated (QA override)'); setFormOpen(false); await load(); }
+  };
+
+  const confirmApprove = () => {
+    if (actionReason.trim().length < 5) { toast.error('Change reason must be at least 5 characters'); return; }
+    setEsignAction('approve');
+    setEsignOpen(true);
+  };
+
+  const applyApprove = async () => {
+    if (!approveTarget) return;
+    setSubmitting(true);
+    const { error: err } = await approveEnvironmentalRecord(approveTarget.id, actor, actionReason, { esignConfirmed: true });
+    setSubmitting(false); setEsignOpen(false); setApproveTarget(null); setActionReason('');
+    if (err) toast.error(err);
+    else { toast.success('Record approved'); await load(); }
+  };
+
+  const confirmDelete = () => {
+    if (actionReason.trim().length < 5) { toast.error('Change reason must be at least 5 characters'); return; }
+    setEsignAction('delete');
+    setEsignOpen(true);
+  };
+
+  const applyDelete = async () => {
+    if (!deleteTarget) return;
+    setSubmitting(true);
+    const { error: err } = await softDeleteEnvironmentalRecord(deleteTarget.id, actor, actionReason, { esignConfirmed: true });
+    setSubmitting(false); setEsignOpen(false); setDeleteTarget(null); setActionReason('');
+    if (err) toast.error(err);
+    else { toast.success('Record soft-deleted'); await load(); }
+  };
+
   const openBulk = async () => {
-    if (!products[0]) return;
-    setBulkProductId(products[0].id);
-    setFormBatches(await fetchEmBatchesForProduct(products[0].productName));
+    const preselected = products.find((p) => p.productCode === productQuery || p.productName === productQuery) || products[0];
+    if (!preselected) return;
+    setBulkProductId(preselected.id);
+    setFormBatches(await fetchEmBatchesForProduct(preselected.productName));
     const params = await fetchEnvironmentalParameters(bulkMonitoringType);
     setBulkRows(params.slice(0, 8).map((param) => ({ param, observed: '', remarks: '' })));
     if (areas[0]) setBulkAreaId(areas[0].id);
@@ -255,6 +371,7 @@ export function EnvironmentalMonitoringPage() {
     const batch = formBatches.find((b) => b.id === bulkBatchId);
     const area = areas.find((a) => a.id === bulkAreaId);
     if (!p || !batch || !area) { toast.error('Select product, batch and area'); return; }
+    if (bulkReason.trim().length < 5) { toast.error('Bulk change reason must be at least 5 characters'); return; }
     const rows: EnvironmentalMonitoringFormData[] = bulkRows.filter((r) => r.observed).map((row) => {
       const n = normalizeParameter(row.param);
       return {
@@ -267,13 +384,31 @@ export function EnvironmentalMonitoringPage() {
         roomNumber: area.room_number,
         cleanroomGrade: area.cleanroom_grade as EnvironmentalMonitoringFormData['cleanroomGrade'],
         processStage: 'General Monitoring',
+        building: '',
+        block: '',
+        floor: '',
+        site: '',
+        department: '',
+        shift: '',
+        zone: '',
+        ahuId: '',
+        ahuName: '',
+        isoClass: 'N/A',
+        dataSource: 'Manual' as const,
+        sensorId: '',
+        alarmStatus: '',
+        communicationStatus: 'OK',
+        equipmentId: '',
+        equipmentName: '',
+        monitoringPointCode: '',
+        monitoringPointName: '',
         monitoringType: bulkMonitoringType as EnvironmentalMonitoringFormData['monitoringType'],
         samplingLocation: area.process_area || area.area_name,
         parameterId: row.param.id || '',
         parameterCode: n.parameterCode,
         parameterName: n.parameterName,
         observedValue: Number(row.observed),
-        targetValue: Number(n.target || n.targetValue) || 0,
+        targetValue: Number(n.target || n.targetValue) || undefined,
         lowerLimit: Number(n.lsl) || 0,
         upperLimit: Number(n.usl) || 0,
         unit: n.unit,
@@ -285,10 +420,16 @@ export function EnvironmentalMonitoringPage() {
         reviewDate: '',
         remarks: row.remarks,
         autoDeviationRequired: Boolean(n.autoDeviationRequired),
+        specificationNumber: '',
+        version: '1.0',
+        effectiveDate: '',
+        description: '',
+        changeReason: bulkReason,
       };
     });
+    if (!rows.length) { toast.error('Enter at least one observed value'); return; }
     setSubmitting(true);
-    const { created, errors } = await bulkCreateEnvironmentalRecords(rows, actor);
+    const { created, errors } = await bulkCreateEnvironmentalRecords(rows, actor, bulkReason);
     setSubmitting(false);
     if (errors.length) toast.error(errors[0]);
     toast.success(`${created} environmental records saved`);
@@ -317,15 +458,16 @@ export function EnvironmentalMonitoringPage() {
         trail={[{ label: 'Continued Process Verification', href: '/cpv/dashboard' }, { label: 'Environmental Monitoring' }]}
         actions={
           <>
-            {canImportExport && <Button variant="outline" size="sm" onClick={() => toast.info('Excel import placeholder')}>Import Excel</Button>}
             {canImportExport && (
               <Button variant="outline" size="sm" className="gap-2" onClick={async () => {
-                downloadCsv(`environmental-monitoring-${Date.now()}.csv`, ['Batch', 'Area', 'Parameter', 'Status', 'Risk'],
-                  filtered.map((r) => [r.batchNumber, r.areaName, r.parameterName, r.status, r.riskLevel]));
+                downloadCsv(`environmental-monitoring-${new Date().toISOString().split('T')[0]}.csv`,
+                  ['ID', 'Product', 'Batch', 'Building', 'Area', 'Grade', 'Type', 'Parameter', 'Observed', 'Unit', 'Status', 'Risk', 'Source', 'Sensor', 'Communication', 'Review'],
+                  filtered.map((r) => [String(r.environmentalMonitoringId), String(r.productCode), String(r.batchNumber), String(r.building || ''), String(r.areaName), String(r.cleanroomGrade), String(r.monitoringType), String(r.parameterName), String(r.observedValue), String(r.unit), String(r.status), String(r.riskLevel), String(r.dataSource || 'Manual'), String(r.sensorId || ''), String(r.communicationStatus || ''), String(r.reviewStatus)]));
                 await logEnvironmentalExport(actor, filtered.length);
-                toast.success('Export CSV generated');
+                toast.success(`Exported ${filtered.length} environmental records`);
               }}><Download className="h-4 w-4" />Export</Button>
             )}
+            <Button variant="outline" size="sm" className="gap-2 no-print" onClick={() => printPage()}><Printer className="h-4 w-4" />Print</Button>
             {canCreate && !isReadOnly && (
               <>
                 <Button variant="outline" size="sm" className="gap-2" onClick={() => void openBulk()}><Layers className="h-4 w-4" />Bulk Entry</Button>
@@ -336,12 +478,18 @@ export function EnvironmentalMonitoringPage() {
         }
       />
 
+      <div className="no-print flex flex-wrap gap-1.5">
+        {crossLinks.map((link) => <Link key={link.href + link.label} href={link.href} className="rounded-md border px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900">{link.label}</Link>)}
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-9">
         <KpiCard label="Total Records" value={summary.total} tone="blue" />
         <KpiCard label="Compliant" value={summary.compliant} tone="green" />
         <KpiCard label="Alert" value={summary.alert} tone="amber" />
         <KpiCard label="Action" value={summary.action} tone="amber" />
         <KpiCard label="Excursion" value={summary.excursion} tone="red" />
+        <KpiCard label="OOS" value={Number((summary as unknown as Record<string, unknown>).oos || 0)} tone="red" />
+        <KpiCard label="OOT" value={Number((summary as unknown as Record<string, unknown>).oot || 0)} tone="amber" />
         <KpiCard label="Grade A Excursions" value={summary.gradeAExcursions} tone="red" />
         <KpiCard label="Grade B Excursions" value={summary.gradeBExcursions} tone="red" />
         <KpiCard label="Microbial Excursions" value={summary.microbialExcursions} tone="red" />
@@ -433,8 +581,12 @@ export function EnvironmentalMonitoringPage() {
 
       <Card>
         <CardContent className="p-4 space-y-4">
-          <div className="grid gap-3 lg:grid-cols-6">
+          <div className="grid gap-3 lg:grid-cols-8">
             <Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="lg:col-span-2" />
+            <Select value={productFilter} onValueChange={setProductFilter}><SelectTrigger><SelectValue placeholder="Product" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All Products</SelectItem>{productNames.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}</SelectContent></Select>
+            <Select value={batchFilter} onValueChange={setBatchFilter}><SelectTrigger><SelectValue placeholder="Batch" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All Batches</SelectItem>{batchNumbers.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent></Select>
             <Select value={gradeFilter} onValueChange={setGradeFilter}><SelectTrigger><SelectValue placeholder="Grade" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All Grades</SelectItem>{CLEANROOM_GRADES.map((g) => <SelectItem key={g} value={g}>{g}</SelectItem>)}</SelectContent></Select>
             <Select value={typeFilter} onValueChange={setTypeFilter}><SelectTrigger><SelectValue placeholder="Type" /></SelectTrigger>
@@ -443,6 +595,9 @@ export function EnvironmentalMonitoringPage() {
               <SelectContent><SelectItem value="all">All Status</SelectItem>{EM_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
             <Select value={riskFilter} onValueChange={setRiskFilter}><SelectTrigger><SelectValue placeholder="Risk" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All Risk</SelectItem>{['Low', 'Medium', 'High', 'Critical'].map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
+            <Select value={buildingFilter} onValueChange={setBuildingFilter}><SelectTrigger><SelectValue placeholder="Building" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All Buildings</SelectItem>{buildingNames.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent></Select>
+            <Button variant="outline" size="sm" className="gap-1" onClick={clearFilters}><FilterX className="h-3.5 w-3.5" />Clear</Button>
           </div>
           {filtered.length === 0 ? <EmptyState title="No environmental records" /> : (
             <ResponsiveDataTable
@@ -455,14 +610,20 @@ export function EnvironmentalMonitoringPage() {
                   <Button size="icon" variant="ghost" onClick={() => router.push(`/cpv/environmental-monitoring/${row.id}`)}><Eye className="h-4 w-4" /></Button>
                   {canCreate && !isReadOnly && (!row.isLocked || canQaOverride) && (
                     <Button size="icon" variant="ghost" onClick={() => {
-                      setEditing(row); setForm(row); setFormProductId(row.cpvProductId); void onFormProductChange(row.cpvProductId); setFormOpen(true);
+                      setEditing(row); setForm({ ...row, changeReason: '' }); setFormProductId(row.cpvProductId); void onFormProductChange(row.cpvProductId); setFormOpen(true);
                     }}><Pencil className="h-4 w-4" /></Button>
                   )}
                   {canReview && row.reviewStatus === 'Draft' && (
-                    <Button size="icon" variant="ghost" onClick={async () => { await reviewEnvironmentalRecord(row.id, actor, row); await load(); }}><CheckCircle className="h-4 w-4" /></Button>
+                    <Button size="icon" variant="ghost" onClick={async () => {
+                      const { error: err } = await reviewEnvironmentalRecord(row.id, actor, 'Submitted for QA review');
+                      if (err) toast.error(err); else { toast.success('Submitted for review'); await load(); }
+                    }}><CheckCircle className="h-4 w-4" /></Button>
                   )}
-                  {canReview && row.reviewStatus === 'Under Review' && (
-                    <Button size="sm" variant="outline" onClick={async () => { await approveEnvironmentalRecord(row.id, actor, row); await load(); }}>Approve</Button>
+                  {canReview && (row.reviewStatus === 'Under Review' || row.reviewStatus === 'Draft') && (
+                    <Button size="sm" variant="outline" onClick={() => { setApproveTarget(row); setActionReason(''); }}>Approve</Button>
+                  )}
+                  {canReview && row.reviewStatus !== 'Approved' && !row.isDeleted && (
+                    <Button size="icon" variant="ghost" onClick={() => { setDeleteTarget(row); setActionReason(''); }}><Trash2 className="h-4 w-4 text-red-600" /></Button>
                   )}
                 </div>
               )}
@@ -476,8 +637,8 @@ export function EnvironmentalMonitoringPage() {
           <SheetHeader><SheetTitle>{editing ? 'Edit Environmental Record' : 'New Environmental Record'}</SheetTitle></SheetHeader>
           <div className="mt-6 space-y-3">
             {editing?.isLocked && canQaOverride && (
-              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
-                Record locked. <Button variant="link" className="h-auto p-0" onClick={() => void saveForm(true)}>QA Override</Button>
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                Record is locked. Saving will require QA override and electronic signature.
               </div>
             )}
             {!editing && (
@@ -531,12 +692,57 @@ export function EnvironmentalMonitoringPage() {
               <div><Label>Unit *</Label><Input className="mt-1" value={form.unit || ''} onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))} /></div>
               <div><Label>Lower Limit</Label><Input className="mt-1" type="number" value={form.lowerLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, lowerLimit: Number(e.target.value) }))} /></div>
               <div><Label>Upper Limit</Label><Input className="mt-1" type="number" value={form.upperLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, upperLimit: Number(e.target.value) }))} /></div>
+              <div><Label>Alert Low</Label><Input className="mt-1" type="number" value={form.alertLimitLow ?? ''} onChange={(e) => setForm((f) => ({ ...f, alertLimitLow: e.target.value ? Number(e.target.value) : undefined }))} /></div>
+              <div><Label>Alert High</Label><Input className="mt-1" type="number" value={form.alertLimitHigh ?? ''} onChange={(e) => setForm((f) => ({ ...f, alertLimitHigh: e.target.value ? Number(e.target.value) : undefined }))} /></div>
+              <div><Label>Action Low</Label><Input className="mt-1" type="number" value={form.actionLimitLow ?? ''} onChange={(e) => setForm((f) => ({ ...f, actionLimitLow: e.target.value ? Number(e.target.value) : undefined }))} /></div>
+              <div><Label>Action High</Label><Input className="mt-1" type="number" value={form.actionLimitHigh ?? ''} onChange={(e) => setForm((f) => ({ ...f, actionLimitHigh: e.target.value ? Number(e.target.value) : undefined }))} /></div>
               <div><Label>Date *</Label><Input className="mt-1" type="date" value={form.monitoringDate || ''} onChange={(e) => setForm((f) => ({ ...f, monitoringDate: e.target.value }))} /></div>
               <div><Label>Time *</Label><Input className="mt-1" type="time" value={form.monitoringTime || ''} onChange={(e) => setForm((f) => ({ ...f, monitoringTime: e.target.value }))} /></div>
+              <div><Label>Building</Label><Input className="mt-1" value={form.building || ''} onChange={(e) => setForm((f) => ({ ...f, building: e.target.value }))} /></div>
+              <div><Label>Block</Label><Input className="mt-1" value={form.block || ''} onChange={(e) => setForm((f) => ({ ...f, block: e.target.value }))} /></div>
+              <div><Label>Floor</Label><Input className="mt-1" value={form.floor || ''} onChange={(e) => setForm((f) => ({ ...f, floor: e.target.value }))} /></div>
+              <div><Label>Site</Label><Input className="mt-1" value={form.site || ''} onChange={(e) => setForm((f) => ({ ...f, site: e.target.value }))} /></div>
+              <div><Label>Department</Label><Input className="mt-1" value={form.department || ''} onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))} /></div>
+              <div><Label>Shift</Label><Input className="mt-1" value={form.shift || ''} onChange={(e) => setForm((f) => ({ ...f, shift: e.target.value }))} /></div>
+              <div><Label>Zone</Label><Input className="mt-1" value={form.zone || ''} onChange={(e) => setForm((f) => ({ ...f, zone: e.target.value }))} /></div>
+              <div><Label>AHU ID</Label><Input className="mt-1" value={form.ahuId || ''} onChange={(e) => setForm((f) => ({ ...f, ahuId: e.target.value }))} /></div>
+              <div><Label>AHU Name</Label><Input className="mt-1" value={form.ahuName || ''} onChange={(e) => setForm((f) => ({ ...f, ahuName: e.target.value }))} /></div>
+              <div><Label>ISO Class</Label>
+                <Select
+                  value={form.isoClass || 'N/A'}
+                  onValueChange={(v) => setForm((f) => ({ ...f, isoClass: v as EnvironmentalMonitoringFormData['isoClass'] }))}
+                >
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>{ISO_CLASSES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div><Label>Data Source</Label>
+                <Select value={form.dataSource || 'Manual'} onValueChange={(v) => setForm((f) => ({ ...f, dataSource: v as EnvironmentalMonitoringFormData['dataSource'] }))}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>{EM_DATA_SOURCES.map((source) => <SelectItem key={source} value={source}>{source}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div><Label>Sensor ID</Label><Input className="mt-1" value={form.sensorId || ''} onChange={(e) => setForm((f) => ({ ...f, sensorId: e.target.value }))} /></div>
+              <div><Label>Alarm Status</Label><Input className="mt-1" value={form.alarmStatus || ''} onChange={(e) => setForm((f) => ({ ...f, alarmStatus: e.target.value }))} /></div>
+              <div><Label>Communication</Label>
+                <Select value={form.communicationStatus || 'OK'} onValueChange={(v) => setForm((f) => ({ ...f, communicationStatus: v }))}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>{['OK', 'Degraded', 'Disconnected', 'Failed'].map((status) => <SelectItem key={status} value={status}>{status}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div><Label>Equipment ID</Label><Input className="mt-1" value={form.equipmentId || ''} onChange={(e) => setForm((f) => ({ ...f, equipmentId: e.target.value }))} /></div>
+              <div><Label>Equipment Name</Label><Input className="mt-1" value={form.equipmentName || ''} onChange={(e) => setForm((f) => ({ ...f, equipmentName: e.target.value }))} /></div>
+              <div><Label>Monitoring Point Code</Label><Input className="mt-1" value={form.monitoringPointCode || ''} onChange={(e) => setForm((f) => ({ ...f, monitoringPointCode: e.target.value }))} /></div>
+              <div><Label>Monitoring Point Name</Label><Input className="mt-1" value={form.monitoringPointName || ''} onChange={(e) => setForm((f) => ({ ...f, monitoringPointName: e.target.value }))} /></div>
+              <div><Label>Spec Number</Label><Input className="mt-1" value={form.specificationNumber || ''} onChange={(e) => setForm((f) => ({ ...f, specificationNumber: e.target.value }))} /></div>
+              <div><Label>Version</Label><Input className="mt-1" value={form.version || '1.0'} onChange={(e) => setForm((f) => ({ ...f, version: e.target.value }))} /></div>
+              <div><Label>Effective Date</Label><Input className="mt-1" type="date" value={form.effectiveDate || ''} onChange={(e) => setForm((f) => ({ ...f, effectiveDate: e.target.value }))} /></div>
               <div><Label>Recorded By *</Label><Input className="mt-1" value={form.recordedBy || ''} onChange={(e) => setForm((f) => ({ ...f, recordedBy: e.target.value }))} /></div>
               <div><Label>Status (auto)</Label><div className="mt-2">{formStatus ? <StatusBadge status={formStatus} /> : '—'}</div></div>
             </div>
+            <div><Label>Description</Label><Textarea className="mt-1" value={form.description || ''} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></div>
             <div><Label>Remarks</Label><Textarea className="mt-1" value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} /></div>
+            <div><Label>Change Reason *</Label><Textarea className="mt-1" value={form.changeReason || ''} onChange={(e) => setForm((f) => ({ ...f, changeReason: e.target.value }))} placeholder="Minimum 5 characters (ALCOA+)" /></div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button>
               <Button onClick={() => void saveForm()} disabled={submitting}>Save</Button>
@@ -574,6 +780,7 @@ export function EnvironmentalMonitoringPage() {
               <SelectContent>{EM_MONITORING_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
             </Select>
           </div>
+          <div><Label>Change Reason *</Label><Textarea className="mt-1" value={bulkReason} onChange={(e) => setBulkReason(e.target.value)} /></div>
           <Table>
             <TableHeader><TableRow>
               <TableHead>Parameter</TableHead><TableHead>Limits</TableHead><TableHead>Unit</TableHead><TableHead>Observed</TableHead><TableHead>Remarks</TableHead>
@@ -599,6 +806,37 @@ export function EnvironmentalMonitoringPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={Boolean(approveTarget) && !esignOpen} onOpenChange={(open) => { if (!open) setApproveTarget(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Approve Environmental Record</DialogTitle><DialogDescription>Change reason and electronic signature required (Part 11 / ALCOA+).</DialogDescription></DialogHeader>
+          <div className="space-y-2"><Label>Change Reason *</Label><Textarea value={actionReason} onChange={(e) => setActionReason(e.target.value)} /></div>
+          <DialogFooter><Button variant="outline" onClick={() => setApproveTarget(null)}>Cancel</Button><Button disabled={submitting} onClick={confirmApprove}>Continue to E-Sign</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(deleteTarget) && !esignOpen} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Soft-Delete Environmental Record</DialogTitle><DialogDescription>Archive this record with change reason and electronic signature.</DialogDescription></DialogHeader>
+          <div className="space-y-2"><Label>Change Reason *</Label><Textarea value={actionReason} onChange={(e) => setActionReason(e.target.value)} /></div>
+          <DialogFooter><Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button><Button variant="destructive" disabled={submitting} onClick={confirmDelete}>Continue to E-Sign</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <ElectronicSignatureDialog
+        open={esignOpen}
+        onOpenChange={setEsignOpen}
+        moduleName="Environmental Monitoring"
+        recordId={esignAction === 'approve' ? approveTarget?.id || '' : esignAction === 'delete' ? deleteTarget?.id || '' : editing?.id || ''}
+        documentNumber={esignAction === 'approve' ? approveTarget?.environmentalMonitoringId || '' : esignAction === 'delete' ? deleteTarget?.environmentalMonitoringId || '' : editing?.environmentalMonitoringId || ''}
+        actionType={esignAction === 'approve' ? 'Approve' : esignAction === 'delete' ? 'Soft Delete' : 'QA Override'}
+        onSuccess={() => {
+          if (esignAction === 'approve') void applyApprove();
+          else if (esignAction === 'delete') void applyDelete();
+          else void applyQaOverride();
+        }}
+        onCancel={() => setEsignOpen(false)}
+      />
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
 } from '@/lib/deviation-trend-records';
 import { DEVIATION_COLLECTIONS, type DeviationTrendRecord } from '@/lib/deviation-types';
 import { listDeviations } from '@/lib/deviation-service';
+import { polishTrendDrafts } from '@/lib/ai/client';
 
 export type { TrendActor, TrendFilterInput, TrendSaveForm };
 
@@ -73,7 +74,24 @@ async function notify(title: string, message: string, userId: string, recordId: 
 
 export async function generateDeviationTrend(filters: TrendFilterInput) {
   const all = await listDeviations();
-  return computeTrendAnalysis(all, filters);
+  const analysis = computeTrendAnalysis(all, filters);
+  const polished = await polishTrendDrafts({
+    module: 'Deviation',
+    recommendation_draft: analysis.recommendation_draft,
+    conclusion_draft: analysis.conclusion_draft,
+    context: {
+      metrics: analysis.metrics,
+      alerts: analysis.alerts,
+      trend_status: analysis.trend_status,
+      risk_level: analysis.risk_level,
+      filters,
+    },
+  });
+  return {
+    ...analysis,
+    recommendation_draft: polished.recommendation_draft,
+    conclusion_draft: polished.conclusion_draft || analysis.conclusion_draft,
+  };
 }
 
 export async function listSavedTrends(max = 100): Promise<DeviationTrendRecord[]> {

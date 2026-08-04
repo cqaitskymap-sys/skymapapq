@@ -67,6 +67,12 @@ export function NotificationSettingDetailView({ setting, onRefresh }: Notificati
         actions={
           canEdit ? (
             <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/admin/notifications/queue">Queue</Link>
+              </Button>
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/admin/notifications/history">History</Link>
+              </Button>
               <Button variant="outline" size="sm" onClick={runTest} disabled={loading}>
                 <Send className="h-4 w-4 mr-1" />Send Test
               </Button>
@@ -83,7 +89,16 @@ export function NotificationSettingDetailView({ setting, onRefresh }: Notificati
                 <Link href={`/admin/notifications/${setting.id}/edit`}><Pencil className="h-4 w-4 mr-1" />Edit</Link>
               </Button>
             </div>
-          ) : undefined
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/admin/notifications/queue">Queue</Link>
+              </Button>
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/admin/notifications/history">History</Link>
+              </Button>
+            </div>
+          )
         }
       />
 
@@ -100,11 +115,15 @@ export function NotificationSettingDetailView({ setting, onRefresh }: Notificati
           <CardContent className="grid grid-cols-2 gap-2 text-sm">
             <span className="text-muted-foreground">Setting ID</span><span className="font-mono">{setting.notificationSettingId}</span>
             <span className="text-muted-foreground">Event Trigger</span><span>{setting.eventTrigger}</span>
+            <span className="text-muted-foreground">Event Aliases</span>
+            <span>{(setting.eventAliases || []).length ? setting.eventAliases.join(', ') : '—'}</span>
             <span className="text-muted-foreground">Recipient Role</span><span>{setting.recipientRole}</span>
             <span className="text-muted-foreground">Escalation Role</span><span>{setting.escalationRole || '—'}</span>
             <span className="text-muted-foreground">Before Due Days</span><span>{setting.notifyBeforeDueDays}</span>
             <span className="text-muted-foreground">Escalation After</span><span>{setting.escalationAfterDays}</span>
             <span className="text-muted-foreground">Repeat Reminder</span><span>{setting.repeatReminder ? setting.reminderFrequency : 'No'}</span>
+            <span className="text-muted-foreground">Prevent Duplicates</span>
+            <span>{setting.preventDuplicates !== false ? `Yes (${setting.duplicateWindowMinutes || 60}m)` : 'No'}</span>
             <span className="text-muted-foreground">In-App / Email / SMS</span>
             <span>{setting.enableInAppNotification ? 'Yes' : 'No'} / {setting.enableEmailNotification ? 'Yes' : 'No'} / {setting.enableSmsNotification ? 'Yes' : 'No'}</span>
           </CardContent>

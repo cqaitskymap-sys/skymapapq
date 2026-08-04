@@ -9,18 +9,25 @@ export const UTILITY_MODULE_NAME = 'Utility Monitoring';
 export const UTILITY_TYPES = [
   'Purified Water',
   'Water for Injection',
+  'Clean Steam',
   'Compressed Air',
   'Nitrogen',
-  'Clean Steam',
   'HVAC',
   'Chilled Water',
-  'Boiler Steam',
+  'Cooling Water',
   'Vacuum',
+  'Electricity',
+  'Gas',
+  'Temperature',
+  'Humidity',
+  'Differential Pressure',
+  'Boiler Steam',
   'Other',
 ] as const;
 
-export const UTILITY_STATUSES = ['Complies', 'Alert', 'Action', 'Excursion'] as const;
+export const UTILITY_STATUSES = ['Complies', 'Alert', 'Action', 'Excursion', 'OOS', 'OOT'] as const;
 export const UTILITY_REVIEW_STATUSES = ['Draft', 'Under Review', 'Approved'] as const;
+export const UTILITY_DATA_SOURCES = ['Manual', 'IoT', 'PLC', 'SCADA', 'OPC-UA', 'MQTT'] as const;
 
 export const DEFAULT_UTILITY_PARAMETERS = [
   'WFI Conductivity', 'WFI TOC', 'WFI Microbial Count', 'WFI Endotoxin', 'WFI Temperature',
@@ -32,6 +39,10 @@ export const DEFAULT_UTILITY_PARAMETERS = [
 ] as const;
 
 const requiredText = z.string().trim().min(1, 'Required');
+const optionalNum = z.preprocess(
+  (v) => (v === '' || v === null || v === undefined ? undefined : v),
+  z.coerce.number().optional(),
+);
 
 export const utilityMonitoringFormSchema = z.object({
   cpvProductId: requiredText,
@@ -43,18 +54,28 @@ export const utilityMonitoringFormSchema = z.object({
   utilitySystemCode: z.string().trim().default(''),
   samplingPoint: requiredText,
   areaRoomNo: z.string().trim().default(''),
+  building: z.string().trim().default(''),
+  site: z.string().trim().default(''),
   department: z.string().trim().default(''),
+  shift: z.string().trim().default(''),
+  productionLine: z.string().trim().default(''),
+  equipmentId: z.string().trim().default(''),
+  equipmentName: z.string().trim().default(''),
+  dataSource: z.enum(UTILITY_DATA_SOURCES).default('Manual'),
+  sensorId: z.string().trim().default(''),
+  alarmStatus: z.string().trim().default(''),
+  communicationStatus: z.string().trim().default('OK'),
   parameterId: z.string().trim().default(''),
   parameterCode: requiredText,
   parameterName: requiredText,
   observedValue: z.union([z.coerce.number(), z.string().trim().min(1, 'Required')]),
-  targetValue: z.coerce.number().optional(),
+  targetValue: optionalNum,
   lowerLimit: z.coerce.number(),
   upperLimit: z.coerce.number(),
-  alertLimitLow: z.coerce.number().optional(),
-  alertLimitHigh: z.coerce.number().optional(),
-  actionLimitLow: z.coerce.number().optional(),
-  actionLimitHigh: z.coerce.number().optional(),
+  alertLimitLow: optionalNum,
+  alertLimitHigh: optionalNum,
+  actionLimitLow: optionalNum,
+  actionLimitHigh: optionalNum,
   unit: requiredText,
   resultType: z.enum(RESULT_TYPES).default('Numeric'),
   monitoringDate: requiredText,
@@ -65,12 +86,19 @@ export const utilityMonitoringFormSchema = z.object({
   remarks: z.string().trim().default(''),
   utilityCriticality: z.string().trim().default('Major'),
   autoDeviationRequired: z.boolean().default(true),
+  specificationNumber: z.string().trim().default(''),
+  version: z.string().trim().default('1.0'),
+  effectiveDate: z.string().trim().default(''),
+  description: z.string().trim().default(''),
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => d.lowerLimit < d.upperLimit, {
   message: 'Upper limit must be greater than lower limit',
   path: ['upperLimit'],
 });
 
 export type UtilityMonitoringFormData = z.infer<typeof utilityMonitoringFormSchema>;
+
+export type UtilityMonitoringSaveData = UtilityMonitoringFormData;
 
 export interface UtilityMonitoringRecord extends UtilityMonitoringFormData, Record<string, unknown> {
   id: string;
@@ -90,6 +118,8 @@ export interface UtilityMonitoringRecord extends UtilityMonitoringFormData, Reco
   createdByName?: string;
   updatedByName?: string;
   isDeleted: boolean;
+  oosRequired?: boolean;
+  linkedOosNumber?: string;
 }
 
 export interface UtilitySummary {
@@ -125,19 +155,27 @@ export function evaluateUtilityStatus(
 ): string {
   if (resultType === 'Pass/Fail') {
     const v = String(observed).toLowerCase();
-    return v === 'pass' ? 'Complies' : 'Excursion';
+    return v === 'pass' ? 'Complies' : 'OOS';
   }
   if (resultType === 'Complies/Does Not Comply') {
     const v = String(observed).toLowerCase();
-    return v.includes('comply') && !v.includes('not') ? 'Complies' : 'Excursion';
+    return v.includes('comply') && !v.includes('not') ? 'Complies' : 'OOS';
   }
   const num = Number(observed);
-  if (!Number.isFinite(num)) return 'Excursion';
-  if (num < lsl || num > usl) return 'Excursion';
-  if (actionLow != null && !Number.isNaN(actionLow) && num < actionLow) return 'Action';
-  if (actionHigh != null && !Number.isNaN(actionHigh) && num > actionHigh) return 'Action';
-  if (alertLow != null && !Number.isNaN(alertLow) && num < alertLow) return 'Alert';
-  if (alertHigh != null && !Number.isNaN(alertHigh) && num > alertHigh) return 'Alert';
+  if (!Number.isFinite(num)) return 'OOS';
+  if (num < lsl || num > usl) return 'OOS';
+  if (actionLow != null && Number.isFinite(actionLow) && num < actionLow) return 'Action';
+  if (actionHigh != null && Number.isFinite(actionHigh) && num > actionHigh) return 'Action';
+  if (alertLow != null && Number.isFinite(alertLow) && num < alertLow) return 'Alert';
+  if (alertHigh != null && Number.isFinite(alertHigh) && num > alertHigh) return 'Alert';
+  if (alertLow == null && alertHigh == null) {
+    const range = usl - lsl;
+    if (range > 0) {
+      const bandLow = lsl + range * 0.1;
+      const bandHigh = usl - range * 0.1;
+      if (num < bandLow || num > bandHigh) return 'OOT';
+    }
+  }
   return 'Complies';
 }
 
@@ -146,48 +184,59 @@ export function isCriticalUtilityType(utilityType: string): boolean {
 }
 
 export function evaluateUtilityRisk(
-  record: Pick<UtilityMonitoringRecord, 'utilityType' | 'parameterName' | 'status' | 'samplingPoint' | 'areaRoomNo' | 'utilityCriticality'>,
+  record: Pick<UtilityMonitoringRecord, 'utilityType' | 'parameterName' | 'status' | 'samplingPoint' | 'areaRoomNo' | 'utilityCriticality'> & {
+    alarmStatus?: string;
+    communicationStatus?: string;
+  },
   failureCount: number,
 ): string {
+  if (['Sensor Failure', 'Communication Failure', 'PLC Failure'].includes(String(record.alarmStatus || ''))) {
+    return 'Critical';
+  }
+  if (record.communicationStatus === 'Disconnected' || record.communicationStatus === 'Failed') {
+    return 'High';
+  }
   if (failureCount >= 3) return 'High';
 
   const param = record.parameterName.toLowerCase();
   const wfiType = record.utilityType === 'Water for Injection' || record.utilityType.includes('WFI');
-  if (wfiType && (param.includes('microbial') || param.includes('endotoxin')) && record.status === 'Excursion') {
+  if (wfiType && (param.includes('microbial') || param.includes('endotoxin')) && ['OOS', 'Excursion'].includes(record.status)) {
     return 'Critical';
   }
 
   if (record.utilityType === 'Compressed Air'
     && (param.includes('oil') || param.includes('particle'))
-    && ['Excursion', 'Action', 'Alert'].includes(record.status)) {
+    && ['OOS', 'Excursion', 'Action', 'Alert', 'OOT'].includes(record.status)) {
     return 'High';
   }
 
   const sterileHint = /grade\s*[ab]/i.test(record.areaRoomNo || '') || /grade\s*[ab]/i.test(record.samplingPoint || '');
   if (record.utilityType === 'HVAC'
     && (param.includes('differential pressure') || param.includes('pressure'))
-    && record.status === 'Excursion'
+    && ['OOS', 'Excursion'].includes(record.status)
     && sterileHint) {
     return 'Critical';
   }
 
   const critical = record.utilityCriticality === 'Critical' || isCriticalUtilityType(record.utilityType);
-  if (critical && record.status === 'Excursion') return 'High';
+  if (critical && ['OOS', 'Excursion'].includes(record.status)) return 'High';
 
-  if (record.status === 'Excursion' || record.status === 'Action') return 'Medium';
-  if (record.status === 'Alert') return 'Low';
+  if (['OOS', 'Excursion', 'Action'].includes(record.status)) return 'Medium';
+  if (['Alert', 'OOT'].includes(record.status)) return 'Low';
   return 'Low';
 }
 
 export function summarizeUtilityRecords(records: UtilityMonitoringRecord[]): UtilitySummary {
-  const nonCompliant = (s: string) => ['Alert', 'Action', 'Excursion'].includes(s);
+  const nonCompliant = (s: string) => ['Alert', 'Action', 'Excursion', 'OOS', 'OOT'].includes(s);
   return {
     total: records.length,
     compliant: records.filter((r) => r.status === 'Complies').length,
-    alert: records.filter((r) => r.status === 'Alert').length,
+    alert: records.filter((r) => r.status === 'Alert' || r.status === 'OOT').length,
     action: records.filter((r) => r.status === 'Action').length,
-    excursion: records.filter((r) => r.status === 'Excursion').length,
-    criticalExcursions: records.filter((r) => r.status === 'Excursion' && (r.riskLevel === 'Critical' || r.riskLevel === 'High')).length,
+    excursion: records.filter((r) => r.status === 'Excursion' || r.status === 'OOS').length,
+    criticalExcursions: records.filter((r) =>
+      ['Excursion', 'OOS'].includes(r.status) && (r.riskLevel === 'Critical' || r.riskLevel === 'High'),
+    ).length,
     deviationTriggered: records.filter((r) => r.deviationRequired || r.linkedDeviationNumber).length,
     capaSuggested: records.filter((r) => r.capaRequired).length,
     wfiAlerts: records.filter((r) => (r.utilityType === 'Water for Injection' || r.parameterName.startsWith('WFI')) && nonCompliant(r.status)).length,
@@ -209,7 +258,7 @@ export function buildUtilityChartSeries(records: UtilityMonitoringRecord[]) {
     .sort((a, b) => a.month.localeCompare(b.month));
 
   const typeExcursion = new Map<string, number>();
-  records.filter((r) => r.status === 'Excursion').forEach((r) => {
+  records.filter((r) => ['Excursion', 'OOS', 'Action'].includes(r.status)).forEach((r) => {
     typeExcursion.set(r.utilityType, (typeExcursion.get(r.utilityType) || 0) + 1);
   });
   const utilityTypeExcursionTrend = Array.from(typeExcursion.entries())

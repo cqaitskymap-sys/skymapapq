@@ -1,7 +1,7 @@
 import type { CppRecord, CqaRecord, RiskRecord } from './cpv';
 import { calculateCapability, calculateControlLimits, displayCpvStatus } from './cpv';
 import { buildRiskReport } from './cpv-risk-report';
-import { computeOverallAssessment } from './cpv-annual-review-records';
+import { computeOverallAssessment, enrichCpvReviewMetrics, type CpvReviewMetrics } from './cpv-annual-review-records';
 
 export type AnnualCpvWorkflowStatus = 'draft' | 'under_review' | 'approved' | 'archived' | 'generated' | 'rejected';
 
@@ -129,29 +129,7 @@ export interface AnnualCpvSnapshot {
   utility: AnnualCpvSectionSummary;
   environmental: AnnualCpvSectionSummary;
   yield: AnnualCpvSectionSummary & { averageYield?: number };
-  metrics: {
-    totalBatchesReviewed: number;
-    releasedBatches: number;
-    rejectedBatches: number;
-    holdBatches: number;
-    cppCompliancePct: number;
-    cqaCompliancePct: number;
-    yieldAverage: number;
-    ootCount: number;
-    oosCount: number;
-    deviationCount: number;
-    capaCount: number;
-    openRiskCount: number;
-    highRiskCount: number;
-    criticalOpenRiskCount: number;
-    criticalOosOpen: number;
-    repeatedOot: boolean;
-    sterilityEndotoxinFailure: boolean;
-    averageCp: number;
-    averageCpk: number;
-    averagePp: number;
-    averagePpk: number;
-  };
+  metrics: CpvReviewMetrics;
   overallProcessStatus: 'In Control' | 'Under Control With Monitoring' | 'Needs Improvement' | 'Not In Control';
   overallRiskLevel: 'Low' | 'Medium' | 'High' | 'Critical';
   executiveSummary: string;
@@ -410,7 +388,7 @@ export function buildAnnualCpvSnapshot(input: AnnualCpvReviewInput): AnnualCpvSn
     return (param.includes('sterility') || param.includes('endotoxin')) && String(r.status) === 'OOS';
   });
 
-  const metrics = {
+  const metrics = enrichCpvReviewMetrics({
     totalBatchesReviewed: batches.length,
     releasedBatches: released || Math.max(0, batches.length - rejected - holdBatches),
     rejectedBatches: rejected,
@@ -422,17 +400,19 @@ export function buildAnnualCpvSnapshot(input: AnnualCpvReviewInput): AnnualCpvSn
     oosCount: oos + oosEvents.length,
     deviationCount: deviations.length,
     capaCount: capa.length,
+    changeControlCount: changeControl.length,
     openRiskCount: openRisks,
     highRiskCount: highRisks,
     criticalOpenRiskCount: criticalOpenRisks,
     criticalOosOpen,
     repeatedOot: (oot + trendAnalysisStats.oot) >= 3,
+    repeatedDeviation: deviations.length >= 5,
     sterilityEndotoxinFailure,
     averageCp: Number((capAvgCpk * 0.98).toFixed(3)),
     averageCpk: Number(capAvgCpk.toFixed(3)),
     averagePp: Number((capAvgPpk * 0.98).toFixed(3)),
     averagePpk: Number(capAvgPpk.toFixed(3)),
-  };
+  });
 
   const assessment = computeOverallAssessment(metrics);
 

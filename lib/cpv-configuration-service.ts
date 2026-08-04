@@ -1,32 +1,45 @@
 import {
-  addDoc, collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc, updateDoc, where,
+  collection, doc, getDoc, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
 import {
   CPV_CONFIG_COLLECTIONS,
-  CPV_CONFIGURATION_MODULE,
+  DEFAULT_AI_SETTINGS,
   DEFAULT_ANNUAL_TEMPLATE,
+  DEFAULT_BACKUP_SETTINGS,
   DEFAULT_CAPABILITY_SETTINGS,
+  DEFAULT_DASHBOARD_SETTINGS,
   DEFAULT_DATA_SOURCE_MAPPINGS,
   DEFAULT_EXPORT_SETTINGS,
+  DEFAULT_FEATURE_FLAGS,
   DEFAULT_GENERAL_SETTINGS,
+  DEFAULT_GLOBAL_ORG_SETTINGS,
   DEFAULT_LIMIT_RULES,
+  DEFAULT_NOTIFICATION_SETTINGS,
   DEFAULT_RISK_SETTINGS,
+  DEFAULT_SECURITY_SETTINGS,
   DEFAULT_SPC_SETTINGS,
+  type AiSettings,
   type AlertRuleConfig,
   type AnnualReviewTemplate,
+  type BackupSettings,
   type CapabilitySettings,
   type CpvConfigurationBundle,
   type CppConfiguration,
   type CqaConfiguration,
+  type DashboardSettings,
   type DataSourceMapping,
   type ExportReportSettings,
+  type FeatureFlags,
   type GeneralSettings,
+  type GlobalOrgSettings,
   type LimitRule,
+  type NotificationSettings,
   type ProductCpvSettings,
   type ReviewFrequencyConfig,
   type RiskScoringSettings,
+  type SecuritySettings,
   type SpcSettings,
   type WorkflowMapping,
   validateConfiguration,
@@ -36,63 +49,42 @@ export type CpvConfigActor = { id: string; name: string; role?: string };
 
 const SINGLETON_DOCS = {
   general: 'general_settings',
+  global: 'global_org_settings',
   capability: 'process_capability_settings',
   spc: 'spc_settings',
   risk: 'risk_scoring_settings',
+  ai: 'ai_settings',
+  notification: 'notification_settings',
+  dashboard: 'dashboard_settings',
   export: 'export_report_settings',
+  security: 'security_settings',
+  backup: 'backup_settings',
+  featureFlags: 'feature_flags',
 } as const;
 
-function nowIso() {
-  return new Date().toISOString();
-}
+export const CONFIG_LIST_COLLECTIONS = {
+  product: CPV_CONFIG_COLLECTIONS.products,
+  cpp: CPV_CONFIG_COLLECTIONS.cppParameters,
+  cqa: CPV_CONFIG_COLLECTIONS.cqaParameters,
+  limits: CPV_CONFIG_COLLECTIONS.limitRules,
+  'review-frequency': CPV_CONFIG_COLLECTIONS.reviewFrequency,
+  'alert-rules': CPV_CONFIG_COLLECTIONS.alertRules,
+  'annual-template': CPV_CONFIG_COLLECTIONS.reportTemplates,
+  workflow: CPV_CONFIG_COLLECTIONS.workflows,
+  'data-source': CPV_CONFIG_COLLECTIONS.integrationMapping,
+} as const;
 
-function str(v: unknown, fb = ''): string {
-  if (v === null || v === undefined) return fb;
-  return String(v);
-}
-
-function withAudit<T extends Record<string, unknown>>(data: T, actor: CpvConfigActor, isNew: boolean) {
-  const now = nowIso();
-  return {
-    ...data,
-    updatedAt: now,
-    updatedBy: actor.id,
-    ...(isNew ? { createdAt: now, createdBy: actor.id, isDeleted: false } : {}),
-  };
-}
-
-async function logConfigAudit(
-  actionType: string,
-  collectionName: string,
-  recordId: string,
-  actor: CpvConfigActor,
-  oldVal?: unknown,
-  newVal?: unknown,
-) {
-  try {
-    await createAuditLog({
-      moduleName: CPV_CONFIGURATION_MODULE,
-      collectionName,
-      recordId,
-      actionType,
-      oldValue: oldVal,
-      newValue: newVal,
-      user: { id: actor.id, name: actor.name },
-      status: 'Success',
-    });
-    await writeAuditTrail({
-      collectionName,
-      documentId: recordId,
-      action: actionType,
-      oldValue: oldVal,
-      newValue: newVal,
-      userId: actor.id,
-      userName: actor.name,
-      moduleName: CPV_CONFIGURATION_MODULE,
-    });
-  } catch (e) {
-    console.error('logConfigAudit failed', e);
+function callableErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const msg = String((e as { message?: string }).message || '');
+    if (msg) return msg.replace(/^Firebase:\s*/i, '').replace(/\s*\([^)]*\)\.?$/, '').trim() || fallback;
   }
+  return fallback;
+}
+
+function resolveChangeReason(primary?: string | null, defaultReason?: string): string | null {
+  const candidate = (primary || defaultReason || '').trim();
+  return candidate.length >= 5 ? candidate : null;
 }
 
 async function listCollection<T extends { id?: string; isDeleted?: boolean }>(
@@ -133,44 +125,43 @@ async function getSingleton<T>(docId: string): Promise<(T & { id: string }) | nu
   }
 }
 
-async function saveSingleton<T extends Record<string, unknown>>(
-  docId: string,
-  data: T,
-  actor: CpvConfigActor,
-  actionType: string,
-) {
-  if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
-  try {
-    const existing = await getSingleton<T>(docId);
-    const payload = withAudit(data, actor, !existing);
-    await setDoc(doc(getFirebaseFirestore(), CPV_CONFIG_COLLECTIONS.main, docId), payload, { merge: true });
-    await logConfigAudit(actionType, CPV_CONFIG_COLLECTIONS.main, docId, actor, existing, payload);
-    return { error: null };
-  } catch (e) {
-    console.error(`saveSingleton ${docId} failed`, e);
-    return { error: 'Failed to save configuration.' };
-  }
+function emptyBundle(): CpvConfigurationBundle {
+  return {
+    general: null, global: null, products: [], cppParameters: [], cqaParameters: [], limitRules: [],
+    reviewFrequency: [], alertRules: [], capability: null, spc: null, risk: null, ai: null,
+    notification: null, annualTemplates: [], workflows: [], dataSourceMappings: [],
+    dashboard: null, exportSettings: null, security: null, backup: null, featureFlags: null,
+  };
+}
+
+function defaultBundle(): CpvConfigurationBundle {
+  return {
+    general: { ...DEFAULT_GENERAL_SETTINGS, id: 'default' },
+    global: { ...DEFAULT_GLOBAL_ORG_SETTINGS, id: 'default' },
+    products: [],
+    cppParameters: [],
+    cqaParameters: [],
+    limitRules: DEFAULT_LIMIT_RULES as LimitRule[],
+    reviewFrequency: [],
+    alertRules: [],
+    capability: { ...DEFAULT_CAPABILITY_SETTINGS, id: 'default' },
+    spc: { ...DEFAULT_SPC_SETTINGS, id: 'default' },
+    risk: { ...DEFAULT_RISK_SETTINGS, id: 'default' },
+    ai: { ...DEFAULT_AI_SETTINGS, id: 'default' },
+    notification: { ...DEFAULT_NOTIFICATION_SETTINGS, id: 'default' },
+    annualTemplates: [{ ...DEFAULT_ANNUAL_TEMPLATE, id: 'default' }],
+    workflows: [],
+    dataSourceMappings: DEFAULT_DATA_SOURCE_MAPPINGS as DataSourceMapping[],
+    dashboard: { ...DEFAULT_DASHBOARD_SETTINGS, id: 'default' },
+    exportSettings: { ...DEFAULT_EXPORT_SETTINGS, id: 'default' },
+    security: { ...DEFAULT_SECURITY_SETTINGS, id: 'default' },
+    backup: { ...DEFAULT_BACKUP_SETTINGS, id: 'default' },
+    featureFlags: { ...DEFAULT_FEATURE_FLAGS, id: 'default' },
+  };
 }
 
 export async function fetchCpvConfiguration(): Promise<CpvConfigurationBundle> {
-  if (!isFirebaseConfigured()) {
-    return {
-      general: { ...DEFAULT_GENERAL_SETTINGS, id: 'default' },
-      products: [],
-      cppParameters: [],
-      cqaParameters: [],
-      limitRules: DEFAULT_LIMIT_RULES as LimitRule[],
-      reviewFrequency: [],
-      alertRules: [],
-      capability: { ...DEFAULT_CAPABILITY_SETTINGS, id: 'default' },
-      spc: { ...DEFAULT_SPC_SETTINGS, id: 'default' },
-      risk: { ...DEFAULT_RISK_SETTINGS, id: 'default' },
-      annualTemplates: [{ ...DEFAULT_ANNUAL_TEMPLATE, id: 'default' }],
-      workflows: [],
-      dataSourceMappings: DEFAULT_DATA_SOURCE_MAPPINGS as DataSourceMapping[],
-      exportSettings: { ...DEFAULT_EXPORT_SETTINGS, id: 'default' },
-    };
-  }
+  if (!isFirebaseConfigured()) return defaultBundle();
 
   try {
     const [
@@ -188,16 +179,27 @@ export async function fetchCpvConfiguration(): Promise<CpvConfigurationBundle> {
       listCollection<DataSourceMapping>(CPV_CONFIG_COLLECTIONS.integrationMapping),
     ]);
 
-    const [general, capability, spc, risk, exportSettings] = await Promise.all([
+    const [
+      general, global, capability, spc, risk, ai, notification, dashboard,
+      exportSettings, security, backup, featureFlags,
+    ] = await Promise.all([
       getSingleton<GeneralSettings>(SINGLETON_DOCS.general),
+      getSingleton<GlobalOrgSettings>(SINGLETON_DOCS.global),
       getSingleton<CapabilitySettings>(SINGLETON_DOCS.capability),
       getSingleton<SpcSettings>(SINGLETON_DOCS.spc),
       getSingleton<RiskScoringSettings>(SINGLETON_DOCS.risk),
+      getSingleton<AiSettings>(SINGLETON_DOCS.ai),
+      getSingleton<NotificationSettings>(SINGLETON_DOCS.notification),
+      getSingleton<DashboardSettings>(SINGLETON_DOCS.dashboard),
       getSingleton<ExportReportSettings>(SINGLETON_DOCS.export),
+      getSingleton<SecuritySettings>(SINGLETON_DOCS.security),
+      getSingleton<BackupSettings>(SINGLETON_DOCS.backup),
+      getSingleton<FeatureFlags>(SINGLETON_DOCS.featureFlags),
     ]);
 
     return {
       general: general || ({ ...DEFAULT_GENERAL_SETTINGS, id: 'default' } as GeneralSettings),
+      global: global || ({ ...DEFAULT_GLOBAL_ORG_SETTINGS, id: 'default' } as GlobalOrgSettings),
       products,
       cppParameters,
       cqaParameters,
@@ -207,60 +209,155 @@ export async function fetchCpvConfiguration(): Promise<CpvConfigurationBundle> {
       capability: capability || ({ ...DEFAULT_CAPABILITY_SETTINGS, id: 'default' } as CapabilitySettings),
       spc: spc || ({ ...DEFAULT_SPC_SETTINGS, id: 'default' } as SpcSettings),
       risk: risk || ({ ...DEFAULT_RISK_SETTINGS, id: 'default' } as RiskScoringSettings),
+      ai: ai || ({ ...DEFAULT_AI_SETTINGS, id: 'default' } as AiSettings),
+      notification: notification || ({ ...DEFAULT_NOTIFICATION_SETTINGS, id: 'default' } as NotificationSettings),
       annualTemplates: annualTemplates.length ? annualTemplates : [{ ...DEFAULT_ANNUAL_TEMPLATE, id: 'default' }],
       workflows,
       dataSourceMappings: dataSourceMappings.length ? dataSourceMappings : (DEFAULT_DATA_SOURCE_MAPPINGS as DataSourceMapping[]),
+      dashboard: dashboard || ({ ...DEFAULT_DASHBOARD_SETTINGS, id: 'default' } as DashboardSettings),
       exportSettings: exportSettings || ({ ...DEFAULT_EXPORT_SETTINGS, id: 'default' } as ExportReportSettings),
+      security: security || ({ ...DEFAULT_SECURITY_SETTINGS, id: 'default' } as SecuritySettings),
+      backup: backup || ({ ...DEFAULT_BACKUP_SETTINGS, id: 'default' } as BackupSettings),
+      featureFlags: featureFlags || ({ ...DEFAULT_FEATURE_FLAGS, id: 'default' } as FeatureFlags),
     };
   } catch (e) {
     console.error('fetchCpvConfiguration failed', e);
-    return {
-      general: null, products: [], cppParameters: [], cqaParameters: [], limitRules: [],
-      reviewFrequency: [], alertRules: [], capability: null, spc: null, risk: null,
-      annualTemplates: [], workflows: [], dataSourceMappings: [], exportSettings: null,
-    };
+    return emptyBundle();
   }
 }
 
-export async function saveGeneralSettings(data: GeneralSettings, actor: CpvConfigActor, reason?: string) {
-  const { cpvEnabled, defaultReviewFrequency, ...rest } = data;
-  if (cpvEnabled === undefined || cpvEnabled === null) return { error: 'CPV Enabled is required.' };
-  if (!defaultReviewFrequency) return { error: 'Default Review Frequency is required.' };
-  return saveSingleton(SINGLETON_DOCS.general, { ...rest, cpvEnabled, defaultReviewFrequency, changeReason: reason || '' }, actor, 'edit configuration');
+async function saveSingletonViaCf(
+  docId: string,
+  data: Record<string, unknown>,
+  changeReason: string,
+  esignConfirmed = false,
+) {
+  if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'saveAdminCpvConfigSingleton');
+    await fn({ docId, data, changeReason, esignConfirmed });
+    return { error: null };
+  } catch (e) {
+    console.error(`saveSingletonViaCf ${docId} failed`, e);
+    return { error: callableErrorMessage(e, 'Failed to save configuration.') };
+  }
 }
 
-export async function saveCapabilitySettings(data: CapabilitySettings, actor: CpvConfigActor, reason?: string) {
+export async function saveGeneralSettings(
+  data: GeneralSettings,
+  _actor: CpvConfigActor,
+  reason?: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  const changeReason = resolveChangeReason(reason, 'General CPV settings updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+  if (data.cpvEnabled === undefined || data.cpvEnabled === null) return { error: 'CPV Enabled is required.' };
+  if (!data.defaultReviewFrequency) return { error: 'Default Review Frequency is required.' };
+  return saveSingletonViaCf(SINGLETON_DOCS.general, data as unknown as Record<string, unknown>, changeReason, options?.esignConfirmed === true);
+}
+
+export async function saveGlobalOrgSettings(
+  data: GlobalOrgSettings,
+  _actor: CpvConfigActor,
+  reason?: string,
+) {
+  const changeReason = resolveChangeReason(reason, 'Global organization settings updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+  return saveSingletonViaCf(SINGLETON_DOCS.global, data as unknown as Record<string, unknown>, changeReason);
+}
+
+export async function saveCapabilitySettings(data: CapabilitySettings, _actor: CpvConfigActor, reason?: string) {
+  const changeReason = resolveChangeReason(reason, 'Process capability settings updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
   if (data.minimumSampleCount < 1) return { error: 'Minimum sample count must be at least 1.' };
-  return saveSingleton(SINGLETON_DOCS.capability, { ...data, changeReason: reason || '' }, actor, 'change Cpk threshold');
+  return saveSingletonViaCf(SINGLETON_DOCS.capability, data as unknown as Record<string, unknown>, changeReason);
 }
 
-export async function saveSpcSettings(data: SpcSettings, actor: CpvConfigActor, reason?: string) {
-  return saveSingleton(SINGLETON_DOCS.spc, { ...data, changeReason: reason || '' }, actor, 'edit configuration');
+export async function saveSpcSettings(data: SpcSettings, _actor: CpvConfigActor, reason?: string) {
+  const changeReason = resolveChangeReason(reason, 'SPC settings updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+  return saveSingletonViaCf(SINGLETON_DOCS.spc, data as unknown as Record<string, unknown>, changeReason);
 }
 
-export async function saveRiskSettings(data: RiskScoringSettings, actor: CpvConfigActor, reason?: string) {
-  return saveSingleton(SINGLETON_DOCS.risk, { ...data, changeReason: reason || '' }, actor, 'change risk scoring');
+export async function saveRiskSettings(data: RiskScoringSettings, _actor: CpvConfigActor, reason?: string) {
+  const changeReason = resolveChangeReason(reason, 'Risk scoring settings updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+  return saveSingletonViaCf(SINGLETON_DOCS.risk, data as unknown as Record<string, unknown>, changeReason);
 }
 
-export async function saveExportSettings(data: ExportReportSettings, actor: CpvConfigActor, reason?: string) {
-  return saveSingleton(SINGLETON_DOCS.export, { ...data, changeReason: reason || '' }, actor, 'edit configuration');
+export async function saveAiSettings(data: AiSettings, _actor: CpvConfigActor, reason?: string) {
+  const changeReason = resolveChangeReason(reason, 'AI configuration updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+  return saveSingletonViaCf(SINGLETON_DOCS.ai, data as unknown as Record<string, unknown>, changeReason);
+}
+
+export async function saveNotificationSettings(data: NotificationSettings, _actor: CpvConfigActor, reason?: string) {
+  const changeReason = resolveChangeReason(reason, 'Notification settings updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+  return saveSingletonViaCf(SINGLETON_DOCS.notification, data as unknown as Record<string, unknown>, changeReason);
+}
+
+export async function saveDashboardSettings(data: DashboardSettings, _actor: CpvConfigActor, reason?: string) {
+  const changeReason = resolveChangeReason(reason, 'Dashboard settings updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+  return saveSingletonViaCf(SINGLETON_DOCS.dashboard, data as unknown as Record<string, unknown>, changeReason);
+}
+
+export async function saveExportSettings(data: ExportReportSettings, _actor: CpvConfigActor, reason?: string) {
+  const changeReason = resolveChangeReason(reason, 'Export and report settings updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+  return saveSingletonViaCf(SINGLETON_DOCS.export, data as unknown as Record<string, unknown>, changeReason);
+}
+
+export async function saveSecuritySettings(
+  data: SecuritySettings,
+  _actor: CpvConfigActor,
+  reason?: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  const changeReason = resolveChangeReason(reason, 'Security configuration updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+  if (options?.esignConfirmed !== true) return { error: 'Electronic signature required for security changes.' };
+  return saveSingletonViaCf(SINGLETON_DOCS.security, data as unknown as Record<string, unknown>, changeReason, true);
+}
+
+export async function saveBackupSettings(
+  data: BackupSettings,
+  _actor: CpvConfigActor,
+  reason?: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  const changeReason = resolveChangeReason(reason, 'Backup configuration updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+  if (options?.esignConfirmed !== true) return { error: 'Electronic signature required for backup changes.' };
+  return saveSingletonViaCf(SINGLETON_DOCS.backup, data as unknown as Record<string, unknown>, changeReason, true);
+}
+
+export async function saveFeatureFlags(data: FeatureFlags, _actor: CpvConfigActor, reason?: string) {
+  const changeReason = resolveChangeReason(reason, 'Feature flags updated');
+  if (!changeReason) return { error: 'Change reason must be at least 5 characters.' };
+  return saveSingletonViaCf(SINGLETON_DOCS.featureFlags, data as unknown as Record<string, unknown>, changeReason);
 }
 
 export async function createConfigListRecord<T extends Record<string, unknown>>(
   collectionName: string,
   data: T,
-  actor: CpvConfigActor,
-  actionType = 'create configuration',
+  _actor: CpvConfigActor,
+  changeReason = 'Configuration list record created',
 ) {
   if (!isFirebaseConfigured()) return { id: null, error: 'Firebase is not configured.' };
+  const reason = resolveChangeReason(changeReason, 'Configuration list record created');
+  if (!reason) return { id: null, error: 'Change reason must be at least 5 characters.' };
   try {
-    const payload = withAudit(data, actor, true);
-    const ref = await addDoc(collection(getFirebaseFirestore(), collectionName), payload);
-    await logConfigAudit(actionType, collectionName, ref.id, actor, null, payload);
-    return { id: ref.id, error: null };
+    const fn = httpsCallable<{ collectionName: string; data: T; changeReason: string }, { id: string }>(
+      getFirebaseFunctions(),
+      'createAdminCpvConfigListRecord',
+    );
+    const result = await fn({ collectionName, data, changeReason: reason });
+    return { id: result.data?.id || null, error: null };
   } catch (e) {
     console.error(`createConfigListRecord ${collectionName} failed`, e);
-    return { id: null, error: 'Failed to create configuration record.' };
+    return { id: null, error: callableErrorMessage(e, 'Failed to create configuration record.') };
   }
 }
 
@@ -268,63 +365,56 @@ export async function updateConfigListRecord<T extends Record<string, unknown>>(
   collectionName: string,
   id: string,
   data: Partial<T>,
-  actor: CpvConfigActor,
-  actionType = 'edit configuration',
+  _actor: CpvConfigActor,
+  changeReason = 'Configuration list record updated',
 ) {
   if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  const reason = resolveChangeReason(changeReason, 'Configuration list record updated');
+  if (!reason) return { error: 'Change reason must be at least 5 characters.' };
   try {
-    const payload = withAudit(data, actor, false);
-    await updateDoc(doc(getFirebaseFirestore(), collectionName, id), payload);
-    await logConfigAudit(actionType, collectionName, id, actor, null, payload);
+    const fn = httpsCallable(getFirebaseFunctions(), 'updateAdminCpvConfigListRecord');
+    await fn({ collectionName, id, data, changeReason: reason });
     return { error: null };
   } catch (e) {
     console.error(`updateConfigListRecord ${collectionName} failed`, e);
-    return { error: 'Failed to update configuration record.' };
+    return { error: callableErrorMessage(e, 'Failed to update configuration record.') };
   }
 }
 
 export async function softDeleteConfigRecord(
   collectionName: string,
   id: string,
-  actor: CpvConfigActor,
-  actionType = 'edit configuration',
+  _actor: CpvConfigActor,
+  changeReason = 'Configuration list record soft-deleted',
 ) {
   if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  const reason = resolveChangeReason(changeReason, 'Configuration list record soft-deleted');
+  if (!reason) return { error: 'Change reason must be at least 5 characters.' };
   try {
-    const payload = { isDeleted: true, updatedAt: nowIso(), updatedBy: actor.id };
-    await updateDoc(doc(getFirebaseFirestore(), collectionName, id), payload);
-    await logConfigAudit(actionType, collectionName, id, actor, null, payload);
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminCpvConfigListRecord');
+    await fn({ collectionName, id, changeReason: reason });
     return { error: null };
   } catch (e) {
     console.error(`softDeleteConfigRecord ${collectionName} failed`, e);
-    return { error: 'Failed to delete configuration record.' };
+    return { error: callableErrorMessage(e, 'Failed to delete configuration record.') };
   }
 }
 
-export async function resetConfigurationDefaults(actor: CpvConfigActor) {
+export async function resetConfigurationDefaults(
+  _actor: CpvConfigActor,
+  options?: { changeReason?: string; esignConfirmed?: boolean },
+) {
   if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  const reason = resolveChangeReason(options?.changeReason, 'Reset CPV configuration defaults');
+  if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+  if (options?.esignConfirmed !== true) return { error: 'Electronic signature required to reset defaults.' };
   try {
-    await Promise.all([
-      saveSingleton(SINGLETON_DOCS.general, DEFAULT_GENERAL_SETTINGS, actor, 'reset defaults'),
-      saveSingleton(SINGLETON_DOCS.capability, DEFAULT_CAPABILITY_SETTINGS, actor, 'reset defaults'),
-      saveSingleton(SINGLETON_DOCS.spc, DEFAULT_SPC_SETTINGS, actor, 'reset defaults'),
-      saveSingleton(SINGLETON_DOCS.risk, DEFAULT_RISK_SETTINGS, actor, 'reset defaults'),
-      saveSingleton(SINGLETON_DOCS.export, DEFAULT_EXPORT_SETTINGS, actor, 'reset defaults'),
-    ]);
-
-    for (const rule of DEFAULT_LIMIT_RULES) {
-      await createConfigListRecord(CPV_CONFIG_COLLECTIONS.limitRules, rule, actor, 'reset defaults');
-    }
-    for (const mapping of DEFAULT_DATA_SOURCE_MAPPINGS) {
-      await createConfigListRecord(CPV_CONFIG_COLLECTIONS.integrationMapping, mapping, actor, 'reset defaults');
-    }
-    await createConfigListRecord(CPV_CONFIG_COLLECTIONS.reportTemplates, DEFAULT_ANNUAL_TEMPLATE, actor, 'reset defaults');
-
-    await logConfigAudit('reset defaults', CPV_CONFIG_COLLECTIONS.main, 'all', actor);
+    const fn = httpsCallable(getFirebaseFunctions(), 'resetAdminCpvConfigurationDefaults');
+    await fn({ changeReason: reason, esignConfirmed: true });
     return { error: null };
   } catch (e) {
     console.error('resetConfigurationDefaults failed', e);
-    return { error: 'Failed to reset configuration.' };
+    return { error: callableErrorMessage(e, 'Failed to reset configuration.') };
   }
 }
 
@@ -337,40 +427,43 @@ export async function exportConfigurationJson(): Promise<{ json: string; error: 
   }
 }
 
-export async function importConfigurationJson(json: string, actor: CpvConfigActor) {
+export async function importConfigurationJson(
+  json: string,
+  _actor: CpvConfigActor,
+  options?: { changeReason?: string; esignConfirmed?: boolean },
+) {
+  const reason = resolveChangeReason(options?.changeReason, 'Configuration JSON import');
+  if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+  if (options?.esignConfirmed !== true) return { error: 'Electronic signature required for import.' };
   try {
     const parsed = JSON.parse(json) as Partial<CpvConfigurationBundle>;
-    if (parsed.general) await saveGeneralSettings(parsed.general, actor, 'JSON import');
-    if (parsed.capability) await saveCapabilitySettings(parsed.capability, actor, 'JSON import');
-    if (parsed.spc) await saveSpcSettings(parsed.spc, actor, 'JSON import');
-    if (parsed.risk) await saveRiskSettings(parsed.risk, actor, 'JSON import');
-    if (parsed.exportSettings) await saveExportSettings(parsed.exportSettings, actor, 'JSON import');
-
-    const listImports: Array<[string, unknown[] | undefined]> = [
-      [CPV_CONFIG_COLLECTIONS.products, parsed.products],
-      [CPV_CONFIG_COLLECTIONS.cppParameters, parsed.cppParameters],
-      [CPV_CONFIG_COLLECTIONS.cqaParameters, parsed.cqaParameters],
-      [CPV_CONFIG_COLLECTIONS.limitRules, parsed.limitRules],
-      [CPV_CONFIG_COLLECTIONS.reviewFrequency, parsed.reviewFrequency],
-      [CPV_CONFIG_COLLECTIONS.alertRules, parsed.alertRules],
-      [CPV_CONFIG_COLLECTIONS.reportTemplates, parsed.annualTemplates],
-      [CPV_CONFIG_COLLECTIONS.workflows, parsed.workflows],
-      [CPV_CONFIG_COLLECTIONS.integrationMapping, parsed.dataSourceMappings],
-    ];
-
-    for (const [col, rows] of listImports) {
-      if (!rows?.length) continue;
-      for (const row of rows) {
-        const { id: _id, ...rest } = row as Record<string, unknown>;
-        await createConfigListRecord(col, rest, actor, 'import configuration');
-      }
-    }
-
-    await logConfigAudit('import configuration', CPV_CONFIG_COLLECTIONS.main, 'import', actor);
+    const fn = httpsCallable(getFirebaseFunctions(), 'importAdminCpvConfiguration');
+    await fn({ changeReason: reason, esignConfirmed: true, bundle: parsed });
     return { error: null };
   } catch (e) {
     console.error('importConfigurationJson failed', e);
-    return { error: 'Invalid configuration JSON.' };
+    return { error: callableErrorMessage(e, 'Invalid configuration JSON.') };
+  }
+}
+
+export async function approveCpvConfiguration(
+  _actor: CpvConfigActor,
+  options?: { changeReason?: string; esignConfirmed?: boolean; snapshotSummary?: string },
+) {
+  const reason = resolveChangeReason(options?.changeReason, 'CPV configuration approved');
+  if (!reason) return { error: 'Change reason must be at least 5 characters.' };
+  if (options?.esignConfirmed !== true) return { error: 'Electronic signature required for approval.' };
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'approveAdminCpvConfiguration');
+    await fn({
+      changeReason: reason,
+      esignConfirmed: true,
+      snapshotSummary: options?.snapshotSummary || 'Configuration package approved',
+    });
+    return { error: null };
+  } catch (e) {
+    console.error('approveCpvConfiguration failed', e);
+    return { error: callableErrorMessage(e, 'Approval failed.') };
   }
 }
 
@@ -387,8 +480,13 @@ export async function testConfiguration(): Promise<{ ok: boolean; message: strin
   };
 }
 
-export async function logConfigurationExport(actor: CpvConfigActor) {
-  await logConfigAudit('export configuration', CPV_CONFIG_COLLECTIONS.main, 'export', actor);
+export async function logConfigurationExport(_actor: CpvConfigActor, count = 0) {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminCpvConfigurationExport');
+    await fn({ changeReason: 'Configuration export', count });
+  } catch (e) {
+    console.error('logConfigurationExport failed', e);
+  }
 }
 
 export function isProductCpvRequired(bundle: CpvConfigurationBundle, productName: string): boolean {
@@ -397,40 +495,7 @@ export function isProductCpvRequired(bundle: CpvConfigurationBundle, productName
   return bundle.general?.cpvEnabled !== false;
 }
 
-/* Collection helpers for UI */
-export const CONFIG_LIST_COLLECTIONS = {
-  product: CPV_CONFIG_COLLECTIONS.products,
-  cpp: CPV_CONFIG_COLLECTIONS.cppParameters,
-  cqa: CPV_CONFIG_COLLECTIONS.cqaParameters,
-  limits: CPV_CONFIG_COLLECTIONS.limitRules,
-  'review-frequency': CPV_CONFIG_COLLECTIONS.reviewFrequency,
-  'alert-rules': CPV_CONFIG_COLLECTIONS.alertRules,
-  'annual-template': CPV_CONFIG_COLLECTIONS.reportTemplates,
-  workflow: CPV_CONFIG_COLLECTIONS.workflows,
-  'data-source': CPV_CONFIG_COLLECTIONS.integrationMapping,
-} as const;
-
 export async function fetchAlertRulesFromConfig(): Promise<AlertRuleConfig[]> {
-  const rows = await listCollection<AlertRuleConfig>(CPV_CONFIG_COLLECTIONS.alertRules);
-  if (rows.length) return rows;
-  try {
-    const legacy = await listCollection<AlertRuleConfig>('alert_rules');
-    return legacy;
-  } catch {
-    return [];
-  }
-}
-
-export function normalizeLegacyCppRecord(raw: Record<string, unknown>): Partial<CppConfiguration> {
-  return {
-    parameterCode: str(raw.parameterCode || raw.parameterName),
-    parameterName: str(raw.parameterName),
-    processStage: str(raw.processStage, 'Manufacturing'),
-    targetValue: Number(raw.target ?? raw.targetValue ?? 0),
-    lowerLimit: Number(raw.lsl ?? raw.lowerLimit ?? 0),
-    upperLimit: Number(raw.usl ?? raw.upperLimit ?? 0),
-    unit: str(raw.unit),
-    frequency: str(raw.samplingFrequency || raw.frequency, 'Per Batch'),
-    status: (raw.status as 'Active' | 'Inactive') || 'Active',
-  };
+  const bundle = await fetchCpvConfiguration();
+  return bundle.alertRules.filter((r) => r.status === 'Active');
 }

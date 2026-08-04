@@ -1,8 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Download, Eye, FileSpreadsheet, Loader2, Pencil, Plus, RefreshCw, Save, Trash2, Upload,
+  ArrowLeft, ArrowRight, Download, Eye, FileSpreadsheet, Loader2, Pencil, Plus,
+  RefreshCw, Save, Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -11,19 +14,23 @@ import {
 } from 'recharts';
 import { useAuth } from '@/contexts/auth-context';
 import { isFirebaseConfigured } from '@/lib/firebase';
-import type { PqrOption } from '@/lib/pqr-batch-review-records';
+import {
+  PQR_SECTION_FLOW, pqrSectionHref, type PqrOption,
+} from '@/lib/pqr-batch-review-records';
+import { fetchPqrById } from '@/lib/pqr-batch-review-service';
 import {
   PQR_PACKAGING_CATEGORIES, PQR_PACKAGING_TYPES, PQR_QC_STATUSES,
   buildPackagingVendorAvlRows, canAddPackagingReview, canExportPackagingReview,
-  canManagePackagingReview, computePackagingSummary, type PackagingReviewFormData,
-  type PqrPackagingReviewRecord,
+  canManagePackagingReview, computePackagingSummary, filterPackagingReviewRecords,
+  formatPct, formatQty, type PackagingReviewFormData, type PqrPackagingReviewRecord,
 } from '@/lib/pqr-packaging-review-records';
 import {
-  buildPackagingCharts, createPackagingReviewRecord, fetchPackagingQualityMetrics,
-  fetchPackagingReviewRecords, fetchPqrOptions, getPackagingReviewNarrative,
-  logPackagingNarrativeEdit, logPackagingReviewExport, logPackagingReviewView,
-  pullPackagingData, recalculateAllPackagingCompliance, savePackagingSectionToPqr,
-  softDeletePackagingReviewRecord, updatePackagingReviewRecord, uploadPackagingAttachment,
+  buildPackagingCharts, createPackagingReviewRecord, exportPackagingReviewCsv,
+  fetchPackagingQualityMetrics, fetchPackagingReviewRecords, fetchPqrOptions,
+  getPackagingReviewNarrative, logPackagingNarrativeEdit, logPackagingReviewExport,
+  logPackagingReviewView, pullPackagingData, recalculateAllPackagingCompliance,
+  savePackagingSectionToPqr, softDeletePackagingReviewRecord, updatePackagingReviewRecord,
+  uploadPackagingAttachment,
 } from '@/lib/pqr-packaging-review-service';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ResponsiveDataTable } from '@/components/cpv/product-master/responsive-data-table';
@@ -65,6 +72,8 @@ type TableRow = PqrPackagingReviewRecord & { srNo: number };
 
 export function PackagingReviewPage() {
   const { user, profile } = useAuth();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const role = profile?.role;
   const canAdd = canAddPackagingReview(role);
   const canManage = canManagePackagingReview(role);
@@ -77,11 +86,11 @@ export function PackagingReviewPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [narrative, setNarrative] = useState('');
+  const [narrativeDirty, setNarrativeDirty] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [editRecord, setEditRecord] = useState<PqrPackagingReviewRecord | null>(null);
   const [detailRecord, setDetailRecord] = useState<PqrPackagingReviewRecord | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [qualityMetrics, setQualityMetrics] = useState({ packagingDeviationCount: 0, packagingCapaCount: 0 });
 
   const [filterType, setFilterType] = useState('all');
   const [filterCategory, setFilterCategory] = useState('all');
@@ -94,6 +103,10 @@ export function PackagingReviewPage() {
   const [filterBatch, setFilterBatch] = useState('');
   const [filterManufacturer, setFilterManufacturer] = useState('');
   const [filterSupplier, setFilterSupplier] = useState('');
+  const [filterSearch, setFilterSearch] = useState('');
+  const [qualityMetrics, setQualityMetrics] = useState({
+    packagingOosCount: 0, packagingDeviationCount: 0, packagingCapaCount: 0,
+  });
 
   const actor = useMemo(() => ({
     id: user?.uid || 'system',
@@ -103,6 +116,14 @@ export function PackagingReviewPage() {
 
   const selectedPqr = useMemo(() => pqrs.find((p) => p.id === selectedPqrId) || null, [pqrs, selectedPqrId]);
 
+  const syncPqrIdToUrl = useCallback((pqrId: string) => {
+    if (!pqrId) return;
+    const params = new URLSearchParams(searchParams?.toString() || '');
+    if (params.get('pqrId') === pqrId) return;
+    params.set('pqrId', pqrId);
+    router.replace(`/pqr/packaging?${params.toString()}`, { scroll: false });
+  }, [router, searchParams]);
+
   const loadPqrs = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -110,10 +131,26 @@ export function PackagingReviewPage() {
       if (!isFirebaseConfigured()) { setError('Firebase is not configured.'); return; }
       const opts = await fetchPqrOptions();
       setPqrs(opts);
-      if (opts.length && !selectedPqrId) setSelectedPqrId(opts[0].id);
+      const fromUrl = searchParams?.get('pqrId') || '';
+      let nextId = selectedPqrId;
+      if (fromUrl && opts.some((p) => p.id === fromUrl)) {
+        nextId = fromUrl;
+      } else if (fromUrl) {
+        const direct = await fetchPqrById(fromUrl);
+        if (direct) {
+          setPqrs((prev) => (prev.some((p) => p.id === direct.id) ? prev : [direct, ...prev]));
+          nextId = direct.id;
+        } else if (!nextId && opts.length) nextId = opts[0].id;
+      } else if (!nextId && opts.length) {
+        nextId = opts[0].id;
+      }
+      if (nextId) {
+        setSelectedPqrId(nextId);
+        syncPqrIdToUrl(nextId);
+      }
     } catch { setError('Failed to load PQR records.'); }
     finally { setLoading(false); }
-  }, [selectedPqrId]);
+  }, [selectedPqrId, searchParams, syncPqrIdToUrl]);
 
   const loadRecords = useCallback(async (pqrId: string, pqr?: PqrOption | null) => {
     if (!pqrId) return;
@@ -122,6 +159,7 @@ export function PackagingReviewPage() {
       const rows = await fetchPackagingReviewRecords(pqrId);
       setRecords(rows);
       setNarrative(getPackagingReviewNarrative(rows));
+      setNarrativeDirty(false);
       if (pqr) {
         const metrics = await fetchPackagingQualityMetrics(pqr, rows);
         setQualityMetrics(metrics);
@@ -130,23 +168,29 @@ export function PackagingReviewPage() {
     finally { setBusy(false); }
   }, []);
 
-  useEffect(() => { void loadPqrs(); void logPackagingReviewView(actor); }, [loadPqrs, actor]);
-  useEffect(() => { if (selectedPqrId) void loadRecords(selectedPqrId, selectedPqr); }, [selectedPqrId, selectedPqr, loadRecords]);
+  useEffect(() => { void loadPqrs(); void logPackagingReviewView(actor); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filtered = useMemo(() => records.filter((r) => {
-    if (filterType !== 'all' && r.packagingMaterialType !== filterType) return false;
-    if (filterCategory !== 'all' && r.packagingMaterialCategory !== filterCategory) return false;
-    if (filterQc !== 'all' && r.qcStatus !== filterQc) return false;
-    if (filterCompliance !== 'all' && r.complianceStatus !== filterCompliance) return false;
-    if (filterRecon !== 'all' && r.reconciliationStatus !== filterRecon) return false;
-    if (filterAvl !== 'all' && r.vendorAvlStatus !== filterAvl) return false;
-    if (filterRisk !== 'all' && r.riskLevel !== filterRisk) return false;
-    if (filterMaterial && !r.materialName.toLowerCase().includes(filterMaterial.toLowerCase())) return false;
-    if (filterBatch && !`${r.batchNumber} ${r.materialLotNumber}`.toLowerCase().includes(filterBatch.toLowerCase())) return false;
-    if (filterManufacturer && !r.manufacturerName.toLowerCase().includes(filterManufacturer.toLowerCase())) return false;
-    if (filterSupplier && !r.supplierName.toLowerCase().includes(filterSupplier.toLowerCase())) return false;
-    return true;
-  }), [records, filterType, filterCategory, filterQc, filterCompliance, filterRecon, filterAvl, filterRisk, filterMaterial, filterBatch, filterManufacturer, filterSupplier]);
+  useEffect(() => {
+    if (selectedPqrId) {
+      void loadRecords(selectedPqrId, selectedPqr);
+      syncPqrIdToUrl(selectedPqrId);
+    }
+  }, [selectedPqrId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const filtered = useMemo(() => filterPackagingReviewRecords(records, {
+    packagingType: filterType,
+    category: filterCategory,
+    qcStatus: filterQc,
+    complianceStatus: filterCompliance,
+    reconciliationStatus: filterRecon,
+    avlStatus: filterAvl,
+    riskLevel: filterRisk,
+    material: filterMaterial,
+    batch: filterBatch,
+    manufacturer: filterManufacturer,
+    supplier: filterSupplier,
+    search: filterSearch,
+  }), [records, filterType, filterCategory, filterQc, filterCompliance, filterRecon, filterAvl, filterRisk, filterMaterial, filterBatch, filterManufacturer, filterSupplier, filterSearch]);
 
   const primaryRecords = useMemo(() => filtered.filter((r) => r.packagingMaterialType === 'Primary Packaging Material'), [filtered]);
   const secondaryRecords = useMemo(() => filtered.filter((r) => r.packagingMaterialType === 'Secondary Packaging Material'), [filtered]);
@@ -154,6 +198,21 @@ export function PackagingReviewPage() {
   const summary = useMemo(() => computePackagingSummary(filtered, qualityMetrics), [filtered, qualityMetrics]);
   const charts = useMemo(() => buildPackagingCharts(filtered), [filtered]);
   const vendorRows = useMemo(() => buildPackagingVendorAvlRows(filtered), [filtered]);
+
+  const resetFilters = () => {
+    setFilterType('all');
+    setFilterCategory('all');
+    setFilterQc('all');
+    setFilterCompliance('all');
+    setFilterRecon('all');
+    setFilterAvl('all');
+    setFilterRisk('all');
+    setFilterMaterial('');
+    setFilterBatch('');
+    setFilterManufacturer('');
+    setFilterSupplier('');
+    setFilterSearch('');
+  };
 
   const tableColumns: ColumnDef<TableRow>[] = [
     { key: 'srNo', header: 'Sr. No.' },
@@ -163,23 +222,24 @@ export function PackagingReviewPage() {
     { key: 'supplierName', header: 'Supplier' },
     { key: 'arNumber', header: 'AR No.' },
     { key: 'materialLotNumber', header: 'Batch / Lot No.', render: (r) => r.materialLotNumber || r.batchNumber || '—' },
-    { key: 'usedQuantity', header: 'Used Qty', render: (r) => `${r.usedQuantity}` },
-    { key: 'rejectedQuantity', header: 'Rejected Qty', render: (r) => `${r.rejectedQuantity}` },
-    { key: 'returnedQuantity', header: 'Returned Qty', render: (r) => `${r.returnedQuantity}` },
-    { key: 'balanceQuantity', header: 'Balance Qty', render: (r) => `${r.balanceQuantity}` },
+    { key: 'usedQuantity', header: 'Used Qty', render: (r) => formatQty(r.usedQuantity, r.unit) },
+    { key: 'rejectedQuantity', header: 'Rejected Qty', render: (r) => formatQty(r.rejectedQuantity, r.unit) },
+    { key: 'balanceQuantity', header: 'Balance Qty', render: (r) => formatQty(r.balanceQuantity, r.unit) },
+    { key: 'reconciliationStatus', header: 'Recon', render: (r) => <ReconciliationBadge status={r.reconciliationStatus} /> },
+    { key: 'rejectionPct', header: 'Rejection %', render: (r) => formatPct(r.rejectionPct) },
     { key: 'qcStatus', header: 'QC Status', render: (r) => <QcStatusBadge status={r.qcStatus} /> },
-    { key: 'vendorAvlStatus', header: 'AVL Status', render: (r) => <AvlStatusBadge status={r.vendorAvlStatus} /> },
+    { key: 'vendorAvlStatus', header: 'AVL', render: (r) => <AvlStatusBadge status={r.vendorAvlStatus} /> },
     { key: 'complianceStatus', header: 'Compliance', render: (r) => <ComplianceBadge status={r.complianceStatus} /> },
-    { key: 'remarks', header: 'Remarks', render: (r) => <span className="line-clamp-1 max-w-[80px]">{r.remarks || '—'}</span> },
+    { key: 'riskLevel', header: 'Risk', render: (r) => <PackagingRiskBadge level={r.riskLevel} /> },
     {
       key: 'actions', header: 'Action',
       render: (r) => (
         <div className="flex gap-1">
-          <Button variant="ghost" size="icon" onClick={() => setDetailRecord(r)}><Eye className="h-4 w-4" /></Button>
+          <Button variant="ghost" size="icon" aria-label={`View ${r.materialName}`} onClick={() => setDetailRecord(r)}><Eye className="h-4 w-4" /></Button>
           {canManage && (
             <>
-              <Button variant="ghost" size="icon" onClick={() => { setEditRecord(r); setFormOpen(true); }}><Pencil className="h-4 w-4" /></Button>
-              <Button variant="ghost" size="icon" onClick={() => setDeleteId(r.id || null)}><Trash2 className="h-4 w-4 text-red-500" /></Button>
+              <Button variant="ghost" size="icon" aria-label={`Edit ${r.materialName}`} onClick={() => { setEditRecord(r); setFormOpen(true); }}><Pencil className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="icon" aria-label={`Remove ${r.materialName}`} onClick={() => setDeleteId(r.id || null)}><Trash2 className="h-4 w-4 text-red-500" /></Button>
             </>
           )}
         </div>
@@ -219,15 +279,19 @@ export function PackagingReviewPage() {
     const { error: err } = await savePackagingSectionToPqr(selectedPqr.id, narrative, records, actor);
     setBusy(false);
     if (err) toast.error(err);
-    else toast.success('Packaging section saved to PQR');
+    else {
+      setNarrativeDirty(false);
+      toast.success('Packaging section saved to PQR');
+    }
   };
 
   const handleRecalc = async () => {
     if (!selectedPqr) return;
     setBusy(true);
-    await recalculateAllPackagingCompliance(selectedPqr.id, actor);
+    const { updated, error: err } = await recalculateAllPackagingCompliance(selectedPqr.id, actor);
     setBusy(false);
-    toast.success('Compliance and reconciliation recalculated');
+    if (err) return toast.error(err);
+    toast.success(`Compliance recalculated for ${updated} lot(s)`);
     await loadRecords(selectedPqr.id, selectedPqr);
   };
 
@@ -241,6 +305,23 @@ export function PackagingReviewPage() {
     toast.success('Packaging record removed');
     await loadRecords(selectedPqr.id, selectedPqr);
   };
+
+  const exportCsv = () => {
+    if (!filtered.length) return toast.info('No packaging records to export');
+    exportPackagingReviewCsv(filtered, selectedPqr?.pqrNumber);
+    void logPackagingReviewExport(actor, 'csv');
+    toast.success('Packaging review exported as CSV');
+  };
+
+  const sectionNav = useMemo(() => {
+    const idx = PQR_SECTION_FLOW.findIndex((s) => s.key === 'packaging');
+    const prev = PQR_SECTION_FLOW[idx - 1];
+    const next = PQR_SECTION_FLOW[idx + 1];
+    return {
+      prev: prev ? { ...prev, href: pqrSectionHref(prev.href, selectedPqrId) } : null,
+      next: next ? { ...next, href: pqrSectionHref(next.href, selectedPqrId) } : null,
+    };
+  }, [selectedPqrId]);
 
   const renderTable = (rows: PqrPackagingReviewRecord[], emptyTitle: string) => (
     rows.length ? (
@@ -265,14 +346,9 @@ export function PackagingReviewPage() {
           actions={(
             <>
               {canExport && (
-                <>
-                  <Button variant="outline" size="sm" onClick={() => { void logPackagingReviewExport(actor, 'import'); toast.info('Excel import placeholder'); }}>
-                    <Upload className="h-4 w-4 mr-1" />Import
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => { void logPackagingReviewExport(actor, 'excel'); toast.info('Excel export placeholder'); }}>
-                    <FileSpreadsheet className="h-4 w-4 mr-1" />Export
-                  </Button>
-                </>
+                <Button variant="outline" size="sm" onClick={exportCsv} disabled={!filtered.length}>
+                  <FileSpreadsheet className="h-4 w-4 mr-1" />Export CSV
+                </Button>
               )}
               {canManage && selectedPqr && (
                 <>
@@ -280,7 +356,7 @@ export function PackagingReviewPage() {
                     {busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Download className="h-4 w-4 mr-1" />}
                     Pull Packaging
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => void handleRecalc()} disabled={busy}>Recalc</Button>
+                  <Button variant="outline" size="sm" onClick={() => void handleRecalc()} disabled={busy}>Recalc Compliance</Button>
                 </>
               )}
               {canAdd && selectedPqr && (
@@ -290,13 +366,31 @@ export function PackagingReviewPage() {
           )}
         />
 
+        <div className="flex flex-wrap gap-2 text-sm">
+          {PQR_SECTION_FLOW.filter((s) => !['dashboard', 'create'].includes(s.key)).map((s) => (
+            <Link
+              key={s.key}
+              href={pqrSectionHref(s.href, selectedPqrId)}
+              className={`rounded-md border px-2.5 py-1 ${s.key === 'packaging' ? 'bg-blue-600 text-white border-blue-600' : 'hover:bg-slate-50'}`}
+            >
+              {s.label}
+            </Link>
+          ))}
+        </div>
+
         <Card>
           <CardContent className="pt-6">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div className="space-y-2 sm:col-span-2">
-                <Label>PQR Number *</Label>
-                <Select value={selectedPqrId} onValueChange={setSelectedPqrId}>
-                  <SelectTrigger><SelectValue placeholder="Select PQR..." /></SelectTrigger>
+                <Label htmlFor="pqr-select">PQR Number *</Label>
+                <Select
+                  value={selectedPqrId}
+                  onValueChange={(id) => {
+                    setSelectedPqrId(id);
+                    syncPqrIdToUrl(id);
+                  }}
+                >
+                  <SelectTrigger id="pqr-select"><SelectValue placeholder="Select PQR..." /></SelectTrigger>
                   <SelectContent>
                     {pqrs.map((p) => <SelectItem key={p.id} value={p.id}>{p.pqrNumber} — {p.productName}</SelectItem>)}
                   </SelectContent>
@@ -304,8 +398,27 @@ export function PackagingReviewPage() {
               </div>
               {selectedPqr && (
                 <>
-                  <div><Label className="text-muted-foreground">Product</Label><p className="text-sm font-medium">{selectedPqr.productName}</p></div>
-                  <div><Label className="text-muted-foreground">Review Period</Label><p className="text-sm font-medium">{selectedPqr.reviewPeriodFrom} — {selectedPqr.reviewPeriodTo}</p></div>
+                  <div>
+                    <Label className="text-muted-foreground">Product / Code</Label>
+                    <p className="text-sm font-medium">{selectedPqr.productName}</p>
+                    <p className="text-xs text-muted-foreground">{selectedPqr.productCode}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Review Period</Label>
+                    <p className="text-sm font-medium">{selectedPqr.reviewPeriodFrom || '—'} — {selectedPqr.reviewPeriodTo || '—'}</p>
+                  </div>
+                  {(selectedPqr.strength || selectedPqr.dosageForm) && (
+                    <div>
+                      <Label className="text-muted-foreground">Strength / Dosage Form</Label>
+                      <p className="text-sm font-medium">{[selectedPqr.strength, selectedPqr.dosageForm].filter(Boolean).join(' / ')}</p>
+                    </div>
+                  )}
+                  {selectedPqr.status && (
+                    <div>
+                      <Label className="text-muted-foreground">PQR Status</Label>
+                      <p className="text-sm font-medium capitalize">{selectedPqr.status.replace(/_/g, ' ')}</p>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -316,37 +429,44 @@ export function PackagingReviewPage() {
           <EmptyState title="Select a PQR" message="Choose a PQR to review packaging materials for the annual review period." />
         ) : (
           <>
-            <div className="grid gap-3 grid-cols-2 md:grid-cols-4 xl:grid-cols-12">
+            <div className="grid gap-3 grid-cols-2 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-12">
               <KpiCard label="Total Lots" value={summary.totalPackagingLots} />
+              <KpiCard label="Materials" value={summary.uniqueMaterials} />
               <KpiCard label="Primary Lots" value={summary.primaryPackagingLots} />
               <KpiCard label="Secondary Lots" value={summary.secondaryPackagingLots} />
               <KpiCard label="Tertiary Lots" value={summary.tertiaryPackagingLots} />
-              <KpiCard label="Approved Lots" value={summary.approvedLots} tone="green" />
-              <KpiCard label="Rejected Lots" value={summary.rejectedLots} tone="red" />
-              <KpiCard label="AVL Compliant" value={summary.avlApprovedLots} tone="green" />
+              <KpiCard label="Approved" value={summary.approvedLots} tone="green" />
+              <KpiCard label="Rejected" value={summary.rejectedLots} tone="red" />
+              <KpiCard label="Pending" value={summary.pendingLots} tone="amber" />
+              <KpiCard label="Accept %" value={`${summary.acceptancePct}%`} tone="green" />
               <KpiCard label="Non-Compliant" value={summary.nonCompliantLots} tone="red" />
               <KpiCard label="Recon Mismatch" value={summary.reconciliationMismatchCount} tone="amber" />
-              <KpiCard label="Expired" value={summary.expiredMaterials} tone="amber" />
-              <KpiCard label="Deviations" value={summary.packagingDeviationCount} />
-              <KpiCard label="CAPA" value={summary.packagingCapaCount} />
+              <KpiCard label="OOS / Dev / CAPA" value={`${summary.packagingOosCount}/${summary.packagingDeviationCount}/${summary.packagingCapaCount}`} />
             </div>
 
             <Card><CardContent className="pt-6">
               <div className="flex flex-wrap gap-2">
+                <Input
+                  placeholder="Search material / AR / lot"
+                  className="w-full sm:w-[200px]"
+                  value={filterSearch}
+                  onChange={(e) => setFilterSearch(e.target.value)}
+                  aria-label="Search packaging materials"
+                />
                 <Select value={filterType} onValueChange={setFilterType}>
-                  <SelectTrigger className="w-[170px]"><SelectValue placeholder="Packaging Type" /></SelectTrigger>
+                  <SelectTrigger className="w-[170px]" aria-label="Filter packaging type"><SelectValue placeholder="Packaging Type" /></SelectTrigger>
                   <SelectContent><SelectItem value="all">All Types</SelectItem>{PQR_PACKAGING_TYPES.map((t) => <SelectItem key={t} value={t}>{t.replace(' Packaging Material', '')}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={filterCategory} onValueChange={setFilterCategory}>
-                  <SelectTrigger className="w-[150px]"><SelectValue placeholder="Category" /></SelectTrigger>
+                  <SelectTrigger className="w-[150px]" aria-label="Filter category"><SelectValue placeholder="Category" /></SelectTrigger>
                   <SelectContent><SelectItem value="all">All Categories</SelectItem>{PQR_PACKAGING_CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={filterQc} onValueChange={setFilterQc}>
-                  <SelectTrigger className="w-[130px]"><SelectValue placeholder="QC Status" /></SelectTrigger>
+                  <SelectTrigger className="w-[130px]" aria-label="Filter QC status"><SelectValue placeholder="QC Status" /></SelectTrigger>
                   <SelectContent><SelectItem value="all">All QC</SelectItem>{PQR_QC_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={filterCompliance} onValueChange={setFilterCompliance}>
-                  <SelectTrigger className="w-[150px]"><SelectValue placeholder="Compliance" /></SelectTrigger>
+                  <SelectTrigger className="w-[150px]" aria-label="Filter compliance"><SelectValue placeholder="Compliance" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Compliance</SelectItem>
                     <SelectItem value="Complies">Complies</SelectItem>
@@ -354,7 +474,7 @@ export function PackagingReviewPage() {
                   </SelectContent>
                 </Select>
                 <Select value={filterRecon} onValueChange={setFilterRecon}>
-                  <SelectTrigger className="w-[150px]"><SelectValue placeholder="Reconciliation" /></SelectTrigger>
+                  <SelectTrigger className="w-[150px]" aria-label="Filter reconciliation"><SelectValue placeholder="Reconciliation" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Recon</SelectItem>
                     <SelectItem value="Matched">Matched</SelectItem>
@@ -362,16 +482,22 @@ export function PackagingReviewPage() {
                     <SelectItem value="Not Applicable">Not Applicable</SelectItem>
                   </SelectContent>
                 </Select>
+                <Input placeholder="Material" className="w-[120px]" value={filterMaterial} onChange={(e) => setFilterMaterial(e.target.value)} aria-label="Filter material name" />
+                <Input placeholder="Batch/lot" className="w-[110px]" value={filterBatch} onChange={(e) => setFilterBatch(e.target.value)} aria-label="Filter batch or lot" />
+                <Input placeholder="Manufacturer" className="w-[120px]" value={filterManufacturer} onChange={(e) => setFilterManufacturer(e.target.value)} aria-label="Filter manufacturer" />
+                <Input placeholder="Supplier" className="w-[110px]" value={filterSupplier} onChange={(e) => setFilterSupplier(e.target.value)} aria-label="Filter supplier" />
                 <Select value={filterAvl} onValueChange={setFilterAvl}>
-                  <SelectTrigger className="w-[140px]"><SelectValue placeholder="AVL" /></SelectTrigger>
+                  <SelectTrigger className="w-[140px]" aria-label="Filter AVL"><SelectValue placeholder="AVL Status" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All AVL</SelectItem>
                     <SelectItem value="Approved">Approved</SelectItem>
                     <SelectItem value="Not Approved">Not Approved</SelectItem>
+                    <SelectItem value="Conditional Approved">Conditional</SelectItem>
+                    <SelectItem value="Blocked">Blocked</SelectItem>
                   </SelectContent>
                 </Select>
                 <Select value={filterRisk} onValueChange={setFilterRisk}>
-                  <SelectTrigger className="w-[120px]"><SelectValue placeholder="Risk" /></SelectTrigger>
+                  <SelectTrigger className="w-[120px]" aria-label="Filter risk"><SelectValue placeholder="Risk" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Risk</SelectItem>
                     <SelectItem value="Low">Low</SelectItem>
@@ -380,11 +506,8 @@ export function PackagingReviewPage() {
                     <SelectItem value="Critical">Critical</SelectItem>
                   </SelectContent>
                 </Select>
-                <Input placeholder="Material" className="w-[120px]" value={filterMaterial} onChange={(e) => setFilterMaterial(e.target.value)} />
-                <Input placeholder="Batch/lot" className="w-[110px]" value={filterBatch} onChange={(e) => setFilterBatch(e.target.value)} />
-                <Input placeholder="Manufacturer" className="w-[120px]" value={filterManufacturer} onChange={(e) => setFilterManufacturer(e.target.value)} />
-                <Input placeholder="Supplier" className="w-[110px]" value={filterSupplier} onChange={(e) => setFilterSupplier(e.target.value)} />
-                <Button variant="outline" size="icon" onClick={() => void loadRecords(selectedPqrId, selectedPqr)} disabled={busy}>
+                <Button variant="outline" size="sm" onClick={resetFilters}>Reset</Button>
+                <Button variant="outline" size="icon" aria-label="Reload" onClick={() => void loadRecords(selectedPqrId, selectedPqr)} disabled={busy}>
                   <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} />
                 </Button>
               </div>
@@ -392,9 +515,9 @@ export function PackagingReviewPage() {
 
             <Tabs defaultValue="primary">
               <TabsList className="flex flex-wrap h-auto">
-                <TabsTrigger value="primary">Primary Packaging Review</TabsTrigger>
-                <TabsTrigger value="secondary">Secondary Packaging Review</TabsTrigger>
-                <TabsTrigger value="tertiary">Tertiary Packaging Review</TabsTrigger>
+                <TabsTrigger value="primary">Primary Packaging Review ({primaryRecords.length})</TabsTrigger>
+                <TabsTrigger value="secondary">Secondary Packaging Review ({secondaryRecords.length})</TabsTrigger>
+                <TabsTrigger value="tertiary">Tertiary Packaging Review ({tertiaryRecords.length})</TabsTrigger>
                 <TabsTrigger value="vendor">Vendor AVL Review</TabsTrigger>
                 <TabsTrigger value="reconciliation">Reconciliation Summary</TabsTrigger>
                 <TabsTrigger value="compliance">Compliance Summary</TabsTrigger>
@@ -425,8 +548,8 @@ export function PackagingReviewPage() {
                         <tbody>
                           {vendorRows.map((v) => (
                             <tr key={v.id} className="border-b">
-                              <td className="px-3 py-2">{v.supplierName}</td>
-                              <td className="px-3 py-2">{v.manufacturerName}</td>
+                              <td className="px-3 py-2">{v.supplierName || '—'}</td>
+                              <td className="px-3 py-2">{v.manufacturerName || '—'}</td>
                               <td className="px-3 py-2">{v.materialCount}</td>
                               <td className="px-3 py-2"><AvlStatusBadge status={v.avlStatus} /></td>
                               <td className="px-3 py-2">{v.compliantLots}</td>
@@ -447,7 +570,7 @@ export function PackagingReviewPage() {
                   <Card><CardHeader><CardTitle className="text-sm">Mismatch Details</CardTitle></CardHeader>
                     <CardContent className="space-y-2 text-sm max-h-48 overflow-y-auto">
                       {filtered.filter((r) => r.reconciliationStatus === 'Mismatch').map((r) => (
-                        <p key={r.id}>{r.materialName} — Balance: {r.balanceQuantity} {r.unit}</p>
+                        <p key={r.id}>{r.materialName} — Balance: {formatQty(r.balanceQuantity, r.unit)}</p>
                       ))}
                       {!filtered.some((r) => r.reconciliationStatus === 'Mismatch') && (
                         <p className="text-muted-foreground">All packaging reconciliation matched.</p>
@@ -459,13 +582,13 @@ export function PackagingReviewPage() {
               <TabsContent value="compliance" className="mt-4">
                 <div className="grid gap-4 md:grid-cols-2">
                   <Card><CardHeader><CardTitle className="text-sm">Compliant Lots</CardTitle></CardHeader>
-                    <CardContent>{filtered.filter((r) => r.complianceStatus === 'Complies').length} of {filtered.length}</CardContent></Card>
+                    <CardContent>{filtered.filter((r) => r.complianceStatus === 'Complies').length} of {filtered.length} ({summary.acceptancePct}% QC approved)</CardContent></Card>
                   <Card><CardHeader><CardTitle className="text-sm">Non-Compliant Reasons</CardTitle></CardHeader>
                     <CardContent className="space-y-2 text-sm">
-                      {Array.from(new Set(filtered.flatMap((r) => r.complianceReasons))).map((reason) => (
-                        <p key={reason}>• {reason}: {filtered.filter((r) => r.complianceReasons.includes(reason)).length}</p>
+                      {Array.from(new Set(filtered.flatMap((r) => r.complianceReasons || []))).map((reason) => (
+                        <p key={reason}>• {reason}: {filtered.filter((r) => (r.complianceReasons || []).includes(reason)).length}</p>
                       ))}
-                      {!filtered.some((r) => r.complianceReasons.length) && <p className="text-muted-foreground">All packaging materials comply.</p>}
+                      {!filtered.some((r) => (r.complianceReasons || []).length) && <p className="text-muted-foreground">All packaging materials comply.</p>}
                     </CardContent></Card>
                 </div>
               </TabsContent>
@@ -518,21 +641,51 @@ export function PackagingReviewPage() {
 
               <TabsContent value="narrative" className="mt-4">
                 <Card>
-                  <CardHeader className="flex flex-row items-center justify-between">
+                  <CardHeader className="flex flex-row items-center justify-between gap-2">
                     <CardTitle className="text-base">PQR Section Narrative — Packing Material Review</CardTitle>
                     {canManage && (
-                      <Button size="sm" onClick={() => void handleSaveSection()} disabled={busy}>
+                      <Button size="sm" onClick={() => void handleSaveSection()} disabled={busy || !narrativeDirty}>
                         <Save className="h-4 w-4 mr-1" />Save to PQR
                       </Button>
                     )}
                   </CardHeader>
                   <CardContent>
-                    <Textarea className="min-h-[140px]" value={narrative} readOnly={!canManage}
-                      onChange={(e) => { setNarrative(e.target.value); if (selectedPqr) void logPackagingNarrativeEdit(actor, selectedPqr.id); }} />
+                    <Textarea
+                      className="min-h-[140px]"
+                      value={narrative}
+                      readOnly={!canManage}
+                      aria-label="Packaging review narrative"
+                      onChange={(e) => {
+                        setNarrative(e.target.value);
+                        setNarrativeDirty(true);
+                        if (selectedPqr) logPackagingNarrativeEdit(actor, selectedPqr.id);
+                      }}
+                    />
+                    {narrativeDirty && <p className="mt-2 text-xs text-amber-700">Unsaved narrative changes</p>}
                   </CardContent>
                 </Card>
               </TabsContent>
             </Tabs>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+              {sectionNav.prev ? (
+                <Button variant="outline" asChild>
+                  <Link href={sectionNav.prev.href}><ArrowLeft className="h-4 w-4 mr-1" />{sectionNav.prev.label}</Link>
+                </Button>
+              ) : <span />}
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" asChild><Link href="/pqr/dashboard">PQR Dashboard</Link></Button>
+                <Button variant="outline" asChild><Link href="/qms/deviation">Deviations</Link></Button>
+                <Button variant="outline" asChild><Link href="/qms/oos">OOS</Link></Button>
+                <Button variant="outline" asChild><Link href="/qms/capa">CAPA</Link></Button>
+                <Button variant="outline" asChild><Link href="/qms/vendors">Suppliers</Link></Button>
+              </div>
+              {sectionNav.next ? (
+                <Button asChild>
+                  <Link href={sectionNav.next.href}>{sectionNav.next.label}<ArrowRight className="h-4 w-4 ml-1" /></Link>
+                </Button>
+              ) : <span />}
+            </div>
           </>
         )}
 
@@ -547,15 +700,29 @@ export function PackagingReviewPage() {
               <div className="space-y-4">
                 <dl className="grid grid-cols-2 gap-2 text-sm">
                   {[
-                    ['Type', detailRecord.packagingMaterialType], ['Category', detailRecord.packagingMaterialCategory],
-                    ['Batch', detailRecord.batchNumber], ['Manufacturer', detailRecord.manufacturerName],
-                    ['Supplier', detailRecord.supplierName], ['AR No.', detailRecord.arNumber],
-                    ['Issued/Used', `${detailRecord.issuedQuantity} / ${detailRecord.usedQuantity} ${detailRecord.unit}`],
-                    ['Rejected/Returned', `${detailRecord.rejectedQuantity} / ${detailRecord.returnedQuantity}`],
-                    ['Balance', `${detailRecord.balanceQuantity} ${detailRecord.unit}`],
-                    ['MFG/EXP', `${detailRecord.mfgDate} / ${detailRecord.expDate}`], ['COA', detailRecord.coaAvailable],
+                    ['PQR', detailRecord.pqrNumber || selectedPqr?.pqrNumber],
+                    ['Product', detailRecord.product],
+                    ['Type', detailRecord.packagingMaterialType],
+                    ['Category', detailRecord.packagingMaterialCategory],
+                    ['Material Code', detailRecord.materialCode || '—'],
+                    ['FP Batch', detailRecord.batchNumber || '—'],
+                    ['Lot No.', detailRecord.materialLotNumber || '—'],
+                    ['Manufacturer', detailRecord.manufacturerName],
+                    ['Supplier', detailRecord.supplierName],
+                    ['AR No.', detailRecord.arNumber],
+                    ['GRN', detailRecord.grnNumber || '—'],
+                    ['Issued', formatQty(detailRecord.issuedQuantity, detailRecord.unit)],
+                    ['Used', formatQty(detailRecord.usedQuantity, detailRecord.unit)],
+                    ['Rejected', formatQty(detailRecord.rejectedQuantity, detailRecord.unit)],
+                    ['Returned', formatQty(detailRecord.returnedQuantity, detailRecord.unit)],
+                    ['Balance', formatQty(detailRecord.balanceQuantity, detailRecord.unit)],
+                    ['Rejection %', formatPct(detailRecord.rejectionPct)],
+                    ['MFG / EXP', `${detailRecord.mfgDate || '—'} / ${detailRecord.expDate || '—'}`],
+                    ['Specification', detailRecord.specificationNumber || '—'],
+                    ['COA', detailRecord.coaAvailable === 'Yes' ? (detailRecord.coaNumber || 'Yes') : 'No'],
+                    ['Source', detailRecord.sourceType || 'manual'],
                   ].map(([k, v]) => (
-                    <div key={k}><dt className="text-muted-foreground">{k}</dt><dd className="font-medium">{String(v)}</dd></div>
+                    <div key={String(k)}><dt className="text-muted-foreground">{k}</dt><dd className="font-medium">{String(v)}</dd></div>
                   ))}
                 </dl>
                 <div className="flex flex-wrap gap-2">
@@ -565,12 +732,26 @@ export function PackagingReviewPage() {
                   <ComplianceBadge status={detailRecord.complianceStatus} />
                   <PackagingRiskBadge level={detailRecord.riskLevel} />
                 </div>
-                {detailRecord.complianceReasons.length > 0 && (
+                {(detailRecord.complianceReasons || []).length > 0 && (
                   <p className="text-sm text-red-600">Reasons: {detailRecord.complianceReasons.join(', ')}</p>
                 )}
-                {detailRecord.id && canManage && (
+                <div className="flex flex-wrap gap-2 border-t pt-3">
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href={`/qms/deviation?batch=${encodeURIComponent(detailRecord.batchNumber || '')}`}>Deviations</Link>
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href={`/qms/oos?batch=${encodeURIComponent(detailRecord.batchNumber || '')}`}>OOS</Link>
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/qms/capa">CAPA</Link>
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/qms/vendors">Suppliers</Link>
+                  </Button>
+                </div>
+                {detailRecord.id && canManage && selectedPqr && (
                   <AttachmentUploader
-                    onUpload={(file) => uploadPackagingAttachment(selectedPqr!.id, detailRecord.id!, file, actor)}
+                    onUpload={(file) => uploadPackagingAttachment(selectedPqr.id, detailRecord.id!, file, actor)}
                   />
                 )}
               </div>

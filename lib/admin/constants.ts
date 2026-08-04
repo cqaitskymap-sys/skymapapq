@@ -1,7 +1,7 @@
 export const ADMIN_MODULES = [
   'Dashboard', 'PQR', 'CPV', 'CPP', 'CQA', 'Batch', 'Product', 'Material',
   'Vendor', 'Equipment', 'Deviation', 'OOS', 'CAPA', 'Change Control',
-  'Complaint', 'Recall', 'Stability', 'Validation', 'Document', 'Training',
+  'Complaint', 'Recall', 'Stability', 'Validation', 'Document',
   'Reports', 'Admin',
 ] as const;
 
@@ -13,7 +13,7 @@ export const PERMISSION_ACTIONS = [
 /** Modules shown in Role & Permission matrix UI */
 export const ROLE_MATRIX_MODULES = [
   'Dashboard', 'Admin', 'CPV', 'PQR', 'Deviation', 'OOS', 'CAPA', 'Change Control',
-  'Risk Management', 'Stability', 'Complaint', 'Recall', 'DMS', 'Training', 'Audit',
+  'Risk Management', 'Stability', 'Complaint', 'Recall', 'DMS', 'Audit',
   'Vendor', 'Supplier', 'Validation', 'CSV', 'Equipment', 'Calibration', 'Maintenance',
   'Monitoring', 'Warehouse', 'Inventory', 'eBMR', 'Reports', 'Analytics', 'Settings',
   'Notifications', 'Audit Trail', 'Electronic Signature',
@@ -29,7 +29,7 @@ export const ROLE_MATRIX_ACTIONS = [
 /** Built-in system roles that cannot be permanently removed */
 export const SYSTEM_ROLE_IDS = [
   'super_admin', 'admin', 'qa', 'qc', 'production', 'engineering', 'warehouse',
-  'regulatory', 'auditor', 'department_head', 'hr', 'training_coordinator',
+  'regulatory', 'auditor', 'department_head', 'hr',
   'document_controller', 'employee', 'vendor', 'viewer', 'maintenance',
   'validation', 'it_administrator', 'head_qa', 'qa_manager', 'qc_manager',
   'production_manager', 'warehouse_manager', 'engineering_manager',
@@ -43,7 +43,6 @@ export const ROLE_PRESET_OPTIONS = [
   { id: 'qa', name: 'Quality Assurance', level: 75 },
   { id: 'qc', name: 'Quality Control', level: 75 },
   { id: 'document_controller', name: 'Document Controller', level: 65 },
-  { id: 'training_coordinator', name: 'Training Coordinator', level: 65 },
   { id: 'department_head', name: 'Department Head', level: 80 },
   { id: 'hr', name: 'HR', level: 65 },
   { id: 'warehouse', name: 'Warehouse', level: 70 },
@@ -93,7 +92,6 @@ export const ADMIN_ROLES = [
   { id: 'engineering_executive', name: 'Engineering Executive', level: 60 },
   { id: 'regulatory_affairs', name: 'Regulatory Affairs', level: 65 },
   { id: 'hr', name: 'HR', level: 65 },
-  { id: 'training_coordinator', name: 'Training Coordinator', level: 65 },
   { id: 'document_controller', name: 'Document Controller', level: 65 },
   { id: 'department_head', name: 'Department Head', level: 75 },
   { id: 'employee', name: 'Employee', level: 30 },
@@ -164,6 +162,34 @@ export const PARAMETER_TYPES = [
 export const PARAMETER_CATEGORIES = [
   'Manufacturing', 'Quality Control', 'Microbiology', 'Stability',
   'Utility', 'Environmental', 'Packaging', 'Warehouse', 'Validation',
+  'Quality Parameters', 'Manufacturing Parameters', 'Process Parameters',
+  'Critical Process Parameters (CPP)', 'Critical Quality Attributes (CQA)',
+  'Laboratory Parameters', 'Equipment Parameters', 'Calibration Parameters',
+  'Maintenance Parameters', 'Environmental Monitoring', 'Water System', 'HVAC',
+  'Utility Monitoring', 'Validation Parameters', 'Cleaning Validation',
+  'Process Validation', 'Stability Parameters', 'Audit Parameters',
+  'Risk Parameters', 'Custom Parameters',
+] as const;
+
+export const PARAMETER_GROUPS = [
+  'CPP Group', 'CQA Group', 'IPC Group', 'Utility Group', 'Environmental Group',
+  'Stability Group', 'Validation Group', 'Equipment Group', 'General',
+] as const;
+
+export const PARAMETER_MODULE_OPTIONS = [
+  'CPV', 'APQR / PQR', 'Validation', 'LIMS', 'Equipment', 'Calibration',
+  'Maintenance', 'Environmental Monitoring', 'Water System', 'HVAC',
+  'Manufacturing', 'Quality Control', 'Quality Assurance', 'Risk Assessment',
+  'CAPA', 'Deviation', 'Change Control', 'Document Management',
+  'General',
+] as const;
+
+export const PARAMETER_DATA_TYPES = [
+  'Numeric', 'Text', 'Boolean', 'Dropdown', 'Multi Select', 'Formula',
+] as const;
+
+export const PARAMETER_CALCULATION_TYPES = [
+  'Manual', 'Formula Based', 'Auto Calculated', 'Derived',
 ] as const;
 
 export const PROCESS_STAGES = [
@@ -230,26 +256,37 @@ export const DESIGNATION_PRESETS = [
 export const NOTIFICATION_EVENTS = [
   'PQR Approval Pending', 'CPV Review Due', 'CAPA Due', 'OOS Open',
   'Deviation Open', 'Change Control Pending', 'Calibration Due',
-  'Qualification Due', 'Training Due', 'Document Review Due',
+  'Qualification Due', 'Document Review Due',
 ] as const;
 
 export const NOTIFICATION_MODULES = [
   'PQR', 'CPV', 'Deviation', 'OOS', 'CAPA', 'Change Control', 'Stability',
-  'Complaint', 'Recall', 'DMS', 'Training', 'Audit', 'Vendor', 'Validation',
-  'CSV', 'Equipment', 'Monitoring', 'Warehouse', 'eBMR', 'Admin',
+  'Complaint', 'Recall', 'DMS', 'Document Management', 'Audit',
+  'Vendor', 'Vendor Qualification', 'Supplier Qualification', 'Validation',
+  'Qualification', 'CSV', 'Equipment', 'Calibration', 'Maintenance',
+  'Monitoring', 'Warehouse', 'eBMR', 'Risk Assessment', 'Risk Management',
+  'Workflow', 'Approval', 'Electronic Signature', 'User Management', 'Admin',
 ] as const;
 
 export const NOTIFICATION_EVENT_TRIGGERS = [
   'Record Created', 'Record Submitted', 'Review Pending', 'Approval Pending',
   'Approved', 'Rejected', 'Closed', 'Overdue', 'Due Soon', 'Assigned', 'Escalated',
   'OOS Detected', 'OOT Detected', 'Deviation Created', 'CAPA Due', 'CAPA Overdue',
-  'Change Implementation Due', 'Training Due', 'Training Overdue', 'Document Review Due',
+  'Change Implementation Due', 'Document Review Due',
   'Calibration Due', 'PM Due', 'Stability Sample Due', 'Audit Finding Assigned',
   'Recall Initiated', 'Backup Completed', 'Login Failed', 'User Locked',
+  'Create', 'Update', 'Delete', 'Approve', 'Reject', 'Review', 'Issue', 'Obsolete',
+  'Archive', 'Restore', 'Workflow Started', 'Workflow Completed', 'Approval Completed',
+  'Approval Rejected', 'Equipment Breakdown', 'Audit Scheduled',
+  'Audit Completed', 'Validation Due', 'Risk Review Due', 'Complaint Created',
+  'Supplier Approved', 'User Created', 'Role Changed', 'Password Changed',
+  'Account Locked', 'Electronic Signature Required', 'System Maintenance',
+  'Backup Failure', 'Security Alert', 'Broadcast',
 ] as const;
 
 export const NOTIFICATION_CHANNEL_TYPES = [
-  'In-App', 'Email', 'SMS', 'In-App + Email', 'In-App + Email + SMS',
+  'In-App', 'Email', 'SMS', 'Push', 'Desktop', 'Webhook',
+  'In-App + Email', 'In-App + Email + SMS', 'Microsoft Teams', 'Slack', 'REST API',
 ] as const;
 
 export const NOTIFICATION_PRIORITIES = ['Low', 'Medium', 'High', 'Critical'] as const;
@@ -266,15 +303,22 @@ export const SIGNATURE_MEANINGS = [
 
 export const ESIGN_SETTING_MODULES = [
   'PQR', 'CPV Annual Review', 'Deviation', 'OOS', 'CAPA', 'Change Control',
-  'Stability', 'Complaint', 'Recall', 'DMS', 'Training', 'Audit',
+  'Stability', 'Complaint', 'Recall', 'DMS', 'Audit',
   'Vendor Qualification', 'Validation', 'CSV', 'Equipment', 'Monitoring',
   'Warehouse', 'eBMR', 'Admin Changes',
+  'CAPA Approval Workflow', 'CAPA Closure', 'Deviation Approval', 'Deviation Closure',
+  'Document Release', 'Risk', 'Qualification', 'Calibration',
+  'Maintenance', 'Supplier Qualification',
 ] as const;
 
 export const ESIGN_ACTION_TYPES = [
   'Prepared By', 'Reviewed By', 'Verified By', 'Approved By', 'Rejected By',
   'Closed By', 'Submitted By', 'Implemented By', 'Effectiveness Checked By',
   'QA Override', 'Batch Released By', 'Document Effective By',
+  'Approve', 'Reject', 'Review', 'Authorize', 'Release', 'Cancel', 'Close',
+  'Complete', 'Archive', 'Delete', 'Modify', 'Revise', 'Issue', 'Obsolete', 'Void',
+  'Approval', 'CAPA Closure Authorization', 'Close Deviation', 'Reopen Deviation',
+  'Configuration Change', 'Policy Update',
 ] as const;
 
 export const ESIGN_SIGNATURE_MEANINGS = [
@@ -288,6 +332,17 @@ export const ESIGN_SIGNATURE_MEANINGS = [
   'I release this batch',
   'I approve this change',
   'I confirm effectiveness',
+  'I authorize this action',
+  'I cancel this record',
+  'I archive this record',
+  'I obsolete this document',
+  'I void this record',
+] as const;
+
+export const ESIGN_AUTH_METHODS = [
+  'Password Confirmation', 'Current Password', 'OTP', 'Email OTP', 'SMS OTP',
+  'Authenticator App', 'MFA', 'Biometric (Future)', 'Hardware Token (Future)',
+  'Dual Authentication',
 ] as const;
 
 export const ADMIN_COLLECTIONS = {
@@ -306,41 +361,63 @@ export const ADMIN_COLLECTIONS = {
   documentNumbering: 'document_numbering',
   auditLogs: 'audit_logs',
   auditTrail: 'audit_trail',
+  auditTrailArchive: 'audit_trail_archive',
+  auditExports: 'audit_exports',
   esignSettings: 'esign_settings',
   esignRecords: 'esign_records',
   notificationSettings: 'notification_settings',
   notificationTemplates: 'notification_templates',
+  notificationQueue: 'notification_queue',
+  notificationDeliveryLog: 'notification_delivery_log',
+  notificationsArchive: 'notifications_archive',
   backupHistory: 'backup_history',
   backupRestore: 'backup_restore',
   backupSettings: 'backup_settings',
   restoreHistory: 'restore_history',
+  backupJobs: 'backup_jobs',
+  backupHistoryArchive: 'backup_history_archive',
+  restoreHistoryArchive: 'restore_history_archive',
   systemSettings: 'system_settings',
+  systemSettingsVersions: 'system_settings_versions',
   systemLogs: 'system_logs',
   loginActivity: 'login_activity',
+  loginActivityArchive: 'login_activity_archive',
   accessReviews: 'access_reviews',
+  accessReviewsArchive: 'access_reviews_archive',
   passwordPolicy: 'password_policy',
   moduleConfiguration: 'module_configuration',
+  moduleConfigurationVersions: 'module_configuration_versions',
   emailSmsTemplates: 'email_sms_templates',
+  emailSmsTemplateVersions: 'email_sms_template_versions',
   masterDataImportExport: 'master_data_import_export',
+  masterDataImportExportErrors: 'master_data_import_export_errors',
+  systemHealthChecks: 'system_health_checks',
+  systemHealthScans: 'system_health_scans',
   productCompositions: 'product_compositions',
   productPackingDetails: 'product_packing_details',
   productAttachments: 'product_attachments',
   batchAttachments: 'batch_attachments',
   workflowSteps: 'workflow_steps',
-  documentNumberSequences: 'document_number_sequences',
+  documentNumberSequences: 'document_numbering_sequences',
+  /** @deprecated legacy client collection — prefer documentNumberSequences */
+  documentNumberSequencesLegacy: 'document_number_sequences',
 } as const;
 
 export const DOCUMENT_NUMBERING_MODULES = [
   'PQR', 'CPV', 'Deviation', 'OOS', 'CAPA', 'Change Control', 'Stability',
-  'Complaint', 'Recall', 'DMS', 'Training', 'Audit', 'Vendor Qualification',
-  'Validation', 'CSV', 'Equipment', 'Calibration', 'Warehouse', 'eBMR', 'Admin',
+  'Complaint', 'Recall', 'DMS', 'Audit', 'Vendor Qualification',
+  'Validation', 'CSV', 'Equipment', 'Calibration', 'Maintenance', 'Warehouse',
+  'eBMR', 'Admin', 'Risk Management', 'Qualification', 'Batch', 'Product',
 ] as const;
 
 export const DOCUMENT_TYPE_OPTIONS = [
-  'PQR Report', 'CPV Review', 'Deviation Report', 'OOS Investigation', 'CAPA Report',
-  'Change Control', 'Stability Study', 'Complaint Investigation', 'Recall Report',
-  'SOP', 'STP', 'Specification', 'BMR', 'BPR', 'Validation Protocol', 'Validation Report',
-  'CSV URS', 'CSV IQ', 'CSV OQ', 'CSV PQ', 'Audit Report', 'Training Record',
+  'PQR Report', 'Annual PQR', 'CPV Review', 'Deviation Report', 'GMP Deviation',
+  'OOS Investigation', 'CAPA Report', 'Corrective Action', 'Change Control',
+  'Stability Study', 'Complaint Investigation', 'Market Complaint', 'Recall Report',
+  'Product Recall', 'SOP', 'STP', 'Specification', 'Protocol', 'Report', 'Form',
+  'Logbook', 'BMR', 'BPR', 'Validation Protocol', 'Validation Report',
+  'CSV URS', 'CSV IQ', 'CSV OQ', 'CSV PQ', 'Audit Report',
+  'Risk Assessment', 'Batch Number', 'Equipment Record', 'Calibration Certificate',
 ] as const;
 
 export const NUMBERING_YEAR_FORMATS = ['YYYY', 'YY', 'None'] as const;
@@ -350,22 +427,24 @@ export const NUMBERING_RESET_FREQUENCIES = ['Never', 'Yearly', 'Monthly', 'Daily
 export const REVISION_FORMAT_OPTIONS = ['00', '01', 'Rev-00', 'R00', 'V1.0', 'Custom'] as const;
 
 export const FORMAT_TOKENS = [
-  'PREFIX', 'SITE_CODE', 'DEPARTMENT_CODE', 'PRODUCT_CODE', 'DOCUMENT_TYPE',
+  'PREFIX', 'SUFFIX', 'SITE_CODE', 'DEPARTMENT_CODE', 'PRODUCT_CODE', 'DOCUMENT_TYPE',
   'RUNNING_NUMBER', 'MONTH', 'YEAR', 'REVISION',
 ] as const;
 
 export const AUDIT_TRAIL_MODULES = [
   'Admin', 'CPV', 'PQR', 'Deviation', 'OOS', 'CAPA', 'Change Control',
-  'Stability', 'Complaint', 'Recall', 'DMS', 'Training', 'Audit', 'Vendor',
+  'Stability', 'Complaint', 'Recall', 'DMS', 'Audit', 'Vendor',
   'Validation', 'CSV', 'Equipment', 'Monitoring', 'Warehouse', 'eBMR',
 ] as const;
 
 export const AUDIT_ACTION_TYPES = [
-  'Create', 'Update', 'Delete', 'Soft Delete', 'Restore', 'Approve', 'Reject',
-  'Review', 'Submit', 'Close', 'Reopen', 'Login', 'Logout', 'Failed Login',
-  'Password Reset', 'Role Change', 'Permission Change', 'File Upload', 'File Delete',
-  'Export', 'Import', 'Print', 'Status Change', 'E-Signature', 'Override',
-  'System Setting Change', 'Backup',
+  'Create', 'Update', 'Delete', 'Soft Delete', 'Restore', 'Archive', 'Activate', 'Deactivate',
+  'Approve', 'Reject', 'Return', 'Rework', 'Resubmit', 'Review', 'Submit', 'Close', 'Reopen',
+  'Login', 'Logout', 'Failed Login', 'Password Reset', 'Password Change',
+  'Role Change', 'Permission Change', 'Workflow Change', 'Configuration Change',
+  'File Upload', 'File Delete', 'Download', 'Export', 'Import', 'Print',
+  'Status Change', 'E-Signature', 'Override', 'System Setting Change', 'Backup',
+  'API Access',
 ] as const;
 
 export const AUDIT_LOG_STATUSES = ['Success', 'Failed', 'Pending', 'System Generated'] as const;
@@ -378,19 +457,22 @@ export const ADMIN_AUDIT_MODULES = [
 
 export const QMS_AUDIT_MODULES = [
   'PQR', 'CPV', 'Deviation', 'OOS', 'CAPA', 'Change Control', 'Stability',
-  'Complaint', 'Recall', 'DMS', 'Training', 'Audit', 'Vendor', 'Validation',
+  'Complaint', 'Recall', 'DMS', 'Audit', 'Vendor', 'Validation',
   'CSV', 'Equipment', 'Monitoring', 'Warehouse', 'eBMR',
 ] as const;
 
 export const CRITICAL_AUDIT_ACTIONS = [
-  'Delete', 'Approve', 'Reject', 'Role Change', 'Permission Change',
-  'E-Signature', 'Override', 'System Setting Change', 'Backup', 'Restore',
+  'Delete', 'Soft Delete', 'Approve', 'Reject', 'Role Change', 'Permission Change',
+  'E-Signature', 'Override', 'System Setting Change', 'Configuration Change',
+  'Backup', 'Restore', 'Failed Login', 'Password Reset', 'Password Change',
 ] as const;
 
 export const WORKFLOW_MODULE_OPTIONS = [
   'PQR', 'CPV', 'Deviation', 'OOS', 'CAPA', 'Change Control', 'Stability',
-  'Complaint', 'Recall', 'DMS', 'Training', 'Audit', 'Vendor', 'Validation',
+  'Complaint', 'Recall', 'DMS', 'Audit', 'Vendor', 'Validation',
   'CSV', 'Equipment', 'Monitoring', 'Warehouse', 'eBMR', 'Admin',
+  'Risk Management', 'Qualification', 'Calibration', 'Maintenance',
+  'Supplier Qualification', 'Employee Management',
 ] as const;
 
 export const WORKFLOW_TYPES = [
@@ -398,19 +480,29 @@ export const WORKFLOW_TYPES = [
   'Multi Level Approval',
   'Parallel Review',
   'Sequential Review',
+  'Conditional Routing',
   'Review + Approval',
   'Investigation + Approval',
   'Execution + Review + Approval',
 ] as const;
 
+export const WORKFLOW_CATEGORIES = [
+  'Approval', 'Investigation', 'Execution', 'Review', 'Notification',
+  'Escalation', 'Quality', 'Compliance', 'Custom',
+] as const;
+
+export const WORKFLOW_PRIORITIES = ['Low', 'Medium', 'High', 'Critical'] as const;
+
 export const WORKFLOW_STEP_TYPES = [
   'Prepare', 'Submit', 'Review', 'Investigate', 'Execute', 'Verify',
   'Approve', 'Final Approve', 'Close',
+  'Decision', 'Condition', 'Notification', 'Timer', 'End',
 ] as const;
 
 export const APPROVAL_WORKFLOW_TYPES = [
   'Single Level Approval',
   'Multi Level Approval',
+  'Conditional Routing',
   'Review + Approval',
   'Investigation + Approval',
   'Execution + Review + Approval',
@@ -418,12 +510,25 @@ export const APPROVAL_WORKFLOW_TYPES = [
 
 export const APPROVAL_MATRIX_MODULES = [
   'PQR', 'CPV Annual Review', 'Deviation', 'OOS', 'CAPA', 'Change Control',
-  'Stability', 'Complaint', 'Recall', 'DMS', 'Training', 'Audit',
+  'Stability', 'Complaint', 'Recall', 'DMS', 'Audit',
   'Vendor Qualification', 'Validation', 'CSV', 'Equipment', 'Monitoring',
   'Warehouse', 'eBMR', 'Admin Changes',
+  'Risk Management', 'Qualification', 'Calibration', 'Maintenance',
+  'Supplier Qualification', 'Employee Management', 'CPV',
 ] as const;
 
 export const RISK_LEVELS = ['Low', 'Medium', 'High', 'Critical', 'All'] as const;
+
+export const APPROVAL_MATRIX_PRIORITIES = ['Low', 'Medium', 'High', 'Critical'] as const;
+
+export const APPROVAL_MODES = [
+  'Sequential', 'Parallel', 'Conditional', 'Quorum', 'Majority', 'Consensus',
+] as const;
+
+export const APPROVAL_ACTION_OPTIONS = [
+  'Approve', 'Reject', 'Return', 'Send Back', 'Rework', 'Resubmit',
+  'Cancel', 'Delegate', 'Escalate', 'Skip', 'Auto Approve', 'Auto Reject',
+] as const;
 
 export const BACKUP_STATUSES = [
   'Pending', 'In Progress', 'Completed', 'Failed', 'Verified', 'Restored',
@@ -435,6 +540,8 @@ export const BACKUP_TYPES = [
   'Scheduled Backup',
   'Pre-Restore Backup',
   'System Backup',
+  'Incremental Backup',
+  'Configuration Backup',
 ] as const;
 
 export const BACKUP_SCOPES = [
@@ -449,10 +556,12 @@ export const BACKUP_SCOPES = [
 ] as const;
 
 export const BACKUP_FREQUENCIES = [
+  'Hourly',
   'Daily',
   'Weekly',
   'Monthly',
   'Quarterly',
+  'Yearly',
   'Manual Only',
 ] as const;
 
@@ -460,6 +569,7 @@ export const RESTORE_TYPES = [
   'Full Restore',
   'Selected Collection Restore',
   'Rollback Restore',
+  'Dry Run Restore',
 ] as const;
 
 export const RESTORE_STATUSES = [
@@ -471,18 +581,36 @@ export const RESTORE_STATUSES = [
   'Cancelled',
 ] as const;
 
+export const BACKUP_ENCRYPTION_ALGORITHMS = [
+  'AES-256-GCM',
+  'Platform AES-256 (at-rest)',
+] as const;
+
+export const BACKUP_STORAGE_PROVIDERS = [
+  'Firebase Cloud Storage',
+  'Google Cloud Storage',
+  'AWS S3 (Future)',
+  'Azure Blob (Future)',
+  'Local (Development)',
+] as const;
+
+export const BACKUP_INTEGRITY_STATUSES = [
+  'Pending', 'Verified', 'Failed', 'Expired', 'Unknown',
+] as const;
+
 /** All Firestore collections supported for backup export */
 export const BACKUP_EXPORT_COLLECTIONS = [
   'users', 'roles', 'permissions', 'departments', 'designations', 'company_sites',
   'products', 'batches', 'parameters', 'workflows', 'approval_matrix', 'document_numbering',
-  'esign_settings', 'notification_settings', 'cpv_reviews', 'cpp_parameters', 'cpp_results',
+  'esign_settings', 'notification_settings', 'module_configuration', 'email_sms_templates',
+  'system_settings', 'cpv_reviews', 'cpp_parameters', 'cpp_results',
   'cqa_parameters', 'cqa_results', 'pqr_records', 'deviations', 'oos_records', 'capa_records',
   'change_controls', 'stability_studies', 'complaints', 'recalls', 'documents',
   'training_records', 'training_master', 'training_assignments', 'training_assessments',
   'training_effectiveness', 'training_matrix', 'training_attendance', 'competency_records',
   'document_training_links', 'audits', 'vendors', 'validation_records', 'csv_systems',
   'equipment_master', 'monitoring_records', 'warehouse_materials', 'ebmr_records',
-  'audit_trail', 'notifications',
+  'audit_trail', 'notifications', 'master_data_import_export',
 ] as const;
 
 export const BACKUP_SCOPE_COLLECTIONS: Record<string, readonly string[]> = {
@@ -490,7 +618,7 @@ export const BACKUP_SCOPE_COLLECTIONS: Record<string, readonly string[]> = {
   'Admin Data': [
     'users', 'roles', 'permissions', 'departments', 'designations', 'company_sites',
     'workflows', 'approval_matrix', 'document_numbering', 'esign_settings',
-    'notification_settings', 'system_settings',
+    'notification_settings', 'system_settings', 'module_configuration', 'email_sms_templates',
   ],
   'QMS Data': [
     'deviations', 'oos_records', 'capa_records', 'change_controls', 'stability_studies',
@@ -510,8 +638,65 @@ export const BACKUP_SCOPE_COLLECTIONS: Record<string, readonly string[]> = {
   'Selected Collections': [],
 };
 export const LOGIN_STATUSES = ['Success', 'Failed', 'Locked'] as const;
-export const ACCESS_REVIEW_STATUSES = ['Pending', 'Completed', 'Overdue'] as const;
-export const TEMPLATE_TYPES = ['Email', 'SMS', 'In-App'] as const;
+
+export const LOGIN_EVENT_TYPES = [
+  'Successful Login', 'Logout', 'Failed Login', 'Invalid Password', 'Invalid Username',
+  'Password Reset', 'Password Change', 'Account Lock', 'Account Unlock',
+  'Session Timeout', 'Session Expired', 'Remember Me Login',
+  'MFA Success', 'MFA Failure', 'New Device Login', 'New Browser Login',
+  'Multiple Concurrent Login', 'Forced Logout', 'Administrator Logout',
+] as const;
+
+export const LOGIN_RISK_LEVELS = ['Info', 'Low', 'Medium', 'High', 'Critical'] as const;
+export const ACCESS_REVIEW_STATUSES = [
+  'Draft', 'Pending', 'In Progress', 'Self Review', 'Manager Review',
+  'QA Review', 'IT Review', 'Pending Approval', 'Completed', 'Rejected',
+  'Changes Requested', 'Closed', 'Overdue', 'Archived',
+] as const;
+
+export const ACCESS_REVIEW_DECISIONS = [
+  'Maintain Access', 'Modify Access', 'Revoke Access', 'Disable Account',
+  'Lock Account', 'Extend Temporary Access',
+] as const;
+
+export const ACCESS_REVIEW_RISK_LEVELS = ['Low', 'Medium', 'High', 'Critical'] as const;
+
+export const ACCESS_REVIEW_RECOMMENDATIONS = [
+  'No Change', 'Reduce Privileges', 'Remove Unused Modules', 'Enforce MFA',
+  'Disable Account', 'Investigate SoD Conflict', 'Schedule Follow-up',
+] as const;
+export const TEMPLATE_TYPES = [
+  'Email', 'SMS', 'In-App', 'Push', 'WhatsApp', 'Microsoft Teams', 'Slack',
+  'Webhook', 'System Notification',
+] as const;
+
+export const TEMPLATE_CATEGORIES = [
+  'Document Management', 'SOP', 'CAPA', 'Deviation', 'Change Control',
+  'Risk Assessment', 'Audit', 'Validation', 'Qualification', 'Equipment',
+  'Calibration', 'Maintenance', 'Complaint', 'Supplier Qualification',
+  'Vendor Qualification', 'User Management', 'Role Management',
+  'Workflow Configuration', 'Approval Matrix', 'Login Activity', 'Password Reset',
+  'Account Lock', 'User Access Review', 'Electronic Signature', 'Notifications',
+  'System Alerts', 'Backup Alerts', 'Security Alerts', 'General',
+] as const;
+
+export const TEMPLATE_LANGUAGES = [
+  'en', 'en-US', 'en-IN', 'hi', 'es', 'fr', 'de', 'zh', 'ar', 'pt',
+] as const;
+
+export const TEMPLATE_APPROVAL_STATUSES = [
+  'Draft', 'Under Review', 'Approved', 'Published', 'Archived', 'Obsolete',
+] as const;
+
+export const TEMPLATE_PLACEHOLDERS = [
+  'UserName', 'EmployeeName', 'EmployeeID', 'Department', 'Designation',
+  'Company', 'Site', 'DocumentNo', 'DocumentTitle', 'DocumentVersion',
+  'BatchNumber', 'ProductName', 'WorkflowName', 'ApprovalLevel', 'Approver',
+  'Reviewer', 'DueDate', 'EffectiveDate',
+  'CAPANumber', 'DeviationNumber', 'ChangeControlNumber', 'AuditNumber',
+  'EquipmentID', 'CalibrationDue', 'CurrentDate', 'CurrentTime', 'SystemURL',
+  'moduleName', 'eventName', 'status', 'assignedTo', 'createdBy',
+] as const;
 
 export const SITE_TYPES = [
   'Manufacturing Plant',
@@ -521,6 +706,32 @@ export const SITE_TYPES = [
   'Testing Laboratory',
   'Contract Manufacturing Site',
 ] as const;
+
+export const COMPANY_TYPES = [
+  'Private Limited',
+  'Public Limited',
+  'Partnership',
+  'LLP',
+  'Government',
+  'Multinational',
+  'Subsidiary',
+  'Other',
+] as const;
+
+export const INDUSTRIES = [
+  'Pharmaceutical',
+  'Biotechnology',
+  'Medical Devices',
+  'Cosmetics',
+  'Nutraceutical',
+  'Contract Manufacturing',
+  'API Manufacturing',
+  'Vaccines',
+  'Other',
+] as const;
+
+/** Protected site codes — cannot be soft-deleted. */
+export const SYSTEM_SITE_CODES = ['HQ', 'MAIN', 'DEFAULT'] as const;
 
 export const DATE_FORMATS = ['DD/MM/YYYY', 'MM/DD/YYYY', 'YYYY-MM-DD'] as const;
 export const TIME_FORMATS = ['24h', '12h'] as const;
@@ -542,6 +753,27 @@ export const MARKET_OPTIONS = ['Domestic', 'Export', 'Both'] as const;
 
 export const PRODUCT_STATUSES = [
   'Active', 'Inactive', 'Discontinued', 'Under Development',
+] as const;
+
+export const PRODUCT_LIFECYCLE_STATUSES = [
+  'Development',
+  'Technology Transfer',
+  'Validation',
+  'Commercial',
+  'Discontinued',
+  'Archived',
+] as const;
+
+export const PRODUCT_CATEGORIES = [
+  'Antibiotic', 'Analgesic', 'Antiviral', 'Vaccine', 'Oncology', 'Nutraceutical', 'API', 'Other',
+] as const;
+
+export const PACK_TYPES = [
+  'Vial', 'Ampoule', 'Blister', 'Bottle', 'Strip', 'Tube', 'Sachet', 'Cartridge', 'Other',
+] as const;
+
+export const CONTAINER_CLOSURE_TYPES = [
+  'Rubber Stopper', 'Aluminium Seal', 'Flip-off Cap', 'Screw Cap', 'Child-resistant Cap', 'Other',
 ] as const;
 
 export const INGREDIENT_TYPES = [
@@ -569,12 +801,43 @@ export const PRODUCT_PRESET = {
 export const PRODUCT_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 
 export const BATCH_STATUSES = [
-  'Planned', 'Manufacturing', 'Under QC Testing', 'Under QA Review',
-  'Released', 'Rejected', 'Hold', 'Reworked', 'Reprocessed', 'Cancelled',
+  'Planned', 'Scheduled', 'Manufacturing', 'Sampling', 'Testing', 'Under Review',
+  'Released', 'Rejected', 'Hold', 'Reprocessed', 'Closed', 'Archived',
 ] as const;
+
+/** Maps legacy batch status values stored in Firestore to the current workflow. */
+export const BATCH_LEGACY_STATUS_MAP: Record<string, typeof BATCH_STATUSES[number]> = {
+  'Under QC Testing': 'Testing',
+  'Under QA Review': 'Under Review',
+  Reworked: 'Reprocessed',
+  Cancelled: 'Closed',
+};
+
+export const BATCH_STATUS_TRANSITIONS: Record<string, readonly string[]> = {
+  Planned: ['Scheduled', 'Manufacturing', 'Hold', 'Closed'],
+  Scheduled: ['Planned', 'Manufacturing', 'Hold'],
+  Manufacturing: ['Sampling', 'Hold', 'Rejected'],
+  Sampling: ['Testing', 'Hold', 'Rejected'],
+  Testing: ['Under Review', 'Hold', 'Rejected'],
+  'Under Review': ['Released', 'Rejected', 'Hold'],
+  Released: ['Hold', 'Closed', 'Archived'],
+  Rejected: ['Reprocessed', 'Closed', 'Archived'],
+  Hold: ['Planned', 'Scheduled', 'Manufacturing', 'Sampling', 'Testing', 'Under Review'],
+  Reprocessed: ['Manufacturing', 'Testing', 'Sampling'],
+  Closed: ['Archived'],
+  Archived: [],
+};
 
 export const RELEASE_STATUSES = [
   'Pending', 'Released', 'Rejected', 'On Hold', 'Not Applicable',
+] as const;
+
+export const QC_STATUSES = [
+  'Pending', 'In Progress', 'Approved', 'Rejected', 'On Hold', 'Not Applicable',
+] as const;
+
+export const QA_STATUSES = [
+  'Pending', 'In Review', 'Approved', 'Rejected', 'On Hold', 'Not Applicable',
 ] as const;
 
 export const BATCH_SIZE_UNITS = ['Vials', 'Tablets', 'Capsules', 'Bottles', 'Kg', 'L', 'Units'] as const;
@@ -595,22 +858,69 @@ export const ADMIN_NAV_ITEMS = [
   { label: 'Approval Matrix', href: '/admin/approval-matrix', icon: 'CheckSquare' },
   { label: 'Document Numbering', href: '/admin/document-numbering', icon: 'Hash' },
   { label: 'Audit Trail', href: '/admin/audit-trail', icon: 'FileSearch' },
-  { label: 'Login Activity', href: '/dashboard/admin/login-activity', icon: 'LogIn' },
-  { label: 'User Access Review', href: '/dashboard/admin/user-access-review', icon: 'UserCheck' },
-  { label: 'Password Policy', href: '/dashboard/admin/password-policy', icon: 'KeyRound' },
+  { label: 'Login Activity', href: '/admin/login-activity', icon: 'LogIn' },
+  { label: 'User Access Review', href: '/admin/user-access-review', icon: 'UserCheck' },
+  { label: 'Password Policy', href: '/admin/system-settings/password-policy', icon: 'KeyRound' },
   { label: 'E-Signature Settings', href: '/admin/esign-settings', icon: 'PenLine' },
   { label: 'Notification Settings', href: '/admin/notifications', icon: 'Bell' },
-  { label: 'Email/SMS Templates', href: '/dashboard/admin/email-sms-templates', icon: 'Mail' },
-  { label: 'Module Configuration', href: '/dashboard/admin/module-configuration', icon: 'Blocks' },
-  { label: 'Master Data Import/Export', href: '/dashboard/admin/master-data-import-export', icon: 'FileUp' },
+  { label: 'Email/SMS Templates', href: '/admin/email-sms-templates', icon: 'Mail' },
+  { label: 'Module Configuration', href: '/admin/module-configuration', icon: 'Blocks' },
+  { label: 'Master Data Import/Export', href: '/admin/master-data-import-export', icon: 'FileUp' },
   { label: 'Backup & Restore', href: '/admin/backup', icon: 'Database' },
   { label: 'Backup History', href: '/admin/backup/history', icon: 'HardDrive' },
-  { label: 'Firebase Connection', href: '/dashboard/admin/firebase-status', icon: 'Cloud' },
-  { label: 'System Health Check', href: '/dashboard/admin/system-health', icon: 'Activity' },
+  { label: 'Firebase Status', href: '/admin/firebase-status', icon: 'Cloud' },
+  { label: 'System Health Check', href: '/admin/system-health', icon: 'Activity' },
   { label: 'System Settings', href: '/admin/system-settings', icon: 'Settings' },
 ] as const;
 
-export const SYSTEM_ENVIRONMENTS = ['Production', 'Staging', 'Development', 'UAT'] as const;
+export const SYSTEM_ENVIRONMENTS = ['Production', 'Staging', 'Development', 'UAT', 'Testing'] as const;
+
+export const MODULE_CONFIG_CATEGORIES = [
+  'Core Admin', 'QMS', 'Document Management', 'Equipment',
+  'Quality Control', 'Supply Chain', 'Analytics', 'Integration', 'Security',
+] as const;
+
+export const MODULE_LICENSE_STATUSES = [
+  'Licensed', 'Trial', 'Expired', 'Not Licensed', 'Enterprise',
+] as const;
+
+export const MODULE_FEATURE_STATUSES = [
+  'GA', 'Beta', 'Experimental', 'Deprecated', 'Hidden',
+] as const;
+
+export const MODULE_VISIBILITY_STATUSES = [
+  'Visible', 'Hidden', 'Menu Only', 'Route Only',
+] as const;
+
+/** Critical modules that cannot be fully disabled or uninstalled */
+export const CRITICAL_MODULE_CODES = [
+  'ADMIN', 'USERS', 'ROLES', 'AUDIT_TRAIL', 'ESIGN', 'SYSTEM_SETTINGS',
+] as const;
+
+export const MASTER_DATA_IMPORT_EXPORT_TYPES = [
+  { code: 'departments', label: 'Department Master', collection: 'departments', uniqueKey: 'departmentCode', required: ['departmentCode', 'departmentName'] },
+  { code: 'designations', label: 'Designation Master', collection: 'designations', uniqueKey: 'designationCode', required: ['designationCode', 'designationName'] },
+  { code: 'company_sites', label: 'Company / Site Master', collection: 'company_sites', uniqueKey: 'siteCode', required: ['siteCode', 'siteName'] },
+  { code: 'products', label: 'Product Master', collection: 'products', uniqueKey: 'productCode', required: ['productCode', 'productName'] },
+  { code: 'batches', label: 'Batch Master', collection: 'batches', uniqueKey: 'batchNumber', required: ['batchNumber'] },
+  { code: 'parameters', label: 'Parameter Master', collection: 'parameters', uniqueKey: 'parameterCode', required: ['parameterCode', 'parameterName'] },
+  { code: 'workflows', label: 'Workflow Configuration', collection: 'workflows', uniqueKey: 'workflowCode', required: ['workflowCode', 'workflowName'] },
+  { code: 'approval_matrix', label: 'Approval Matrix', collection: 'approval_matrix', uniqueKey: 'matrixCode', required: ['matrixCode'] },
+  { code: 'document_numbering', label: 'Document Numbering', collection: 'document_numbering', uniqueKey: 'numberingCode', required: ['numberingCode'] },
+  { code: 'notification_settings', label: 'Notification Settings', collection: 'notification_settings', uniqueKey: 'notificationCode', required: ['notificationCode', 'eventName'] },
+  { code: 'email_sms_templates', label: 'Email & SMS Templates', collection: 'email_sms_templates', uniqueKey: 'templateCode', required: ['templateCode', 'templateName', 'body'] },
+  { code: 'module_configuration', label: 'Module Configuration', collection: 'module_configuration', uniqueKey: 'moduleCode', required: ['moduleCode', 'moduleName'] },
+] as const;
+
+export const MASTER_DATA_IMPORT_MODES = [
+  'Insert Only', 'Update Only', 'Insert + Update', 'Dry Run',
+] as const;
+
+export const MASTER_DATA_EXPORT_FORMATS = ['JSON', 'CSV'] as const;
+
+export const MASTER_DATA_OPERATION_STATUSES = [
+  'Queued', 'In Progress', 'Success', 'Partial Success', 'Failed', 'Rolled Back', 'Cancelled',
+] as const;
 
 export const FINANCIAL_YEAR_MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -622,12 +932,22 @@ export const LOGO_DISPLAY_MODES = ['Full Logo', 'Icon Only', 'Text Only'] as con
 
 export const SYSTEM_SETTINGS_TABS = [
   { id: 'general', label: 'General', href: '/admin/system-settings/general' },
+  { id: 'organization', label: 'Organization', href: '/admin/system-settings/organization' },
+  { id: 'branding', label: 'Branding', href: '/admin/system-settings/branding' },
+  { id: 'localization', label: 'Localization', href: '/admin/system-settings/localization' },
   { id: 'security', label: 'Security', href: '/admin/system-settings/security' },
+  { id: 'authentication', label: 'Authentication', href: '/admin/system-settings/authentication' },
   { id: 'password-policy', label: 'Password Policy', href: '/admin/system-settings/password-policy' },
-  { id: 'session', label: 'Session', href: '/admin/system-settings/session' },
-  { id: 'file-upload', label: 'File Upload', href: '/admin/system-settings/file-upload' },
+  { id: 'session', label: 'Sessions', href: '/admin/system-settings/session' },
+  { id: 'compliance', label: 'Compliance', href: '/admin/system-settings/compliance' },
+  { id: 'file-upload', label: 'Storage', href: '/admin/system-settings/file-upload' },
   { id: 'theme', label: 'Theme', href: '/admin/system-settings/theme' },
+  { id: 'performance', label: 'Performance', href: '/admin/system-settings/performance' },
+  { id: 'api', label: 'API', href: '/admin/system-settings/api' },
+  { id: 'integrations', label: 'Integrations', href: '/admin/system-settings/integrations' },
   { id: 'maintenance', label: 'Maintenance', href: '/admin/system-settings/maintenance' },
-  { id: 'firebase', label: 'Firebase Health', href: '/admin/system-settings/firebase' },
-  { id: 'logs', label: 'System Logs', href: '/admin/system-settings/logs' },
+  { id: 'firebase', label: 'Firebase', href: '/admin/system-settings/firebase' },
+  { id: 'logs', label: 'Logging', href: '/admin/system-settings/logs' },
+  { id: 'versions', label: 'Versions', href: '/admin/system-settings/versions' },
+  { id: 'reports', label: 'Reports', href: '/admin/system-settings/reports' },
 ] as const;

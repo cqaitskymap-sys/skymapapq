@@ -1,14 +1,10 @@
 import { NextResponse } from 'next/server';
 import { runScheduledPrintControlJobs } from '@/lib/print-control-service';
+import { assertCronAuthorized } from '@/lib/cron-auth';
 
 export async function POST(request: Request) {
-  const secret = process.env.PRINT_CONTROL_CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get('authorization');
-    if (auth !== `Bearer ${secret}`) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-  }
+  const denied = assertCronAuthorized(request, 'PRINT_CONTROL_CRON_SECRET');
+  if (denied) return denied;
   try {
     const result = await runScheduledPrintControlJobs();
     return NextResponse.json({ ok: true, ...result, ranAt: new Date().toISOString() });

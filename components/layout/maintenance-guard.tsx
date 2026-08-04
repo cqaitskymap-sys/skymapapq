@@ -3,6 +3,12 @@
 import { Wrench } from 'lucide-react';
 import { useSystemSettings } from '@/contexts/system-settings-context';
 import { useAuth } from '@/contexts/auth-context';
+import { Button } from '@/components/ui/button';
+import { useRouter } from 'next/navigation';
+
+function isSuperAdmin(role?: string | null): boolean {
+  return (role?.toLowerCase() || '') === 'super_admin';
+}
 
 function canAccessDuringMaintenance(role?: string | null): boolean {
   return ['super_admin', 'admin'].includes(role?.toLowerCase() || '');
@@ -10,13 +16,18 @@ function canAccessDuringMaintenance(role?: string | null): boolean {
 
 export function MaintenanceGuard({ children }: { children: React.ReactNode }) {
   const { maintenanceActive, settings, loading, canBypassMaintenance } = useSystemSettings();
-  const { profile } = useAuth();
+  const { profile, signOut } = useAuth();
+  const router = useRouter();
 
   if (loading) return <>{children}</>;
 
-  const allowed = settings?.allowedAdminAccessDuringMaintenance && (
-    canBypassMaintenance || canAccessDuringMaintenance(profile?.role)
-  );
+  // Super admins always bypass so the system is never permanently locked out.
+  const allowed =
+    isSuperAdmin(profile?.role)
+    || (
+      Boolean(settings?.allowedAdminAccessDuringMaintenance)
+      && (canBypassMaintenance || canAccessDuringMaintenance(profile?.role))
+    );
 
   if (maintenanceActive && !allowed) {
     return (
@@ -32,6 +43,15 @@ export function MaintenanceGuard({ children }: { children: React.ReactNode }) {
               Expected completion: {new Date(settings.scheduledMaintenanceEnd).toLocaleString()}
             </p>
           )}
+          <Button
+            variant="outline"
+            onClick={async () => {
+              await signOut();
+              router.replace('/auth/login');
+            }}
+          >
+            Sign out
+          </Button>
         </div>
       </div>
     );

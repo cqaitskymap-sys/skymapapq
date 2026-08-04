@@ -1,26 +1,23 @@
-import {
-  addDoc, collection, getDocs, limit, orderBy, query, where,
-} from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { limit, orderBy } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
 import {
   RISK_ASSESSMENT_COLLECTION,
   RISK_ASSESSMENT_LEGACY,
-  RISK_ASSESSMENT_MODULE,
-  RISK_CONTROLS_COLLECTION,
-  RISK_REVIEWS_COLLECTION,
   buildRiskAssessmentId,
   calculateRiskAssessment,
   generateRiskNumber,
   inferRiskFromSignal,
+  isOverdue,
   type RiskAssessmentFormData,
   type RiskAssessmentRecord,
   type RiskControlRecord,
   type RiskReviewRecord,
 } from '@/lib/cpv-risk-assessment-records';
+import { polishRecommendationText } from '@/lib/ai/client';
 
 export interface RiskAssessmentActor {
   id: string;
@@ -28,39 +25,16 @@ export interface RiskAssessmentActor {
   role?: string;
 }
 
-function actorCtx(actor: RiskAssessmentActor) {
-  return { moduleName: RISK_ASSESSMENT_MODULE, actor: { id: actor.id, name: actor.name } as DocumentActor };
-}
-
-async function logRiskAudit(
-  actionType: string,
-  recordId: string,
-  actor: RiskAssessmentActor,
-  oldVal?: unknown,
-  newVal?: unknown,
-  docNo?: string,
-) {
-  await createAuditLog({
-    moduleName: RISK_ASSESSMENT_MODULE,
-    collectionName: RISK_ASSESSMENT_COLLECTION,
-    recordId,
-    documentNumber: docNo,
-    actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-  await writeAuditTrail({
-    collectionName: RISK_ASSESSMENT_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: RISK_ASSESSMENT_MODULE,
-  });
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string') {
+    const msg = (e as { message: string }).message;
+    if (msg.includes('FirebaseError:') || msg.includes('functions/')) {
+      const cleaned = msg.replace(/^FirebaseError:\s*/i, '').replace(/^functions\/[\w-]+:\s*/i, '');
+      return cleaned || fallback;
+    }
+    return msg || fallback;
+  }
+  return fallback;
 }
 
 function str(v: unknown, fb = ''): string {
@@ -77,12 +51,32 @@ function bool(v: unknown, fb = false): boolean {
   return typeof v === 'boolean' ? v : fb;
 }
 
+function resolveChangeReason(
+  primary: unknown,
+  fallback: unknown,
+  defaultReason: string,
+): string {
+  const reason = str(primary || fallback, defaultReason);
+  return reason.trim().length >= 5 ? reason : '';
+}
+
 export function normalizeRiskAssessmentRecord(raw: Record<string, unknown>): RiskAssessmentRecord {
   const productCode = str(raw.productCode || raw.product_code);
   const severity = num(raw.severityScore ?? raw.severity ?? raw.severity_score, 1);
   const occurrence = num(raw.occurrenceScore ?? raw.occurrence ?? raw.likelihood, 1);
   const detection = num(raw.detectionScore ?? raw.detectability ?? raw.detection ?? raw.detection_score, 1);
-  const calc = calculateRiskAssessment(severity, occurrence, detection);
+  const residualSeverity = num(raw.residualSeverity ?? raw.residual_severity, 0);
+  const residualOccurrence = num(raw.residualOccurrence ?? raw.residual_occurrence, 0);
+  const residualDetection = num(raw.residualDetection ?? raw.residual_detection, 0);
+  const calc = calculateRiskAssessment(severity, occurrence, detection, {
+    severity: residualSeverity > 0 ? residualSeverity : undefined,
+    occurrence: residualOccurrence > 0 ? residualOccurrence : undefined,
+    detection: residualDetection > 0 ? residualDetection : undefined,
+  });
+  const targetCompletionDate = str(
+    raw.targetCompletionDate || raw.target_completion_date || raw.dueDate || raw.due_date,
+  );
+  const riskStatus = str(raw.riskStatus || raw.risk_status || raw.status, 'Open') as RiskAssessmentRecord['riskStatus'];
 
   return {
     id: str(raw.id),
@@ -91,10 +85,24 @@ export function normalizeRiskAssessmentRecord(raw: Record<string, unknown>): Ris
     cpvProductId: str(raw.cpvProductId || raw.cpv_product_id),
     productName: str(raw.productName || raw.product_name || raw.product),
     productCode,
+    productVersion: str(raw.productVersion || raw.product_version),
     batchNumber: str(raw.batchNumber || raw.batch_number || raw.batchNo || raw.batch_no),
+    title: str(raw.title || raw.riskTitle || raw.risk_title),
+    methodology: (str(raw.methodology, 'FMEA') as RiskAssessmentRecord['methodology']),
     riskCategory: (str(raw.riskCategory || raw.risk_category, 'Process Risk') as RiskAssessmentRecord['riskCategory']),
     riskSource: (str(raw.riskSource || raw.risk_source || raw.factor, 'Manual Assessment') as RiskAssessmentRecord['riskSource']),
     processStage: str(raw.processStage || raw.process_stage),
+    process: str(raw.process),
+    processStep: str(raw.processStep || raw.process_step),
+    department: str(raw.department),
+    site: str(raw.site),
+    equipmentId: str(raw.equipmentId || raw.equipment_id),
+    equipmentName: str(raw.equipmentName || raw.equipment_name),
+    machine: str(raw.machine),
+    material: str(raw.material),
+    supplier: str(raw.supplier),
+    utility: str(raw.utility),
+    environmentalCondition: str(raw.environmentalCondition || raw.environmental_condition),
     parameterType: (str(raw.parameterType || raw.parameter_type, 'CPP') as RiskAssessmentRecord['parameterType']),
     parameterName: str(raw.parameterName || raw.parameter_name),
     riskDescription: str(raw.riskDescription || raw.risk_description || raw.rationale),
@@ -104,36 +112,55 @@ export function normalizeRiskAssessmentRecord(raw: Record<string, unknown>): Ris
     severityScore: severity,
     occurrenceScore: occurrence,
     detectionScore: detection,
+    residualSeverity,
+    residualOccurrence,
+    residualDetection,
     rpnScore: num(raw.rpnScore ?? raw.rpn ?? raw.rpn_score, calc.rpnScore),
     riskLevel: str(raw.riskLevel || raw.risk_level, calc.riskLevel) as RiskAssessmentRecord['riskLevel'],
-    department: str(raw.department),
-    riskTitle: str(raw.riskTitle || raw.risk_title),
-    residualSeverity: num(raw.residualSeverity ?? raw.residual_severity, 0),
-    residualOccurrence: num(raw.residualOccurrence ?? raw.residual_occurrence, 0),
-    residualDetection: num(raw.residualDetection ?? raw.residual_detection, 0),
-    residualRpn: num(raw.residualRpn ?? raw.residual_rpn, 0),
-    residualRiskLevel: str(raw.residualRiskLevel || raw.residual_risk_level, ''),
+    residualRpn: num(raw.residualRpn ?? raw.residual_rpn, calc.residualRpn),
+    residualRiskLevel: str(raw.residualRiskLevel || raw.residual_risk_level, calc.residualRiskLevel),
+    riskReductionPercent: num(raw.riskReductionPercent ?? raw.risk_reduction_percent, calc.riskReductionPercent),
+    criticality: num(raw.criticality, calc.criticality),
+    probability: num(raw.probability, calc.probability),
+    impact: num(raw.impact, calc.impact),
+    likelihood: num(raw.likelihood, calc.likelihood),
+    healthScore: num(raw.healthScore ?? raw.health_score, calc.healthScore),
+    confidenceScore: num(raw.confidenceScore ?? raw.confidence_score, calc.confidenceScore),
+    aiRecommendation: str(raw.aiRecommendation ?? raw.ai_recommendation, calc.aiRecommendation),
+    repeatedRiskDetected: bool(raw.repeatedRiskDetected ?? raw.repeated_risk_detected),
+    missingControls: bool(raw.missingControls ?? raw.missing_controls),
+    mitigationOverdue: bool(raw.mitigationOverdue ?? raw.mitigation_overdue, isOverdue({
+      targetCompletionDate,
+      riskStatus,
+    } as RiskAssessmentRecord)),
+    deviationRequired: bool(raw.deviationRequired ?? raw.deviation_required, calc.deviationRequired),
     sourceReferenceNumber: str(raw.sourceReferenceNumber || raw.source_reference_number),
     reviewFrequency: str(raw.reviewFrequency || raw.review_frequency),
     riskDate: str(raw.riskDate || raw.risk_date),
-    riskStatus: (str(raw.riskStatus || raw.risk_status || raw.status, 'Open') as RiskAssessmentRecord['riskStatus']),
+    assessmentDate: str(raw.assessmentDate || raw.assessment_date || raw.riskDate || raw.risk_date),
+    priority: str(raw.priority),
+    version: str(raw.version, '1.0'),
+    changeReason: str(raw.changeReason ?? raw.change_reason),
+    riskStatus,
     workflowStatus: (str(raw.workflowStatus || raw.workflow_status, 'Draft') as RiskAssessmentRecord['workflowStatus']),
     effectivenessStatus: (str(raw.effectivenessStatus || raw.effectiveness_status, 'Pending') as RiskAssessmentRecord['effectivenessStatus']),
     riskOwner: str(raw.riskOwner || raw.risk_owner || raw.owner, 'Unassigned'),
     mitigationAction: str(raw.mitigationAction || raw.mitigation_action || raw.mitigation),
-    targetCompletionDate: str(raw.targetCompletionDate || raw.target_completion_date || raw.dueDate || raw.due_date),
+    targetCompletionDate,
     effectivenessCheckRequired: bool(raw.effectivenessCheckRequired ?? raw.effectiveness_check_required, true),
     linkedCapaNumber: str(raw.linkedCapaNumber || raw.linked_capa_number),
     linkedDeviationNumber: str(raw.linkedDeviationNumber || raw.linked_deviation_number),
     linkedOosNumber: str(raw.linkedOosNumber || raw.linked_oos_number),
     linkedChangeControlNumber: str(raw.linkedChangeControlNumber || raw.linked_change_control_number),
-    capaSuggested: bool(raw.capaSuggested || raw.capa_suggested),
+    capaSuggested: bool(raw.capaSuggested ?? raw.capa_suggested, calc.capaSuggested),
     isAutoGenerated: bool(raw.isAutoGenerated || raw.is_auto_generated || raw.autoGenerated),
     isLocked: bool(raw.isLocked || raw.is_locked),
     reviewedBy: str(raw.reviewedBy || raw.reviewed_by),
     reviewDate: str(raw.reviewDate || raw.review_date),
     approvedBy: str(raw.approvedBy || raw.approved_by),
     approvalDate: str(raw.approvalDate || raw.approval_date),
+    closedBy: str(raw.closedBy || raw.closed_by),
+    closedDate: str(raw.closedDate || raw.closed_date),
     remarks: str(raw.remarks),
     controls: Array.isArray(raw.controls) ? raw.controls as RiskControlRecord[] : [],
     reviews: Array.isArray(raw.reviews) ? raw.reviews as RiskReviewRecord[] : [],
@@ -193,44 +220,45 @@ export async function createRiskAssessment(
 ): Promise<{ result: RiskAssessmentRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    const calc = calculateRiskAssessment(form.severityScore, form.occurrenceScore, form.detectionScore);
-    const riskNumber = generateRiskNumber(existingCount);
-    const payload = {
+    const changeReason = resolveChangeReason(form.changeReason, null, 'Initial risk assessment creation');
+    if (!changeReason) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    const calc = calculateRiskAssessment(
+      form.severityScore,
+      form.occurrenceScore,
+      form.detectionScore,
+      {
+        severity: form.residualSeverity || undefined,
+        occurrence: form.residualOccurrence || undefined,
+        detection: form.residualDetection || undefined,
+      },
+    );
+    const aiRecommendation = await polishRecommendationText(calc.aiRecommendation, {
+      module: 'Risk Assessment',
+      riskCategory: form.riskCategory,
+      riskLevel: calc.riskLevel,
+      rpnScore: calc.rpnScore,
+      parameterName: form.parameterName,
+      riskDescription: form.riskDescription,
+    });
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminRiskAssessment',
+    );
+    const result = await fn({
       ...form,
-      riskAssessmentId: buildRiskAssessmentId(form.productCode),
-      riskNumber,
-      ...calc,
-      riskStatus: 'Open' as const,
-      workflowStatus: 'Draft' as const,
-      effectivenessStatus: 'Pending' as const,
-      capaSuggested: calc.riskLevel === 'Critical' || calc.riskLevel === 'High',
+      changeReason,
+      existingCount,
       isAutoGenerated: Boolean(options?.isAutoGenerated),
-      isLocked: false,
-      reviewedBy: '',
-      reviewDate: '',
-      approvedBy: '',
-      approvalDate: '',
-      controls: [],
-      reviews: [],
       createdByName: actor.name,
       updatedByName: actor.name,
-    };
-
-    const created = await createRecord(
-      RISK_ASSESSMENT_COLLECTION,
-      payload as Omit<RiskAssessmentRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
-    );
-    const result = normalizeRiskAssessmentRecord(created as unknown as Record<string, unknown>);
-    await logRiskAudit('create risk', result.id, actor, null, result, result.riskNumber);
-    await logRiskAudit('risk calculation', result.id, actor, null, calc, result.riskNumber);
-    if (options?.isAutoGenerated) {
-      await logRiskAudit('auto risk generation', result.id, actor, null, form.riskSource, result.riskNumber);
-    }
-    return { result, error: null };
+      aiRecommendation,
+    });
+    return { result: normalizeRiskAssessmentRecord(result.data), error: null };
   } catch (e) {
     console.error('createRiskAssessment failed', e);
-    return { result: null, error: 'Failed to save risk assessment.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to save risk assessment.') };
   }
 }
 
@@ -240,105 +268,153 @@ export async function updateRiskAssessment(
   actor: RiskAssessmentActor,
   existing: RiskAssessmentRecord,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean; changeReason?: string },
 ): Promise<{ result: RiskAssessmentRecord | null; error: string | null }> {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   if (existing.isLocked && !qaOverride) {
     return { result: null, error: 'Record is locked. QA override required.' };
   }
   try {
-    const severity = updates.severityScore ?? existing.severityScore;
-    const occurrence = updates.occurrenceScore ?? existing.occurrenceScore;
-    const detection = updates.detectionScore ?? existing.detectionScore;
-    const calc = calculateRiskAssessment(severity, occurrence, detection);
-    const payload = {
-      ...updates,
-      ...calc,
-      updatedByName: actor.name,
-      isLocked: qaOverride ? false : existing.isLocked,
-    };
-    const updated = await updateRecord(RISK_ASSESSMENT_COLLECTION, id, payload as Partial<RiskAssessmentRecord>, actorCtx(actor));
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeRiskAssessmentRecord(updated as unknown as Record<string, unknown>);
-    await logRiskAudit(qaOverride ? 'QA override' : 'edit risk', id, actor, existing, result, result.riskNumber);
-    if (updates.severityScore || updates.occurrenceScore || updates.detectionScore) {
-      await logRiskAudit('risk calculation', id, actor, null, calc, result.riskNumber);
+    const changeReason = resolveChangeReason(
+      options?.changeReason ?? updates.changeReason,
+      existing.changeReason,
+      'Risk assessment updated',
+    );
+    if (!changeReason) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
     }
-    return { result, error: null };
+    if (qaOverride && options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'updateAdminRiskAssessment',
+    );
+    const result = await fn({
+      id,
+      ...updates,
+      changeReason,
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
+      updatedByName: actor.name,
+    });
+    return { result: normalizeRiskAssessmentRecord(result.data), error: null };
   } catch (e) {
     console.error('updateRiskAssessment failed', e);
-    return { result: null, error: 'Update failed.' };
+    return { result: null, error: cfErrorMessage(e, 'Update failed.') };
   }
 }
 
-export async function reviewRiskAssessment(id: string, actor: RiskAssessmentActor, existing: RiskAssessmentRecord, comments = '') {
-  const review: RiskReviewRecord = {
-    reviewDate: new Date().toISOString().split('T')[0],
-    reviewer: actor.name,
-    comments,
-    decision: 'Under Review',
-    status: 'Under Review',
-  };
-  const updated = await updateRecord(RISK_ASSESSMENT_COLLECTION, id, {
-    riskStatus: 'Under Review',
-    workflowStatus: 'Review',
-    reviewedBy: actor.name,
-    reviewDate: review.reviewDate,
-    reviews: [...(existing.reviews || []), review],
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRiskAssessmentRecord(updated as unknown as Record<string, unknown>);
-  await logRiskAudit('risk review', id, actor, existing.riskStatus, 'Under Review', result.riskNumber);
+export async function reviewRiskAssessment(
+  id: string,
+  actor: RiskAssessmentActor,
+  existing: RiskAssessmentRecord,
+  comments = '',
+  changeReason = 'Submitted for QA review',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    await addDoc(collection(getFirebaseFirestore(), RISK_REVIEWS_COLLECTION), {
-      ...review,
-      riskAssessmentId: id,
-      riskNumber: result.riskNumber,
-      createdAt: new Date().toISOString(),
-      createdBy: actor.id,
-      isDeleted: false,
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'reviewAdminRiskAssessment',
+    );
+    const result = await fn({
+      id,
+      comments,
+      changeReason,
+      updatedByName: actor.name,
     });
-  } catch { /* optional */ }
-  return { result, error: null };
+    return { result: normalizeRiskAssessmentRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to submit review.') };
+  }
 }
 
-export async function approveRiskAssessment(id: string, actor: RiskAssessmentActor, existing: RiskAssessmentRecord) {
-  const today = new Date().toISOString().split('T')[0];
-  const updated = await updateRecord(RISK_ASSESSMENT_COLLECTION, id, {
-    workflowStatus: 'Approval',
-    riskStatus: 'Mitigation In Progress',
-    approvedBy: actor.name,
-    approvalDate: today,
-    isLocked: true,
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRiskAssessmentRecord(updated as unknown as Record<string, unknown>);
-  await logRiskAudit('risk approval', id, actor, existing.workflowStatus, 'Approval', result.riskNumber);
-  return { result, error: null };
+export async function approveRiskAssessment(
+  id: string,
+  actor: RiskAssessmentActor,
+  existing: RiskAssessmentRecord,
+  changeReason?: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const reason = resolveChangeReason(changeReason, existing.changeReason, 'Approved by QA reviewer');
+    if (!reason) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'approveAdminRiskAssessment',
+    );
+    const result = await fn({
+      id,
+      changeReason: reason,
+      esignConfirmed: true,
+      updatedByName: actor.name,
+    });
+    return { result: normalizeRiskAssessmentRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to approve.') };
+  }
 }
 
-export async function closeRiskAssessment(id: string, actor: RiskAssessmentActor, existing: RiskAssessmentRecord) {
-  const updated = await updateRecord(RISK_ASSESSMENT_COLLECTION, id, {
-    riskStatus: 'Closed',
-    workflowStatus: 'Closure',
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRiskAssessmentRecord(updated as unknown as Record<string, unknown>);
-  await logRiskAudit('risk closure', id, actor, existing.riskStatus, 'Closed', result.riskNumber);
-  return { result, error: null };
+export async function closeRiskAssessment(
+  id: string,
+  actor: RiskAssessmentActor,
+  existing: RiskAssessmentRecord,
+  changeReason?: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const reason = resolveChangeReason(changeReason, existing.changeReason, 'Risk assessment closed');
+    if (!reason) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'closeAdminRiskAssessment',
+    );
+    const result = await fn({
+      id,
+      changeReason: reason,
+      esignConfirmed: true,
+      updatedByName: actor.name,
+    });
+    return { result: normalizeRiskAssessmentRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to close risk assessment.') };
+  }
 }
 
-export async function rejectRiskAssessment(id: string, actor: RiskAssessmentActor, existing: RiskAssessmentRecord) {
-  const updated = await updateRecord(RISK_ASSESSMENT_COLLECTION, id, {
-    riskStatus: 'Rejected',
-    workflowStatus: 'Closure',
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRiskAssessmentRecord(updated as unknown as Record<string, unknown>);
-  await logRiskAudit('reject risk', id, actor, existing.riskStatus, 'Rejected', result.riskNumber);
-  return { result, error: null };
+export async function rejectRiskAssessment(
+  id: string,
+  actor: RiskAssessmentActor,
+  existing: RiskAssessmentRecord,
+  changeReason = 'Rejected by QA',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'rejectAdminRiskAssessment',
+    );
+    const result = await fn({
+      id,
+      changeReason,
+      updatedByName: actor.name,
+    });
+    return { result: normalizeRiskAssessmentRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to reject.') };
+  }
 }
 
 export async function addRiskControl(
@@ -346,32 +422,24 @@ export async function addRiskControl(
   control: Omit<RiskControlRecord, 'controlId'>,
   actor: RiskAssessmentActor,
   existing: RiskAssessmentRecord,
+  changeReason = 'Risk control added',
 ) {
-  const controlId = `CTRL-${Date.now()}`.slice(0, 20);
-  const entry: RiskControlRecord = { ...control, controlId };
-  const controls = [...(existing.controls || []), entry];
-  const updated = await updateRecord(RISK_ASSESSMENT_COLLECTION, id, {
-    controls,
-    workflowStatus: 'Mitigation',
-    riskStatus: 'Mitigation In Progress',
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRiskAssessmentRecord(updated as unknown as Record<string, unknown>);
-  await logRiskAudit('risk mitigation', id, actor, null, entry, result.riskNumber);
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    await addDoc(collection(getFirebaseFirestore(), RISK_CONTROLS_COLLECTION), {
-      ...entry,
-      riskAssessmentId: id,
-      riskNumber: result.riskNumber,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      createdBy: actor.id,
-      updatedBy: actor.id,
-      isDeleted: false,
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'addControlAdminRiskAssessment',
+    );
+    const result = await fn({
+      id,
+      control,
+      changeReason,
+      updatedByName: actor.name,
     });
-  } catch { /* optional */ }
-  return { result, error: null };
+    return { result: normalizeRiskAssessmentRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to add control.') };
+  }
 }
 
 export async function recordEffectivenessReview(
@@ -379,17 +447,24 @@ export async function recordEffectivenessReview(
   status: RiskAssessmentRecord['effectivenessStatus'],
   actor: RiskAssessmentActor,
   existing: RiskAssessmentRecord,
+  changeReason = 'Effectiveness review recorded',
 ) {
-  const updated = await updateRecord(RISK_ASSESSMENT_COLLECTION, id, {
-    effectivenessStatus: status,
-    workflowStatus: 'Effectiveness Check',
-    riskStatus: status === 'Effective' ? 'Closed' : 'Effectiveness Check Pending',
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRiskAssessmentRecord(updated as unknown as Record<string, unknown>);
-  await logRiskAudit('effectiveness review', id, actor, existing.effectivenessStatus, status, result.riskNumber);
-  return { result, error: null };
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'recordEffectivenessAdminRiskAssessment',
+    );
+    const result = await fn({
+      id,
+      effectivenessStatus: status,
+      changeReason,
+      updatedByName: actor.name,
+    });
+    return { result: normalizeRiskAssessmentRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to record effectiveness review.') };
+  }
 }
 
 export async function linkRiskRecord(
@@ -398,23 +473,51 @@ export async function linkRiskRecord(
   value: string,
   actor: RiskAssessmentActor,
   existing: RiskAssessmentRecord,
+  changeReason?: string,
 ) {
-  const updated = await updateRecord(RISK_ASSESSMENT_COLLECTION, id, {
-    [field]: value,
-    updatedByName: actor.name,
-  } as Partial<RiskAssessmentRecord>, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRiskAssessmentRecord(updated as unknown as Record<string, unknown>);
-  const action = field.includes('Capa') ? 'link CAPA'
-    : field.includes('Deviation') ? 'link Deviation'
-      : field.includes('Oos') ? 'link OOS'
-        : 'link change control';
-  await logRiskAudit(action, id, actor, null, value, result.riskNumber);
-  return { result, error: null };
+  const defaultReason = field.includes('Capa') ? 'Linked CAPA to risk assessment'
+    : field.includes('Deviation') ? 'Linked deviation to risk assessment'
+      : field.includes('Oos') ? 'Linked OOS to risk assessment'
+        : 'Linked change control to risk assessment';
+  return updateRiskAssessment(
+    id,
+    { [field]: value } as Partial<RiskAssessmentRecord>,
+    actor,
+    existing,
+    false,
+    { changeReason: changeReason || defaultReason },
+  );
+}
+
+export async function softDeleteRiskAssessment(
+  id: string,
+  actor: RiskAssessmentActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+): Promise<{ error: string | null }> {
+  if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminRiskAssessment');
+    await fn({ id, changeReason, esignConfirmed: true });
+    return { error: null };
+  } catch (e) {
+    return { error: cfErrorMessage(e, 'Failed to archive risk assessment.') };
+  }
 }
 
 export async function logRiskExport(actor: RiskAssessmentActor, type: string, count: number) {
-  await logRiskAudit(`export risk ${type}`, 'export', actor, null, { type, count });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminRiskAssessmentExport');
+    await fn({ count, format: type || 'CSV', changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logRiskExport CF failed (non-blocking)', e);
+  }
 }
 
 export async function createAutoRiskFromSignal(
@@ -427,23 +530,47 @@ export async function createAutoRiskFromSignal(
     cpvProductId: '',
     productName: input.productName,
     productCode: input.productCode || 'PRD',
+    productVersion: '',
     batchNumber: input.batchNumber || '',
+    title: input.parameterName || inferred.riskDescription.slice(0, 120),
+    methodology: 'FMEA',
     processStage: '',
+    process: '',
+    processStep: '',
+    department: '',
+    site: '',
+    equipmentId: '',
+    equipmentName: '',
+    machine: '',
+    material: '',
+    supplier: '',
+    utility: '',
+    environmentalCondition: '',
     parameterName: input.parameterName || '',
     parameterType: 'CPP',
     riskOwner: input.riskOwner,
     targetCompletionDate: input.targetCompletionDate,
+    assessmentDate: '',
+    reviewFrequency: '',
+    priority: '',
+    version: '1.0',
     mitigationAction: '',
     existingControls: '',
     potentialCause: '',
+    residualSeverity: 0,
+    residualOccurrence: 0,
+    residualDetection: 0,
     linkedCapaNumber: '',
     linkedDeviationNumber: '',
     linkedOosNumber: '',
     linkedChangeControlNumber: '',
     remarks: 'Auto-generated from CPV monitoring signal',
     effectivenessCheckRequired: true,
+    changeReason: 'Auto-generated from CPV monitoring signal',
     ...inferred,
   }, actor, existingCount, { isAutoGenerated: true });
 }
+
+export const createFromSignal = createAutoRiskFromSignal;
 
 export { inferRiskFromSignal, calculateRiskAssessment, generateRiskNumber };

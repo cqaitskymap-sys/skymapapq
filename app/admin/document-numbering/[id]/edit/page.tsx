@@ -13,7 +13,7 @@ import { useAdminPermissions } from '@/hooks/use-admin-permissions';
 import { canEditDocumentNumbering } from '@/lib/permissions';
 import {
   fetchDocumentNumberingById, updateDocumentNumbering,
-} from '@/lib/admin/document-numbering-service';
+} from '@/components/admin/document-numbering/document-numbering-api';
 import { fetchCompanySites } from '@/lib/admin/company-site-service';
 import { fetchDepartments } from '@/lib/admin/department-service';
 import { fetchProducts } from '@/lib/admin/product-service';
@@ -38,7 +38,7 @@ function EditDocumentNumberingContent() {
     setError(null);
     try {
       const [record, s, d, p] = await Promise.all([
-        fetchDocumentNumberingById(id),
+        fetchDocumentNumberingById(id, true),
         fetchCompanySites(),
         fetchDepartments(),
         fetchProducts(),
@@ -66,9 +66,20 @@ function EditDocumentNumberingContent() {
 
   const initial: Partial<DocumentNumberingFormData> = {
     numberingCode: format.numberingCode,
+    numberingName: format.numberingName,
+    description: format.description,
     moduleName: format.moduleName as DocumentNumberingFormData['moduleName'],
     documentType: format.documentType,
+    documentCategory: format.documentCategory,
+    department: format.department,
+    site: format.site,
+    businessUnit: format.businessUnit,
+    company: format.company,
+    location: format.location,
+    product: format.product,
+    workflowCode: format.workflowCode,
     prefix: format.prefix,
+    suffix: format.suffix,
     siteCode: format.siteCode,
     departmentCode: format.departmentCode,
     productCodeOptional: format.productCodeOptional,
@@ -76,13 +87,19 @@ function EditDocumentNumberingContent() {
     monthFormat: format.monthFormat,
     separator: format.separator,
     runningNumberLength: format.runningNumberLength,
+    startingNumber: format.startingNumber,
     currentRunningNumber: format.currentRunningNumber,
     resetFrequency: format.resetFrequency,
     revisionFormat: format.revisionFormat,
     formatTokens: format.formatTokens,
+    numberingVersion: format.numberingVersion,
+    effectiveDate: format.effectiveDate,
+    reviewDate: format.reviewDate,
     autoGenerateEnabled: format.autoGenerateEnabled,
     manualOverrideAllowed: format.manualOverrideAllowed,
+    allowSkipSequence: format.allowSkipSequence,
     remarks: format.remarks,
+    changeReason: '',
   };
 
   const onSubmit = async (data: DocumentNumberingFormData) => {
@@ -108,6 +125,7 @@ function EditDocumentNumberingContent() {
         sites={sites}
         departments={departments}
         products={products}
+        isEdit
         onSubmit={onSubmit}
         onCancel={() => router.push(`/admin/document-numbering/${id}`)}
         submitting={submitting}

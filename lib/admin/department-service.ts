@@ -2,10 +2,8 @@ import {
   collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import {
-  getFirebaseApp, getFirebaseFirestore, isFirebaseConfigured,
-} from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseApp, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import { getAdminRecords } from './admin-service';
 import { ADMIN_COLLECTIONS, SYSTEM_DEPARTMENT_CODES } from './constants';
 import type { AdminUser, Department, DepartmentFormData } from './schemas';
@@ -266,7 +264,7 @@ export async function createDepartment(
 ): Promise<{ department: Department | null; error: string | null }> {
   try {
     const createFn = httpsCallable<Record<string, unknown>, Department>(
-      getFunctions(getFirebaseApp()),
+      getFirebaseFunctions(),
       'createAdminDepartment',
     );
     const response = await createFn({
@@ -289,7 +287,7 @@ export async function updateDepartment(
     const updateFn = httpsCallable<
       Record<string, unknown>,
       { department: Department; cascadeCount: number }
-    >(getFunctions(getFirebaseApp()), 'updateAdminDepartment');
+    >(getFirebaseFunctions(), 'updateAdminDepartment');
     const response = await updateFn({
       departmentDocId: id,
       updates: data,
@@ -319,7 +317,7 @@ export async function setDepartmentStatus(
     const setStatusFn = httpsCallable<
       Record<string, unknown>,
       { success: boolean; linkedUsers: number }
-    >(getFunctions(getFirebaseApp()), 'setAdminDepartmentStatus');
+    >(getFirebaseFunctions(), 'setAdminDepartmentStatus');
     const response = await setStatusFn({
       departmentDocId: id,
       status,
@@ -341,7 +339,7 @@ export async function deleteDepartment(
   if (!check.allowed) return { success: false, error: check.reason };
 
   try {
-    const deleteFn = httpsCallable(getFunctions(getFirebaseApp()), 'softDeleteAdminDepartment');
+    const deleteFn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminDepartment');
     await deleteFn({ departmentDocId: id, reason });
     return { success: true };
   } catch (error) {
@@ -354,7 +352,7 @@ export async function restoreDepartment(
   reason: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const restoreFn = httpsCallable(getFunctions(getFirebaseApp()), 'restoreAdminDepartment');
+    const restoreFn = httpsCallable(getFirebaseFunctions(), 'restoreAdminDepartment');
     await restoreFn({ departmentDocId: id, reason });
     return { success: true };
   } catch (error) {
@@ -371,7 +369,7 @@ export async function bulkUpdateDepartments(
     const bulkFn = httpsCallable<
       Record<string, unknown>,
       { successCount: number }
-    >(getFunctions(getFirebaseApp()), 'bulkUpdateAdminDepartments');
+    >(getFirebaseFunctions(), 'bulkUpdateAdminDepartments');
     const response = await bulkFn({ departmentDocIds: departmentIds, action, reason });
     return { successCount: response.data.successCount };
   } catch (error) {
@@ -392,7 +390,7 @@ export async function linkUsersToDepartment(
     const linkFn = httpsCallable<
       Record<string, unknown>,
       { count: number }
-    >(getFunctions(getFirebaseApp()), 'linkUsersToAdminDepartment');
+    >(getFirebaseFunctions(), 'linkUsersToAdminDepartment');
     const response = await linkFn({
       departmentDocId: dept.id,
       userIds,
@@ -451,7 +449,7 @@ export function exportDepartmentsCsv(departments: Department[]): string {
 
 export async function logDepartmentExport(_meta: DepartmentAuditMeta, count: number) {
   try {
-    const exportFn = httpsCallable(getFunctions(getFirebaseApp()), 'logAdminDepartmentExport');
+    const exportFn = httpsCallable(getFirebaseFunctions(), 'logAdminDepartmentExport');
     await exportFn({ count, reason: 'Department list export' });
   } catch (error) {
     console.error('logDepartmentExport failed:', error);

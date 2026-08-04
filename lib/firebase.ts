@@ -7,6 +7,7 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 import { getStorage, connectStorageEmulator, type FirebaseStorage } from 'firebase/storage';
+import { getFunctions, connectFunctionsEmulator, type Functions } from 'firebase/functions';
 import {
   FirebaseNotConfiguredError,
   getFirebaseSetupMessage,
@@ -44,7 +45,13 @@ let app: FirebaseApp | null = null;
 let authInstance: Auth | null = null;
 let firestoreInstance: Firestore | null = null;
 let storageInstance: FirebaseStorage | null = null;
+let functionsInstance: Functions | null = null;
 let emulatorsConnected = false;
+
+/** Must match the region used in Firebase Functions deployment (default: us-central1). */
+const FIREBASE_FUNCTIONS_REGION = normalizeFirebaseEnvValue(
+  process.env.NEXT_PUBLIC_FIREBASE_FUNCTIONS_REGION,
+) || 'us-central1';
 
 export function isFirebaseEmulatorEnabled(): boolean {
   return process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATOR === 'true';
@@ -86,14 +93,15 @@ function createFirestoreInstance(): Firestore {
 function maybeConnectEmulators() {
   if (emulatorsConnected || typeof window === 'undefined') return;
   if (!isFirebaseEmulatorEnabled()) return;
-  if (!authInstance || !firestoreInstance || !storageInstance) return;
+  if (!authInstance || !firestoreInstance || !storageInstance || !functionsInstance) return;
   try {
     connectAuthEmulator(authInstance, 'http://127.0.0.1:9099', { disableWarnings: true });
     connectFirestoreEmulator(firestoreInstance, '127.0.0.1', 8080);
     connectStorageEmulator(storageInstance, '127.0.0.1', 9199);
+    connectFunctionsEmulator(functionsInstance, '127.0.0.1', 5001);
     emulatorsConnected = true;
     if (process.env.NODE_ENV === 'development') {
-      console.info('[Firebase] Using local emulators (auth:9099, firestore:8080, storage:9199)');
+      console.info('[Firebase] Using local emulators (auth:9099, firestore:8080, storage:9199, functions:5001)');
     }
   } catch {
     // Already connected
@@ -140,6 +148,14 @@ export function getFirebaseStorage(): FirebaseStorage {
   return storageInstance;
 }
 
+export function getFirebaseFunctions(): Functions {
+  if (!functionsInstance) {
+    functionsInstance = getFunctions(getFirebaseApp(), FIREBASE_FUNCTIONS_REGION);
+    maybeConnectEmulators();
+  }
+  return functionsInstance;
+}
+
 export type UserRole =
   | 'super_admin'
   | 'admin'
@@ -150,7 +166,6 @@ export type UserRole =
   | 'warehouse'
   | 'regulatory'
   | 'hr'
-  | 'training_coordinator'
   | 'document_controller'
   | 'department_head'
   | 'employee'

@@ -35,6 +35,8 @@ export function EsignSettingForm({
       settingCode: '',
       moduleName: 'PQR',
       actionType: 'Approved By',
+      moduleAliases: '',
+      actionAliases: '',
       signatureMeaning: 'I approve this record',
       requirePasswordReAuthentication: true,
       requireCommentReason: true,
@@ -48,7 +50,10 @@ export function EsignSettingForm({
       requireFinalApprovalSignature: false,
       showSignatureStatement: true,
       signatureStatementText: '',
+      allowedRoles: '',
+      allowedDepartments: '',
       remarks: '',
+      changeReason: '',
       ...initial,
     },
   });
@@ -72,7 +77,7 @@ export function EsignSettingForm({
             </div>
             <div className="space-y-2">
               <Label>Module Name *</Label>
-              <Select value={watchAll.moduleName} onValueChange={(v) => form.setValue('moduleName', v as EsignSettingFormData['moduleName'])} disabled={readOnly}>
+              <Select value={watchAll.moduleName} onValueChange={(v) => form.setValue('moduleName', v)} disabled={readOnly}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {ESIGN_SETTING_MODULES.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
@@ -81,7 +86,7 @@ export function EsignSettingForm({
             </div>
             <div className="space-y-2">
               <Label>Action Type *</Label>
-              <Select value={watchAll.actionType} onValueChange={(v) => form.setValue('actionType', v as EsignSettingFormData['actionType'])} disabled={readOnly}>
+              <Select value={watchAll.actionType} onValueChange={(v) => form.setValue('actionType', v)} disabled={readOnly}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {ESIGN_ACTION_TYPES.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
@@ -90,12 +95,29 @@ export function EsignSettingForm({
             </div>
             <div className="space-y-2">
               <Label>Signature Meaning *</Label>
-              <Select value={watchAll.signatureMeaning} onValueChange={(v) => form.setValue('signatureMeaning', v as EsignSettingFormData['signatureMeaning'])} disabled={readOnly}>
+              <Select value={watchAll.signatureMeaning} onValueChange={(v) => form.setValue('signatureMeaning', v)} disabled={readOnly}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {ESIGN_SIGNATURE_MEANINGS.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Module Aliases (comma-separated)</Label>
+              <Input {...form.register('moduleAliases')} disabled={readOnly} placeholder="CAPA Approval Workflow, CAPA Closure" />
+              <p className="text-xs text-muted-foreground">Matches consumer moduleName strings used by QMS modules.</p>
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Action Aliases (comma-separated)</Label>
+              <Input {...form.register('actionAliases')} disabled={readOnly} placeholder="Approve, Approval, CAPA Closure Authorization" />
+            </div>
+            <div className="space-y-2">
+              <Label>Allowed Roles (optional)</Label>
+              <Input {...form.register('allowedRoles')} disabled={readOnly} placeholder="admin, head_qa" />
+            </div>
+            <div className="space-y-2">
+              <Label>Allowed Departments (optional)</Label>
+              <Input {...form.register('allowedDepartments')} disabled={readOnly} placeholder="QA, QC" />
             </div>
           </CardContent>
         </Card>
@@ -158,6 +180,15 @@ export function EsignSettingForm({
             <Label>Remarks</Label>
             <Textarea {...form.register('remarks')} rows={2} disabled={readOnly} />
           </div>
+          {!readOnly && (
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Change Reason *</Label>
+              <Textarea {...form.register('changeReason')} rows={2} placeholder="Reason for creating or updating this policy (min 5 characters)" />
+              {form.formState.errors.changeReason && (
+                <p className="text-xs text-red-500">{form.formState.errors.changeReason.message}</p>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 

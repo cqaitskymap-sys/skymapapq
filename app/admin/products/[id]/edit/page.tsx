@@ -8,10 +8,6 @@ import { ProductForm } from '@/components/admin/products/product-form';
 import { PageHeader } from '@/components/admin/dashboard/page-header';
 import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 import { ErrorCard } from '@/components/admin/dashboard/error-card';
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { useAuth } from '@/contexts/auth-context';
 import { useAdminPermissions } from '@/hooks/use-admin-permissions';
 import { canEditProducts } from '@/lib/permissions';
@@ -28,10 +24,14 @@ function EditProductContent({ id }: { id: string }) {
   const [existing, setExisting] = useState<Awaited<ReturnType<typeof fetchProductById>>>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [pending, setPending] = useState<ProductFormData | null>(null);
+
+  const auditMeta = {
+    userId: user?.uid || 'system',
+    userName: profile?.full_name || profile?.email || 'Admin',
+  };
 
   useEffect(() => {
-    fetchProductById(id).then(async (p) => {
+    fetchProductById(id, true).then(async (p) => {
       if (!p) {
         setLoading(false);
         return;
@@ -46,28 +46,47 @@ function EditProductContent({ id }: { id: string }) {
         productName: p.productName,
         genericName: p.genericName || '',
         brandName: p.brandName || '',
+        productFamily: p.productFamily || '',
+        category: (p.category as ProductFormData['category']) || '',
         strength: p.strength || '',
         dosageForm: (p.dosageForm as ProductFormData['dosageForm']) || 'Other',
         routeOfAdministration: p.routeOfAdministration || '',
         packSize: p.packSize || '',
+        packType: (p.packType as ProductFormData['packType']) || '',
+        containerClosure: (p.containerClosure as ProductFormData['containerClosure']) || '',
         market: (p.market as ProductFormData['market']) || 'Domestic',
+        country: p.country || 'India',
+        manufacturingSite: p.manufacturingSite || '',
+        businessUnit: p.businessUnit || '',
+        department: p.department || '',
+        productOwner: p.productOwner || '',
+        lifecycleStatus: (p.lifecycleStatus as ProductFormData['lifecycleStatus']) || 'Commercial',
         therapeuticCategory: p.therapeuticCategory || '',
         shelfLife: p.shelfLife || '',
         storageCondition: p.storageCondition || '',
         standardBatchSize: p.standardBatchSize || p.batchSize || '',
         manufacturingLicenseNumber: p.manufacturingLicenseNumber || p.manufacturingLicenseNo || '',
+        registrationNumber: p.registrationNumber || '',
+        licenseNumber: p.licenseNumber || '',
         mfrNumber: p.mfrNumber || '',
         bmrNumber: p.bmrNumber || '',
         bprNumber: p.bprNumber || '',
         specificationNumber: p.specificationNumber || '',
         stpNumber: p.stpNumber || '',
+        batchPrefix: p.batchPrefix || '',
+        hsnCode: p.hsnCode || '',
+        gtin: p.gtin || '',
+        barcode: p.barcode || '',
+        qrCode: p.qrCode || '',
         productStatus: (p.productStatus as ProductFormData['productStatus']) || 'Active',
+        description: p.description || '',
         remarks: p.remarks || '',
         compositions: comps.length ? comps : [{
           ingredientName: 'API', ingredientType: 'API', grade: '', quantity: 1, unit: 'mg',
           functionPurpose: '', specificationNo: '', stpNo: '',
         }],
         packingDetails: pack,
+        changeReason: '',
       });
       setLoading(false);
     });
@@ -80,18 +99,19 @@ function EditProductContent({ id }: { id: string }) {
   if (loading) return <LoadingSkeleton rows={1} />;
   if (!initial || !existing) return <ErrorCard title="Not Found" message="Product not found" />;
 
-  const confirmSave = async (data: ProductFormData) => {
+  const onSubmit = async (data: ProductFormData) => {
     setSubmitting(true);
-    const result = await updateProduct(id, data, existing, {
-      userId: user?.uid || 'system',
-      userName: profile?.full_name || profile?.email || 'Admin',
-    });
+    const result = await updateProduct(id, data, existing, auditMeta);
     setSubmitting(false);
     if (result.error) {
       toast.error(result.error);
       return;
     }
-    toast.success('Product updated');
+    if (result.cascadeCount && result.cascadeCount > 0) {
+      toast.success(`Product updated — ${result.cascadeCount} linked batch record(s) synchronized`);
+    } else {
+      toast.success('Product updated');
+    }
     router.push(`/admin/products/${id}`);
   };
 
@@ -100,22 +120,10 @@ function EditProductContent({ id }: { id: string }) {
       <PageHeader title="Edit Product" description={existing.productName} basePath="/admin" />
       <ProductForm
         initial={initial}
-        onSubmit={(data) => setPending(data)}
+        onSubmit={onSubmit}
         onCancel={() => router.push(`/admin/products/${id}`)}
         submitting={submitting}
       />
-      <AlertDialog open={!!pending} onOpenChange={() => setPending(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Changes</AlertDialogTitle>
-            <AlertDialogDescription>Save changes to &quot;{pending?.productName}&quot;?</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction className="bg-blue-600" onClick={() => pending && confirmSave(pending)}>Save Changes</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

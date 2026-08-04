@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Plus, Library, ClipboardCheck, GitBranch,
-  CheckCircle, Archive, FileDown, Activity, Send, ListChecks,   CalendarClock, GraduationCap, Scale, ArchiveRestore, Timer, Globe, Printer, Droplets, ScrollText,
+  CheckCircle, Archive, FileDown, Activity, Send, ListChecks,   CalendarClock, Scale, ArchiveRestore, Timer, Globe, Printer, Droplets, ScrollText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { statusLabel } from '@/lib/dms-types';
@@ -22,7 +22,6 @@ const items = [
   { label: 'Approval Workflow', href: '/qms/documents/approval-workflow', icon: CheckCircle },
   { label: 'Effective Date Management', href: '/qms/documents/effective-date-management', icon: CalendarClock },
   { label: 'Periodic Review Management', href: '/qms/documents/periodic-review', icon: ClipboardCheck },
-  { label: 'Document Training Linkage', href: '/qms/documents/training-linkage', icon: GraduationCap },
   { label: 'Change Impact Assessment', href: '/qms/documents/change-impact-assessment', icon: Scale },
   { label: 'Archive Management', href: '/qms/documents/archive', icon: ArchiveRestore },
   { label: 'Retention & Disposal', href: '/qms/documents/retention-disposal', icon: Timer },
@@ -39,7 +38,7 @@ const items = [
   { label: 'Reports', href: '/qms/dms/reports', icon: FileDown },
 ];
 
-const STATIC_SEGMENTS = new Set(['create', 'library', 'review', 'revisions', 'effective', 'obsolete', 'reports', 'master', 'lifecycle', 'sop', 'work-instructions', 'forms-templates', 'distribution', 'acknowledgements', 'version-control', 'review-workflow', 'approval-workflow', 'effective-date-management', 'periodic-review', 'training-linkage', 'change-impact-assessment', 'archive', 'retention-disposal', 'external', 'print-control', 'watermarks', 'audit-trail', 'workflows', 'approvals']);
+const STATIC_SEGMENTS = new Set(['create', 'library', 'review', 'revisions', 'effective', 'obsolete', 'reports', 'master', 'lifecycle', 'sop', 'work-instructions', 'forms-templates', 'distribution', 'acknowledgements', 'version-control', 'review-workflow', 'approval-workflow', 'effective-date-management', 'periodic-review', 'change-impact-assessment', 'archive', 'retention-disposal', 'external', 'print-control', 'watermarks', 'audit-trail', 'workflows', 'approvals']);
 
 export function DmsSubNav() {
   const pathname = usePathname();

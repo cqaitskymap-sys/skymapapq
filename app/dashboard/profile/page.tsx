@@ -4,11 +4,11 @@ import { FormEvent, useEffect, useState } from 'react';
 import {
   EmailAuthProvider, reauthenticateWithCredential, sendEmailVerification, updatePassword,
 } from 'firebase/auth';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { httpsCallable } from 'firebase/functions';
 import { toast } from 'sonner';
 import { KeyRound, MailCheck, Save, UserCircle } from 'lucide-react';
 import { useAuth } from '@/contexts/auth-context';
-import { getFirebaseApp } from '@/lib/firebase';
+import { getFirebaseFunctions } from '@/lib/firebase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 import { ErrorCard } from '@/components/admin/dashboard/error-card';
+import { recordSecurityEvent } from '@/lib/admin/login-activity-service';
 
 export default function ProfilePage() {
   const { user, profile, loading, refreshProfile } = useAuth();
@@ -59,7 +60,7 @@ export default function ProfilePage() {
       const updateProfile = httpsCallable<
         { fullName: string; phone: string },
         { fullName: string; phone: string; updatedAt: string }
-      >(getFunctions(getFirebaseApp()), 'updateOwnUserProfile');
+      >(getFirebaseFunctions(), 'updateOwnUserProfile');
       await updateProfile({ fullName: normalizedName, phone: normalizedPhone });
       await refreshProfile();
       toast.success('Profile updated');
@@ -100,10 +101,14 @@ export default function ProfilePage() {
       await updatePassword(user, newPassword);
       await user.getIdToken(true);
       const recordPasswordChange = httpsCallable<Record<string, never>, { success: boolean }>(
-        getFunctions(getFirebaseApp()),
+        getFirebaseFunctions(),
         'recordOwnPasswordChange',
       );
       await recordPasswordChange({});
+      await recordSecurityEvent('Password Change', {
+        email: user.email || undefined,
+        riskLevel: 'Medium',
+      }).catch(() => undefined);
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
@@ -133,7 +138,7 @@ export default function ProfilePage() {
       await user.reload();
       await user.getIdToken(true);
       const syncVerification = httpsCallable<Record<string, never>, { verified: boolean }>(
-        getFunctions(getFirebaseApp()),
+        getFirebaseFunctions(),
         'syncOwnEmailVerification',
       );
       const result = await syncVerification({});

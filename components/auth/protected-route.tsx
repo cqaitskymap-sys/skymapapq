@@ -47,7 +47,27 @@ export function ProtectedRoute({ children, module, requireEdit = false }: Protec
     );
   }
 
-  if (profile && (!profile.is_active || profile.access_status === 'pending')) {
+  if (!profile) {
+    return (
+      <Card className="mx-auto mt-12 max-w-lg border-amber-200">
+        <CardContent className="space-y-4 p-8 text-center">
+          <ShieldX className="mx-auto h-12 w-12 text-amber-500" />
+          <h2 className="text-xl font-bold">Profile unavailable</h2>
+          <p className="text-sm text-muted-foreground">
+            Your account signed in, but the user profile could not be loaded. Sign out and try again, or contact an administrator.
+          </p>
+          <Button variant="outline" onClick={async () => {
+            await signOut();
+            router.replace('/auth/login');
+          }}>
+            Sign out
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!profile.is_active || profile.access_status === 'pending') {
     return (
       <Card className="mx-auto mt-12 max-w-lg border-amber-200">
         <CardContent className="space-y-4 p-8 text-center">
@@ -68,7 +88,7 @@ export function ProtectedRoute({ children, module, requireEdit = false }: Protec
   }
 
   const resolvedModule = module ?? resolveModuleFromPath(pathname);
-  if (resolvedModule && !canAccessModule(profile?.role, resolvedModule)) {
+  if (resolvedModule && !canAccessModule(profile.role, resolvedModule)) {
     return (
       <Card className="mx-auto mt-12 max-w-lg border-red-200">
         <CardContent className="space-y-4 p-8 text-center">
@@ -85,7 +105,7 @@ export function ProtectedRoute({ children, module, requireEdit = false }: Protec
     );
   }
 
-  if (requireEdit && profile?.role && ['viewer', 'auditor'].includes(profile.role)) {
+  if (requireEdit && ['viewer', 'auditor'].includes(profile.role)) {
     return (
       <Card className="mx-auto mt-12 max-w-lg border-amber-200">
         <CardContent className="space-y-4 p-8 text-center">

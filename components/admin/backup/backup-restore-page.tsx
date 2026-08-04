@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
@@ -14,7 +14,6 @@ import { BackupStatusBadge } from './backup-status-badge';
 import { RestoreWarningModal } from './restore-warning-modal';
 import { ESignatureModal } from '@/components/shared/esignature-modal';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -31,6 +30,7 @@ import { canApproveRestore } from '@/lib/permissions';
 import { RESTORE_TYPES, BACKUP_EXPORT_COLLECTIONS } from '@/lib/admin/constants';
 import {
   restoreRequestFormSchema, type RestoreRequestFormData, type RestoreHistory, type BackupHistory,
+  type EsignRecord,
 } from '@/lib/admin/schemas';
 import {
   fetchBackupHistory, fetchRestoreHistory, requestRestore,
@@ -50,7 +50,9 @@ export function BackupRestorePage() {
   const [error, setError] = useState<string | null>(null);
   const [warningOpen, setWarningOpen] = useState(false);
   const [esignOpen, setEsignOpen] = useState(false);
+  const [esignMode, setEsignMode] = useState<'request' | 'approve'>('request');
   const [pendingForm, setPendingForm] = useState<RestoreRequestFormData | null>(null);
+  const [pendingApprove, setPendingApprove] = useState<RestoreHistory | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const auditMeta = {
@@ -66,6 +68,8 @@ export function BackupRestorePage() {
       selectedCollections: [],
       reasonForRestore: '',
       remarks: '',
+      dryRun: false,
+      esignRecordId: '',
     },
   });
 
@@ -73,7 +77,9 @@ export function BackupRestorePage() {
     setLoading(true);
     try {
       const [b, r] = await Promise.all([fetchBackupHistory(), fetchRestoreHistory()]);
-      setBackups(b.filter((x) => x.backupStatus === 'Completed' || x.backupStatus === 'Verified'));
+      setBackups(b.filter((x) =>
+        x.backupStatus === 'Completed' || x.backupStatus === 'Verified' || x.backupStatus === 'Restored',
+      ));
       setRestores(r);
     } catch (e) {
       setError((e as Error).message);
@@ -96,8 +102,38 @@ export function BackupRestorePage() {
     form.setValue('selectedCollections', next);
   };
 
+  const submitRestoreRequest = async (data: RestoreRequestFormData, esignRecordId: string) => {
+    setSubmitting(true);
+    const result = await requestRestore({ ...data, esignRecordId }, auditMeta);
+    setSubmitting(false);
+    setEsignOpen(false);
+    setPendingForm(null);
+    if (result.restore) {
+      toast.success(
+        result.restore.dryRun
+          ? `Dry run complete — ${result.restore.recordsRestored} records previewed (no writes)`
+          : 'Restore request submitted — awaiting Super Admin approval',
+      );
+      form.reset({
+        backupId: '',
+        restoreType: 'Full Restore',
+        selectedCollections: [],
+        reasonForRestore: '',
+        remarks: '',
+        dryRun: false,
+        esignRecordId: '',
+      });
+      load();
+    } else toast.error(result.error || 'Failed to submit restore request');
+  };
+
   const onFormSubmit = (data: RestoreRequestFormData) => {
     setPendingForm(data);
+    setEsignMode('request');
+    if (data.dryRun || data.restoreType === 'Dry Run Restore') {
+      void submitRestoreRequest(data, '');
+      return;
+    }
     setWarningOpen(true);
   };
 
@@ -106,46 +142,28 @@ export function BackupRestorePage() {
     setEsignOpen(true);
   };
 
-  const submitRestoreRequest = async () => {
-    if (!pendingForm) return;
-    setSubmitting(true);
-    const result = await requestRestore(pendingForm, auditMeta);
-    setSubmitting(false);
-    setEsignOpen(false);
-    setPendingForm(null);
-    if (result.restore) {
-      toast.success('Restore request submitted — awaiting Super Admin approval');
-      form.reset();
-      load();
-    } else toast.error(result.error || 'Failed to submit restore request');
-  };
-
-  const handleApprove = async (restore: RestoreHistory) => {
+  const handleApprove = (restore: RestoreHistory) => {
+    setPendingApprove(restore);
+    setEsignMode('approve');
     setEsignOpen(true);
-    setPendingForm({
-      backupId: restore.backupId,
-      restoreType: restore.restoreType,
-      selectedCollections: restore.collectionsRestored,
-      reasonForRestore: restore.reasonForRestore,
-      remarks: restore.restoreId,
-    });
   };
 
-  const handleEsignSuccess = async () => {
-    if (!pendingForm) return;
-    if (pendingForm.remarks?.startsWith('RST-')) {
-      const restore = restores.find((r) => r.restoreId === pendingForm.remarks);
-      if (restore) {
-        const result = await approveRestore(restore, auditMeta);
-        if (result.success) toast.success('Restore approved and executed');
-        else toast.error(result.error || 'Restore failed');
-        load();
-      }
-    } else {
-      await submitRestoreRequest();
+  const handleEsignSuccess = async (record: EsignRecord) => {
+    const esignId = record.id || '';
+    if (esignMode === 'approve' && pendingApprove) {
+      setSubmitting(true);
+      const result = await approveRestore(pendingApprove, auditMeta, esignId);
+      setSubmitting(false);
+      setPendingApprove(null);
+      setEsignOpen(false);
+      if (result.success) toast.success('Restore approved and executed (pre-restore backup created)');
+      else toast.error(result.error || 'Restore failed');
+      load();
+      return;
     }
-    setEsignOpen(false);
-    setPendingForm(null);
+    if (pendingForm) {
+      await submitRestoreRequest(pendingForm, esignId);
+    }
   };
 
   const pendingRequests = restores.filter((r) => r.restoreStatus === 'Requested');
@@ -165,12 +183,12 @@ export function BackupRestorePage() {
         }
       />
 
-      <Card className="border-amber-200 bg-amber-50/50">
+      <Card className="border-amber-200 bg-amber-50/50 dark:bg-amber-950/20">
         <CardContent className="p-4 text-sm">
-          <p className="font-medium text-amber-800">Safety Notice</p>
-          <p className="text-amber-700 mt-1">
-            Restore requires Super Admin approval, e-signature, and reason. A pre-restore backup is created automatically.
-            Audit trail records are never deleted or overwritten.
+          <p className="font-medium text-amber-800 dark:text-amber-200">Safety Notice</p>
+          <p className="text-amber-700 dark:text-amber-300 mt-1">
+            Production restore requires Super Admin approval and electronic signature. A protected pre-restore backup is created automatically.
+            Audit trail and e-signature collections are never overwritten.
           </p>
         </CardContent>
       </Card>
@@ -199,7 +217,7 @@ export function BackupRestorePage() {
                     <TableCell className="max-w-[180px] truncate">{r.reasonForRestore}</TableCell>
                     <TableCell>{r.restoredBy}</TableCell>
                     <TableCell className="text-right space-x-1">
-                      <Button size="sm" className="bg-green-600" onClick={() => handleApprove(r)}>
+                      <Button size="sm" className="bg-green-600" disabled={submitting} onClick={() => handleApprove(r)}>
                         <CheckCircle className="h-4 w-4" />
                       </Button>
                       <Button size="sm" variant="outline" onClick={async () => {
@@ -229,7 +247,7 @@ export function BackupRestorePage() {
                 <SelectContent>
                   {backups.map((b) => (
                     <SelectItem key={b.backupId} value={b.backupId}>
-                      {b.backupNumber} — {new Date(b.backupDateTime).toLocaleDateString()}
+                      {b.backupNumber} — {b.encryptionStatus || 'Legacy'} — {String(b.backupDateTime).slice(0, 10)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -273,8 +291,16 @@ export function BackupRestorePage() {
               <Textarea {...form.register('remarks')} rows={2} />
             </div>
 
-            <Button type="submit" disabled={submitting} className="bg-red-600">
-              {submitting ? 'Submitting...' : 'Submit Restore Request'}
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={form.watch('dryRun')}
+                onCheckedChange={(v) => form.setValue('dryRun', v === true)}
+              />
+              Dry run only (validate and preview counts — no writes)
+            </label>
+
+            <Button type="submit" disabled={submitting} className="bg-red-600 hover:bg-red-700">
+              {submitting ? 'Submitting...' : form.watch('dryRun') ? 'Run Dry Run' : 'Submit Restore Request'}
             </Button>
           </form>
         </CardContent>
@@ -290,6 +316,7 @@ export function BackupRestorePage() {
                 <TableHead>Status</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Records</TableHead>
+                <TableHead>Dry Run</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -299,6 +326,7 @@ export function BackupRestorePage() {
                   <TableCell><BackupStatusBadge status={r.restoreStatus} /></TableCell>
                   <TableCell>{new Date(r.restoreDateTime).toLocaleString()}</TableCell>
                   <TableCell>{r.recordsRestored}</TableCell>
+                  <TableCell className="text-xs">{r.dryRun ? 'Yes' : 'No'}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -317,12 +345,20 @@ export function BackupRestorePage() {
       <ESignatureModal
         open={esignOpen}
         onOpenChange={setEsignOpen}
-        moduleName="Admin"
-        recordId={pendingForm?.backupId || 'restore'}
+        moduleName="Backup"
+        recordId={
+          esignMode === 'approve'
+            ? (pendingApprove?.restoreId || 'restore')
+            : (pendingForm?.backupId || 'restore')
+        }
         actionType="Restore"
         signatureMeaning="I authorize this restore operation and confirm data integrity review"
         onSuccess={handleEsignSuccess}
-        onCancel={() => { setPendingForm(null); setEsignOpen(false); }}
+        onCancel={() => {
+          setPendingForm(null);
+          setPendingApprove(null);
+          setEsignOpen(false);
+        }}
       />
     </div>
   );

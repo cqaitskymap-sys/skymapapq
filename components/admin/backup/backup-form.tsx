@@ -35,6 +35,8 @@ export function BackupForm({ onSubmit, onCancel, submitting, progress, progressL
       selectedCollections: [],
       backupFrequency: 'Manual Only',
       remarks: '',
+      changeReason: '',
+      isProtected: false,
     },
   });
 
@@ -86,9 +88,23 @@ export function BackupForm({ onSubmit, onCancel, submitting, progress, progressL
             </Select>
           </div>
           <div className="space-y-2 sm:col-span-2">
+            <Label>Change Reason *</Label>
+            <Textarea {...form.register('changeReason')} rows={2} placeholder="GMP justification for creating this backup (min 5 characters)" />
+            {form.formState.errors.changeReason && (
+              <p className="text-xs text-red-500">{form.formState.errors.changeReason.message}</p>
+            )}
+          </div>
+          <div className="space-y-2 sm:col-span-2">
             <Label>Remarks</Label>
             <Textarea {...form.register('remarks')} rows={2} />
           </div>
+          <label className="flex items-center gap-2 text-sm sm:col-span-2">
+            <Checkbox
+              checked={form.watch('isProtected')}
+              onCheckedChange={(v) => form.setValue('isProtected', v === true)}
+            />
+            Protect this backup (prevent soft-delete / retention purge)
+          </label>
         </CardContent>
       </Card>
 

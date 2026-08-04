@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { Plus, Search, Download, Eye, Database, History, RotateCcw } from 'lucide-react';
+import { Plus, Search, Download, Eye, Database, History, RotateCcw, Activity } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/admin/dashboard/page-header';
 import { KpiCard } from '@/components/admin/dashboard/kpi-card';
@@ -123,6 +123,9 @@ export function BackupDashboardPage() {
         actions={
           <div className="flex gap-2 flex-wrap">
             <Button variant="outline" size="sm" asChild>
+              <Link href="/admin/backup/jobs"><Activity className="h-4 w-4 mr-1" />Jobs</Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
               <Link href="/admin/backup/history"><History className="h-4 w-4 mr-1" />History</Link>
             </Button>
             <Button variant="outline" size="sm" asChild>
@@ -137,7 +140,7 @@ export function BackupDashboardPage() {
         }
       />
 
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-9 gap-3">
         <KpiCard label="Total Backups" value={summary.totalBackups} icon={Database} />
         <KpiCard label="Successful" value={summary.successfulBackups} />
         <KpiCard label="Failed" value={summary.failedBackups} />
@@ -146,6 +149,7 @@ export function BackupDashboardPage() {
         <KpiCard label="Restore Requests" value={summary.restoreRequests} />
         <KpiCard label="Completed Restores" value={summary.completedRestores} />
         <KpiCard label="Storage Used" value={summary.storageUsed} />
+        <KpiCard label="Encrypted" value={summary.encryptedBackups} />
       </div>
 
       <BackupCharts

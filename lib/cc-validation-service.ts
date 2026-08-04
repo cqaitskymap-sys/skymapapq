@@ -25,6 +25,7 @@ import {
   type CcValidationDashboardMetrics,
   type ChangeControlRecord,
 } from '@/lib/change-control-types';
+import { polishRecommendationText } from '@/lib/ai/client';
 import {
   getAuditLogsForChange,
   getChangeById,
@@ -92,13 +93,23 @@ function normalizeAssessment(docId: string, data: Record<string, unknown>): CcVa
   };
 }
 
-function buildPayload(
+async function buildPayload(
   change: ChangeControlRecord,
   input: CcValidationFormInput,
   actor: CcValidationActor,
   existing?: CcValidationAssessment | null,
-): Partial<CcValidationAssessment> {
-  const recs = generateValidationRecommendations(input, change);
+): Promise<Partial<CcValidationAssessment>> {
+  const baseRecs = generateValidationRecommendations(input, change);
+  const polishedRecs = await polishRecommendationText(
+    input.recommendations || baseRecs.join('\n'),
+    {
+      module: 'Change Control Validation',
+      changeControlNumber: change.change_control_number,
+      validationImpact: input.validation_impact,
+      csvImpact: input.csv_impact,
+      revalidationRequired: input.revalidation_required,
+    },
+  );
   const deliverables = input.validation_deliverables?.length
     ? input.validation_deliverables
     : generateValidationDeliverables(input);
@@ -145,7 +156,7 @@ function buildPayload(
     annex_11_review_completed: input.annex_11_review_completed,
     csv_assessment_completed: input.csv_assessment_completed,
     qualification_review_completed: input.qualification_review_completed,
-    recommendations: input.recommendations || recs.join('\n'),
+    recommendations: polishedRecs,
     status: existing?.status || 'Draft',
     progress_percent: existing?.progress_percent ?? 15,
     created_at: existing?.created_at || timestamp,
@@ -316,7 +327,7 @@ export async function saveCcValidationDraft(
   if (!change) return { error: 'Change control not found' };
 
   const existing = await getCcValidationAssessment(input.change_id);
-  const payload = buildPayload(change, input, actor, existing);
+  const payload = await buildPayload(change, input, actor, existing);
   let refId = existing?.id;
 
   if (existing) {

@@ -18,6 +18,7 @@ import {
   type OosPhase2,
   type OosTrendRecord,
 } from '@/lib/oos-types';
+import { polishTrendDrafts } from '@/lib/ai/client';
 import { listOosRecords } from '@/lib/oos-service';
 
 export type { OosTrendActor, OosTrendFilterInput, OosTrendSaveForm };
@@ -96,7 +97,24 @@ async function loadTrendContext() {
 
 export async function generateOosTrend(filters: OosTrendFilterInput) {
   const ctx = await loadTrendContext();
-  return computeOosTrendAnalysis(ctx.records, ctx.phase1List, ctx.phase2List, ctx.impactList, filters);
+  const analysis = computeOosTrendAnalysis(ctx.records, ctx.phase1List, ctx.phase2List, ctx.impactList, filters);
+  const polished = await polishTrendDrafts({
+    module: 'OOS',
+    recommendation_draft: analysis.recommendation_draft,
+    conclusion_draft: analysis.conclusion_draft,
+    context: {
+      metrics: analysis.metrics,
+      alerts: analysis.alerts,
+      trend_status: analysis.trend_status,
+      risk_level: analysis.risk_level,
+      filters,
+    },
+  });
+  return {
+    ...analysis,
+    recommendation_draft: polished.recommendation_draft,
+    conclusion_draft: polished.conclusion_draft || analysis.conclusion_draft,
+  };
 }
 
 export async function listSavedOosTrends(max = 100): Promise<OosTrendRecord[]> {

@@ -14,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
   APPROVAL_MATRIX_MODULES, RISK_LEVELS, ADMIN_ROLES, DEPARTMENT_TYPES,
+  APPROVAL_MODES, APPROVAL_MATRIX_PRIORITIES,
 } from '@/lib/admin/constants';
 import { approvalMatrixFormSchema, type ApprovalMatrixFormData } from '@/lib/admin/schemas';
 import { ApprovalFlowPreview } from './approval-flow-preview';
@@ -24,6 +25,7 @@ interface ApprovalMatrixFormProps {
   sites?: string[];
   products?: { code: string; name: string }[];
   readOnly?: boolean;
+  isEdit?: boolean;
   roles?: { id: string; name: string }[];
   onSubmit: (data: ApprovalMatrixFormData) => void;
   onCancel: () => void;
@@ -34,43 +36,75 @@ function rolesToOptions(roles?: { id: string; name: string }[]) {
   return roles || ADMIN_ROLES.map((r) => ({ id: r.id, name: r.name }));
 }
 
+const defaultValues: ApprovalMatrixFormData = {
+  matrixCode: '',
+  matrixName: '',
+  description: '',
+  moduleName: 'PQR',
+  subModule: '',
+  department: 'QA',
+  siteLocation: '',
+  businessUnit: '',
+  workflowCode: '',
+  documentType: '',
+  category: '',
+  priority: 'Medium',
+  productOptional: '',
+  processOptional: '',
+  riskLevel: 'Medium',
+  approvalMode: 'Sequential',
+  matrixVersion: '1.0',
+  effectiveDate: '',
+  reviewDate: '',
+  preparedByRole: 'qa_executive',
+  reviewedByRole: '',
+  verifiedByRole: '',
+  approvedByRole: '',
+  finalApproverRole: 'head_qa',
+  escalationRole: 'head_qa',
+  approvalGroup: '',
+  quorumCount: undefined,
+  minimumApprovalLevel: 1,
+  slaHours: undefined,
+  reminderHours: undefined,
+  autoEscalationEnabled: false,
+  autoEscalationHours: undefined,
+  autoApproveEnabled: false,
+  allowReject: true,
+  allowReturn: true,
+  allowRework: true,
+  allowResubmit: true,
+  allowCancel: false,
+  allowSkip: false,
+  eSignatureRequired: true,
+  digitalSignatureRequired: false,
+  approvalCommentRequired: true,
+  parallelApprovalAllowed: false,
+  sequentialApprovalRequired: true,
+  conditionalApprovalEnabled: false,
+  conditionExpression: '',
+  delegationAllowed: false,
+  remarks: '',
+  changeReason: '',
+};
+
 export function ApprovalMatrixForm({
-  initial, sites, products, readOnly, roles, onSubmit, onCancel, submitting,
+  initial, sites, products, readOnly, isEdit, roles, onSubmit, onCancel, submitting,
 }: ApprovalMatrixFormProps) {
   const form = useForm<ApprovalMatrixFormData>({
     resolver: zodResolver(approvalMatrixFormSchema),
-    defaultValues: {
-      matrixCode: '',
-      matrixName: '',
-      moduleName: 'PQR',
-      department: 'QA',
-      siteLocation: '',
-      productOptional: '',
-      processOptional: '',
-      riskLevel: 'Medium',
-      preparedByRole: 'qa_executive',
-      reviewedByRole: '',
-      verifiedByRole: '',
-      approvedByRole: '',
-      finalApproverRole: 'head_qa',
-      escalationRole: 'head_qa',
-      minimumApprovalLevel: 1,
-      eSignatureRequired: true,
-      approvalCommentRequired: true,
-      parallelApprovalAllowed: false,
-      sequentialApprovalRequired: true,
-      delegationAllowed: false,
-      remarks: '',
-      ...initial,
-    },
+    defaultValues: { ...defaultValues, ...initial },
   });
 
   useEffect(() => {
-    if (initial) form.reset({ ...form.getValues(), ...initial });
+    if (initial) form.reset({ ...defaultValues, ...initial });
   }, [initial, form]);
 
   const roleOptions = rolesToOptions(roles);
   const watchAll = form.watch();
+  const approvalMode = form.watch('approvalMode');
+  const autoEscalationEnabled = form.watch('autoEscalationEnabled');
+  const conditionalApprovalEnabled = form.watch('conditionalApprovalEnabled');
 
   const previewMatrix = {
     ...watchAll,
@@ -84,10 +118,18 @@ export function ApprovalMatrixForm({
     finalApproverRole: watchAll.finalApproverRole,
     eSignatureRequired: watchAll.eSignatureRequired,
     approvalCommentRequired: watchAll.approvalCommentRequired,
-  } as ApprovalMatrix;
+  } as unknown as ApprovalMatrix;
+
+  const handleSubmit = (data: ApprovalMatrixFormData) => {
+    if (isEdit && data.changeReason.trim().length < 5) {
+      form.setError('changeReason', { message: 'Change reason is required (min 5 characters)' });
+      return;
+    }
+    onSubmit(data);
+  };
 
   return (
-    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+    <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
       <Card>
         <CardHeader><CardTitle className="text-base">Matrix Identity</CardTitle></CardHeader>
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -101,6 +143,10 @@ export function ApprovalMatrixForm({
             <Input {...form.register('matrixName')} disabled={readOnly} />
             {form.formState.errors.matrixName && <p className="text-xs text-red-500">{form.formState.errors.matrixName.message}</p>}
           </div>
+          <div className="space-y-2 sm:col-span-2">
+            <Label>Description</Label>
+            <Textarea {...form.register('description')} disabled={readOnly} rows={2} />
+          </div>
           <div className="space-y-2">
             <Label>Module Name *</Label>
             <Select
@@ -113,6 +159,10 @@ export function ApprovalMatrixForm({
                 {APPROVAL_MATRIX_MODULES.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
               </SelectContent>
             </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Sub Module</Label>
+            <Input {...form.register('subModule')} disabled={readOnly} />
           </div>
           <div className="space-y-2">
             <Label>Department *</Label>
@@ -139,6 +189,35 @@ export function ApprovalMatrixForm({
             </Select>
           </div>
           <div className="space-y-2">
+            <Label>Business Unit</Label>
+            <Input {...form.register('businessUnit')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Workflow Code</Label>
+            <Input {...form.register('workflowCode')} disabled={readOnly} placeholder="e.g. PQR-DEFAULT" />
+          </div>
+          <div className="space-y-2">
+            <Label>Document Type</Label>
+            <Input {...form.register('documentType')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Category</Label>
+            <Input {...form.register('category')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Priority</Label>
+            <Select
+              value={form.watch('priority') || 'Medium'}
+              onValueChange={(v) => form.setValue('priority', v)}
+              disabled={readOnly}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {APPROVAL_MATRIX_PRIORITIES.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
             <Label>Risk Level</Label>
             <Select
               value={form.watch('riskLevel')}
@@ -150,6 +229,31 @@ export function ApprovalMatrixForm({
                 {RISK_LEVELS.map((r) => <SelectItem key={r} value={r}>{r}</SelectItem>)}
               </SelectContent>
             </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Approval Mode</Label>
+            <Select
+              value={form.watch('approvalMode')}
+              onValueChange={(v) => form.setValue('approvalMode', v as ApprovalMatrixFormData['approvalMode'])}
+              disabled={readOnly}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {APPROVAL_MODES.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Matrix Version</Label>
+            <Input {...form.register('matrixVersion')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Effective Date</Label>
+            <Input type="date" {...form.register('effectiveDate')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Review Date</Label>
+            <Input type="date" {...form.register('reviewDate')} disabled={readOnly} />
           </div>
           <div className="space-y-2">
             <Label>Product (Optional)</Label>
@@ -217,8 +321,49 @@ export function ApprovalMatrixForm({
               )}
             </div>
           ))}
+          <div className="space-y-2">
+            <Label>Approval Group</Label>
+            <Input {...form.register('approvalGroup')} disabled={readOnly} />
+          </div>
+          {(approvalMode === 'Quorum' || approvalMode === 'Majority') && (
+            <div className="space-y-2">
+              <Label>Quorum Count {approvalMode === 'Quorum' ? '*' : ''}</Label>
+              <Input type="number" min={0} {...form.register('quorumCount', { valueAsNumber: true })} disabled={readOnly} />
+              {form.formState.errors.quorumCount && (
+                <p className="text-xs text-red-500">{form.formState.errors.quorumCount.message}</p>
+              )}
+            </div>
+          )}
           {form.formState.errors.finalApproverRole && (
             <p className="text-xs text-red-500 sm:col-span-2">{form.formState.errors.finalApproverRole.message}</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle className="text-base">SLA & Escalation</CardTitle></CardHeader>
+        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>SLA Hours</Label>
+            <Input type="number" min={0} {...form.register('slaHours', { valueAsNumber: true })} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Reminder Hours</Label>
+            <Input type="number" min={0} {...form.register('reminderHours', { valueAsNumber: true })} disabled={readOnly} />
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              checked={autoEscalationEnabled}
+              onCheckedChange={(v) => form.setValue('autoEscalationEnabled', Boolean(v))}
+              disabled={readOnly}
+            />
+            <Label className="text-sm">Auto Escalation Enabled</Label>
+          </div>
+          {autoEscalationEnabled && (
+            <div className="space-y-2">
+              <Label>Auto Escalation Hours</Label>
+              <Input type="number" min={0} {...form.register('autoEscalationHours', { valueAsNumber: true })} disabled={readOnly} />
+            </div>
           )}
         </CardContent>
       </Card>
@@ -228,10 +373,19 @@ export function ApprovalMatrixForm({
         <CardContent className="grid grid-cols-2 sm:grid-cols-3 gap-4">
           {[
             { key: 'eSignatureRequired', label: 'E-Signature Required' },
+            { key: 'digitalSignatureRequired', label: 'Digital Signature Required' },
             { key: 'approvalCommentRequired', label: 'Approval Comment Required' },
             { key: 'parallelApprovalAllowed', label: 'Parallel Approval' },
             { key: 'sequentialApprovalRequired', label: 'Sequential Approval' },
             { key: 'delegationAllowed', label: 'Delegation Allowed' },
+            { key: 'allowReject', label: 'Allow Reject' },
+            { key: 'allowReturn', label: 'Allow Return' },
+            { key: 'allowRework', label: 'Allow Rework' },
+            { key: 'allowResubmit', label: 'Allow Resubmit' },
+            { key: 'allowCancel', label: 'Allow Cancel' },
+            { key: 'allowSkip', label: 'Allow Skip' },
+            { key: 'autoApproveEnabled', label: 'Auto Approve Enabled' },
+            { key: 'conditionalApprovalEnabled', label: 'Conditional Approval' },
           ].map((item) => (
             <div key={item.key} className="flex items-center gap-2">
               <Checkbox
@@ -242,10 +396,25 @@ export function ApprovalMatrixForm({
               <Label className="text-sm">{item.label}</Label>
             </div>
           ))}
-          <div className="space-y-2 sm:col-span-2">
+          {conditionalApprovalEnabled && (
+            <div className="space-y-2 sm:col-span-3">
+              <Label>Condition Expression</Label>
+              <Textarea {...form.register('conditionExpression')} disabled={readOnly} rows={2} placeholder="e.g. riskLevel == 'Critical'" />
+            </div>
+          )}
+          <div className="space-y-2 sm:col-span-3">
             <Label>Remarks</Label>
             <Textarea {...form.register('remarks')} disabled={readOnly} rows={2} />
           </div>
+          {isEdit && (
+            <div className="space-y-2 sm:col-span-3">
+              <Label>Change Reason *</Label>
+              <Textarea {...form.register('changeReason')} disabled={readOnly} rows={2} placeholder="Describe why this matrix is being updated" />
+              {form.formState.errors.changeReason && (
+                <p className="text-xs text-red-500">{form.formState.errors.changeReason.message}</p>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -1,8 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Download, Eye, FileSpreadsheet, Loader2, Pencil, Plus, RefreshCw, Save, Trash2, Upload,
+  ChevronLeft, ChevronRight, Download, Eye, FileSpreadsheet, Loader2, Pencil, Plus, RefreshCw, Save, Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -11,17 +13,22 @@ import {
 } from 'recharts';
 import { useAuth } from '@/contexts/auth-context';
 import { isFirebaseConfigured } from '@/lib/firebase';
-import type { PqrOption } from '@/lib/pqr-batch-review-records';
+import {
+  PQR_SECTION_FLOW, pqrSectionHref, type PqrOption,
+} from '@/lib/pqr-batch-review-records';
+import { fetchPqrById } from '@/lib/pqr-batch-review-service';
 import {
   STABILITY_PULLING_INTERVALS,
   STABILITY_STORAGE_CONDITIONS,
   STABILITY_STUDY_TYPES,
   PQR_STABILITY_RESULT_STATUSES,
   PQR_RISK_LEVELS,
+  canAddStabilityReview,
   canExportStabilityReview,
   canManageStabilityReview,
   canPullStabilityReview,
   computeStabilityReviewSummary,
+  filterStabilityReviewRecords,
   type PqrStabilityReviewRecord,
   type StabilityReviewFormData,
 } from '@/lib/pqr-stability-review-records';
@@ -29,10 +36,11 @@ import {
   buildStabilityReviewCharts,
   createStabilityReviewRecord,
   deleteStabilityReviewAttachment,
+  exportStabilityReviewCsv,
+  fetchStabilityQualityMetrics,
   fetchStabilityReviewRecords,
   fetchPqrOptions,
   getStabilityReviewNarrative,
-  logStabilityImportPlaceholder,
   logStabilityNarrativeEdit,
   logStabilityReviewExport,
   logStabilityReviewView,
@@ -81,9 +89,12 @@ function SafeChart({ title, empty, children }: { title: string; empty?: boolean;
 type TableRow = PqrStabilityReviewRecord & { srNo: number };
 
 export function StabilityReviewPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, profile } = useAuth();
   const role = profile?.role;
   const canManage = canManageStabilityReview(role);
+  const canAdd = canAddStabilityReview(role);
   const canPull = canPullStabilityReview(role);
   const canExport = canExportStabilityReview(role);
 
@@ -94,6 +105,7 @@ export function StabilityReviewPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [narrative, setNarrative] = useState('');
+  const [narrativeDirty, setNarrativeDirty] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [editRecord, setEditRecord] = useState<PqrStabilityReviewRecord | null>(null);
   const [detailRecord, setDetailRecord] = useState<PqrStabilityReviewRecord | null>(null);
@@ -108,6 +120,12 @@ export function StabilityReviewPage() {
   const [filterRisk, setFilterRisk] = useState('all');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterSearch, setFilterSearch] = useState('');
+  const [qualityMetrics, setQualityMetrics] = useState({
+    stabilityDeviations: 0, stabilityOos: 0, stabilityCapa: 0, stabilityChangeControls: 0,
+  });
+
+  const narrativeAuditTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const actor = useMemo(() => ({
     id: user?.uid || 'system',
@@ -117,6 +135,14 @@ export function StabilityReviewPage() {
 
   const selectedPqr = useMemo(() => pqrs.find((p) => p.id === selectedPqrId) || null, [pqrs, selectedPqrId]);
 
+  const syncPqrIdToUrl = useCallback((pqrId: string) => {
+    if (!pqrId) return;
+    const params = new URLSearchParams(searchParams?.toString() || '');
+    if (params.get('pqrId') === pqrId) return;
+    params.set('pqrId', pqrId);
+    router.replace(`/pqr/stability?${params.toString()}`, { scroll: false });
+  }, [router, searchParams]);
+
   const loadPqrs = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -124,37 +150,77 @@ export function StabilityReviewPage() {
       if (!isFirebaseConfigured()) { setError('Firebase is not configured.'); return; }
       const opts = await fetchPqrOptions();
       setPqrs(opts);
-      if (opts.length && !selectedPqrId) setSelectedPqrId(opts[0].id);
+      const fromUrl = searchParams?.get('pqrId') || '';
+      let nextId = selectedPqrId;
+      if (fromUrl && opts.some((p) => p.id === fromUrl)) {
+        nextId = fromUrl;
+      } else if (fromUrl) {
+        const direct = await fetchPqrById(fromUrl);
+        if (direct) {
+          setPqrs((prev) => (prev.some((p) => p.id === direct.id) ? prev : [direct, ...prev]));
+          nextId = direct.id;
+        } else if (!nextId && opts.length) nextId = opts[0].id;
+      } else if (!nextId && opts.length) {
+        nextId = opts[0].id;
+      }
+      if (nextId) {
+        setSelectedPqrId(nextId);
+        syncPqrIdToUrl(nextId);
+      }
     } catch { setError('Failed to load PQR records.'); }
     finally { setLoading(false); }
-  }, [selectedPqrId]);
+  }, [selectedPqrId, searchParams, syncPqrIdToUrl]);
 
-  const loadRecords = useCallback(async (pqrId: string) => {
+  const loadRecords = useCallback(async (pqrId: string, pqr?: PqrOption | null) => {
     if (!pqrId) return;
     setBusy(true);
     try {
       const rows = await fetchStabilityReviewRecords(pqrId);
       setRecords(rows);
       setNarrative(getStabilityReviewNarrative(rows));
+      setNarrativeDirty(false);
+      if (pqr) {
+        const metrics = await fetchStabilityQualityMetrics(pqr, rows);
+        setQualityMetrics(metrics);
+      }
     } catch { toast.error('Failed to load stability review records'); }
     finally { setBusy(false); }
   }, []);
 
-  useEffect(() => { void loadPqrs(); void logStabilityReviewView(actor); }, [loadPqrs, actor]);
-  useEffect(() => { if (selectedPqrId) void loadRecords(selectedPqrId); }, [selectedPqrId, loadRecords]);
+  useEffect(() => { void loadPqrs(); void logStabilityReviewView(actor); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filtered = useMemo(() => records.filter((r) => {
-    if (filterBatch && !r.batchNumber.toLowerCase().includes(filterBatch.toLowerCase())) return false;
-    if (filterStudyType !== 'all' && r.studyType !== filterStudyType) return false;
-    if (filterStorage !== 'all' && r.storageCondition !== filterStorage) return false;
-    if (filterInterval !== 'all' && r.pullingInterval !== filterInterval) return false;
-    if (filterParameter && !r.parameterName.toLowerCase().includes(filterParameter.toLowerCase())) return false;
-    if (filterStatus !== 'all' && r.resultStatus !== filterStatus) return false;
-    if (filterRisk !== 'all' && r.riskLevel !== filterRisk) return false;
-    if (filterDateFrom && r.testDate < filterDateFrom) return false;
-    if (filterDateTo && r.testDate > filterDateTo) return false;
-    return true;
-  }), [records, filterBatch, filterStudyType, filterStorage, filterInterval, filterParameter, filterStatus, filterRisk, filterDateFrom, filterDateTo]);
+  useEffect(() => {
+    if (selectedPqrId) {
+      void loadRecords(selectedPqrId, selectedPqr);
+      syncPqrIdToUrl(selectedPqrId);
+    }
+  }, [selectedPqrId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => () => {
+    if (narrativeAuditTimer.current) clearTimeout(narrativeAuditTimer.current);
+  }, []);
+
+  const filtered = useMemo(() => {
+    const base = filterStabilityReviewRecords(records, {
+      batch: filterBatch,
+      studyType: filterStudyType,
+      storageCondition: filterStorage,
+      pullingInterval: filterInterval,
+      parameter: filterParameter,
+      resultStatus: filterStatus,
+      riskLevel: filterRisk,
+      search: filterSearch,
+    });
+    if (!filterDateFrom && !filterDateTo) return base;
+    return base.filter((r) => {
+      if (filterDateFrom && r.testDate < filterDateFrom) return false;
+      if (filterDateTo && r.testDate > filterDateTo) return false;
+      return true;
+    });
+  }, [
+    records, filterBatch, filterStudyType, filterStorage, filterInterval,
+    filterParameter, filterStatus, filterRisk, filterSearch, filterDateFrom, filterDateTo,
+  ]);
 
   const longTermRecords = useMemo(() => filtered.filter((r) => r.studyType === 'Long Term'), [filtered]);
   const acceleratedRecords = useMemo(() => filtered.filter((r) => r.studyType === 'Accelerated'), [filtered]);
@@ -167,6 +233,29 @@ export function StabilityReviewPage() {
   ), [filtered]);
   const summary = useMemo(() => computeStabilityReviewSummary(filtered), [filtered]);
   const charts = useMemo(() => buildStabilityReviewCharts(filtered), [filtered]);
+
+  const sectionNav = useMemo(() => {
+    const idx = PQR_SECTION_FLOW.findIndex((s) => s.key === 'stability');
+    const prev = PQR_SECTION_FLOW[idx - 1];
+    const next = PQR_SECTION_FLOW[idx + 1];
+    return {
+      prev: prev ? { ...prev, href: pqrSectionHref(prev.href, selectedPqrId) } : null,
+      next: next ? { ...next, href: pqrSectionHref(next.href, selectedPqrId) } : null,
+    };
+  }, [selectedPqrId]);
+
+  const resetFilters = () => {
+    setFilterBatch('');
+    setFilterStudyType('all');
+    setFilterStorage('all');
+    setFilterInterval('all');
+    setFilterParameter('');
+    setFilterStatus('all');
+    setFilterRisk('all');
+    setFilterDateFrom('');
+    setFilterDateTo('');
+    setFilterSearch('');
+  };
 
   const tableColumns: ColumnDef<TableRow>[] = [
     { key: 'srNo', header: 'Sr. No.' },
@@ -184,11 +273,11 @@ export function StabilityReviewPage() {
       key: 'actions', header: 'Action',
       render: (r) => (
         <div className="flex gap-1">
-          <Button variant="ghost" size="icon" onClick={() => setDetailRecord(r)}><Eye className="h-4 w-4" /></Button>
+          <Button variant="ghost" size="icon" aria-label={`View ${r.batchNumber} ${r.parameterName}`} onClick={() => setDetailRecord(r)}><Eye className="h-4 w-4" /></Button>
           {canManage && (
             <>
-              <Button variant="ghost" size="icon" onClick={() => { setEditRecord(r); setFormOpen(true); }}><Pencil className="h-4 w-4" /></Button>
-              <Button variant="ghost" size="icon" onClick={() => setDeleteId(r.id || null)}><Trash2 className="h-4 w-4 text-red-500" /></Button>
+              <Button variant="ghost" size="icon" aria-label={`Edit ${r.batchNumber} ${r.parameterName}`} onClick={() => { setEditRecord(r); setFormOpen(true); }}><Pencil className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="icon" aria-label={`Remove ${r.batchNumber} ${r.parameterName}`} onClick={() => setDeleteId(r.id || null)}><Trash2 className="h-4 w-4 text-red-500" /></Button>
             </>
           )}
         </div>
@@ -217,7 +306,7 @@ export function StabilityReviewPage() {
     setBusy(false);
     if (err) return toast.error(err);
     toast.success(`${created} stability record(s) pulled (${skipped} skipped)`);
-    await loadRecords(selectedPqr.id);
+    await loadRecords(selectedPqr.id, selectedPqr);
   };
 
   const handleSaveForm = async (data: StabilityReviewFormData): Promise<void> => {
@@ -231,7 +320,7 @@ export function StabilityReviewPage() {
     toast.success(editRecord ? 'Record updated' : 'Record added');
     setFormOpen(false);
     setEditRecord(null);
-    await loadRecords(selectedPqr.id);
+    await loadRecords(selectedPqr.id, selectedPqr);
   };
 
   const handleSaveSection = async () => {
@@ -240,16 +329,20 @@ export function StabilityReviewPage() {
     const { error: err } = await saveStabilitySectionToPqr(selectedPqr.id, narrative, records, actor);
     setBusy(false);
     if (err) toast.error(err);
-    else toast.success('Section saved to PQR');
+    else {
+      setNarrativeDirty(false);
+      toast.success('Section saved to PQR');
+    }
   };
 
   const handleRecalc = async () => {
     if (!selectedPqr) return;
     setBusy(true);
-    await recalculateAllStabilityCompliance(selectedPqr.id, actor);
+    const { updated, error: err } = await recalculateAllStabilityCompliance(selectedPqr.id, actor);
     setBusy(false);
-    toast.success('Compliance and risk recalculated');
-    await loadRecords(selectedPqr.id);
+    if (err) return toast.error(err);
+    toast.success(`Compliance and risk recalculated for ${updated} record(s)`);
+    await loadRecords(selectedPqr.id, selectedPqr);
   };
 
   const handleDelete = async (): Promise<void> => {
@@ -260,7 +353,24 @@ export function StabilityReviewPage() {
     setDeleteId(null);
     if (err) { toast.error(err); return; }
     toast.success('Record removed');
-    await loadRecords(selectedPqr.id);
+    await loadRecords(selectedPqr.id, selectedPqr);
+  };
+
+  const exportCsv = () => {
+    if (!filtered.length) return toast.info('No records to export');
+    exportStabilityReviewCsv(filtered, selectedPqr?.pqrNumber);
+    void logStabilityReviewExport(actor, 'csv');
+    toast.success('Stability review exported as CSV');
+  };
+
+  const onNarrativeChange = (value: string) => {
+    setNarrative(value);
+    setNarrativeDirty(true);
+    if (!selectedPqr) return;
+    if (narrativeAuditTimer.current) clearTimeout(narrativeAuditTimer.current);
+    narrativeAuditTimer.current = setTimeout(() => {
+      void logStabilityNarrativeEdit(actor, selectedPqr.id);
+    }, 1500);
   };
 
   const trendToParamChart = (points: Array<{ label: string; observed: number }>) =>
@@ -283,14 +393,9 @@ export function StabilityReviewPage() {
           actions={(
             <>
               {canExport && (
-                <>
-                  <Button variant="outline" size="sm" onClick={() => { void logStabilityImportPlaceholder(actor); toast.info('Import placeholder'); }}>
-                    <Upload className="h-4 w-4 mr-1" />Import
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => { void logStabilityReviewExport(actor); toast.info('Export placeholder'); }}>
-                    <FileSpreadsheet className="h-4 w-4 mr-1" />Export
-                  </Button>
-                </>
+                <Button variant="outline" size="sm" onClick={exportCsv} disabled={!filtered.length}>
+                  <FileSpreadsheet className="h-4 w-4 mr-1" />Export CSV
+                </Button>
               )}
               {canPull && selectedPqr && (
                 <Button variant="outline" size="sm" onClick={() => void handlePull()} disabled={busy}>
@@ -299,28 +404,71 @@ export function StabilityReviewPage() {
                 </Button>
               )}
               {canManage && selectedPqr && (
-                <>
-                  <Button variant="outline" size="sm" onClick={() => void handleRecalc()} disabled={busy}>Recalc</Button>
-                  <Button size="sm" onClick={() => { setEditRecord(null); setFormOpen(true); }}><Plus className="h-4 w-4 mr-1" />Add</Button>
-                </>
+                <Button variant="outline" size="sm" onClick={() => void handleRecalc()} disabled={busy}>Recalc</Button>
+              )}
+              {canAdd && selectedPqr && (
+                <Button size="sm" onClick={() => { setEditRecord(null); setFormOpen(true); }}><Plus className="h-4 w-4 mr-1" />Add</Button>
               )}
             </>
           )}
         />
 
+        <div className="flex flex-wrap gap-2 text-sm">
+          {PQR_SECTION_FLOW.filter((s) => !['dashboard', 'create'].includes(s.key)).map((s) => (
+            <Link
+              key={s.key}
+              href={pqrSectionHref(s.href, selectedPqrId)}
+              className={`rounded-md border px-2.5 py-1 ${s.key === 'stability' ? 'bg-blue-600 text-white border-blue-600' : 'hover:bg-slate-50'}`}
+            >
+              {s.label}
+            </Link>
+          ))}
+        </div>
+
         <Card><CardContent className="pt-6">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="space-y-2 sm:col-span-2">
-              <Label>PQR Number *</Label>
-              <Select value={selectedPqrId} onValueChange={setSelectedPqrId}>
-                <SelectTrigger><SelectValue placeholder="Select PQR..." /></SelectTrigger>
+              <Label htmlFor="pqr-select-stability">PQR Number *</Label>
+              <Select
+                value={selectedPqrId}
+                onValueChange={(id) => {
+                  setSelectedPqrId(id);
+                  syncPqrIdToUrl(id);
+                }}
+              >
+                <SelectTrigger id="pqr-select-stability"><SelectValue placeholder="Select PQR..." /></SelectTrigger>
                 <SelectContent>{pqrs.map((p) => <SelectItem key={p.id} value={p.id}>{p.pqrNumber} — {p.productName}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             {selectedPqr && (
               <>
-                <div><Label className="text-muted-foreground">Product</Label><p className="text-sm font-medium">{selectedPqr.productName}</p></div>
-                <div><Label className="text-muted-foreground">Review Period</Label><p className="text-sm font-medium">{selectedPqr.reviewPeriodFrom} — {selectedPqr.reviewPeriodTo}</p></div>
+                <div>
+                  <Label className="text-muted-foreground">Product / Code</Label>
+                  <p className="text-sm font-medium">{selectedPqr.productName}</p>
+                  <p className="text-xs text-muted-foreground">{selectedPqr.productCode}</p>
+                </div>
+                <div>
+                  <Label className="text-muted-foreground">Review Period</Label>
+                  <p className="text-sm font-medium">{selectedPqr.reviewPeriodFrom || '—'} — {selectedPqr.reviewPeriodTo || '—'}</p>
+                </div>
+                {(selectedPqr.strength || selectedPqr.dosageForm) && (
+                  <div>
+                    <Label className="text-muted-foreground">Strength / Dosage Form</Label>
+                    <p className="text-sm font-medium">{[selectedPqr.strength, selectedPqr.dosageForm].filter(Boolean).join(' / ')}</p>
+                  </div>
+                )}
+                {selectedPqr.site && (
+                  <div>
+                    <Label className="text-muted-foreground">Manufacturing Site</Label>
+                    <p className="text-sm font-medium">{selectedPqr.site}</p>
+                  </div>
+                )}
+                {selectedPqr.status && (
+                  <div>
+                    <Label className="text-muted-foreground">PQR Status</Label>
+                    <p className="text-sm font-medium capitalize">{selectedPqr.status.replace(/_/g, ' ')}</p>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -330,46 +478,56 @@ export function StabilityReviewPage() {
           <EmptyState title="Select a PQR" message="Choose a PQR to review stability study data." />
         ) : (
           <>
-            <div className="grid gap-3 grid-cols-2 md:grid-cols-5 xl:grid-cols-10">
+            <div className="grid gap-3 grid-cols-2 md:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-12">
               <KpiCard label="Total Studies" value={summary.totalStabilityStudies} />
               <KpiCard label="Stability Batches" value={summary.totalStabilityBatches} />
               <KpiCard label="Samples Due" value={summary.samplesDue} tone="amber" />
               <KpiCard label="Samples Missed" value={summary.samplesMissed} tone="red" />
               <KpiCard label="Compliant Results" value={summary.compliantResults} tone="green" />
               <KpiCard label="OOT Results" value={summary.ootResults} tone="amber" />
-              <KpiCard label="OOS Results" value={summary.oosResults} tone="red" />
-              <KpiCard label="CAPA Linked" value={summary.capaLinked} />
+              <KpiCard label="OOS Results" value={Math.max(summary.oosResults, qualityMetrics.stabilityOos)} tone="red" />
+              <KpiCard label="CAPA Linked" value={qualityMetrics.stabilityCapa || summary.capaLinked} />
+              <KpiCard label="Deviations" value={qualityMetrics.stabilityDeviations} />
+              <KpiCard label="Change Controls" value={qualityMetrics.stabilityChangeControls} />
               <KpiCard label="High Risk" value={summary.highRiskStudies} tone="amber" />
               <KpiCard label="Critical Risk" value={summary.criticalRiskStudies} tone="red" />
             </div>
 
             <Card><CardContent className="pt-6">
               <div className="flex flex-wrap gap-2">
-                <Input placeholder="Batch No." className="w-[120px]" value={filterBatch} onChange={(e) => setFilterBatch(e.target.value)} />
+                <Input
+                  placeholder="Search batch / parameter"
+                  className="w-full sm:w-[200px]"
+                  value={filterSearch}
+                  onChange={(e) => setFilterSearch(e.target.value)}
+                  aria-label="Search stability records"
+                />
+                <Input placeholder="Batch No." className="w-[120px]" value={filterBatch} onChange={(e) => setFilterBatch(e.target.value)} aria-label="Filter batch number" />
                 <Select value={filterStudyType} onValueChange={setFilterStudyType}>
-                  <SelectTrigger className="w-[140px]"><SelectValue placeholder="Study Type" /></SelectTrigger>
+                  <SelectTrigger className="w-[140px]" aria-label="Filter study type"><SelectValue placeholder="Study Type" /></SelectTrigger>
                   <SelectContent><SelectItem value="all">All Study Types</SelectItem>{STABILITY_STUDY_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={filterStorage} onValueChange={setFilterStorage}>
-                  <SelectTrigger className="w-[160px]"><SelectValue placeholder="Storage" /></SelectTrigger>
+                  <SelectTrigger className="w-[160px]" aria-label="Filter storage condition"><SelectValue placeholder="Storage" /></SelectTrigger>
                   <SelectContent><SelectItem value="all">All Conditions</SelectItem>{STABILITY_STORAGE_CONDITIONS.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={filterInterval} onValueChange={setFilterInterval}>
-                  <SelectTrigger className="w-[120px]"><SelectValue placeholder="Interval" /></SelectTrigger>
+                  <SelectTrigger className="w-[120px]" aria-label="Filter pulling interval"><SelectValue placeholder="Interval" /></SelectTrigger>
                   <SelectContent><SelectItem value="all">All Intervals</SelectItem>{STABILITY_PULLING_INTERVALS.map((i) => <SelectItem key={i} value={i}>{i}</SelectItem>)}</SelectContent>
                 </Select>
-                <Input placeholder="Parameter" className="w-[120px]" value={filterParameter} onChange={(e) => setFilterParameter(e.target.value)} />
+                <Input placeholder="Parameter" className="w-[120px]" value={filterParameter} onChange={(e) => setFilterParameter(e.target.value)} aria-label="Filter parameter" />
                 <Select value={filterStatus} onValueChange={setFilterStatus}>
-                  <SelectTrigger className="w-[130px]"><SelectValue placeholder="Status" /></SelectTrigger>
+                  <SelectTrigger className="w-[130px]" aria-label="Filter result status"><SelectValue placeholder="Status" /></SelectTrigger>
                   <SelectContent><SelectItem value="all">All Status</SelectItem>{PQR_STABILITY_RESULT_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                 </Select>
                 <Select value={filterRisk} onValueChange={setFilterRisk}>
-                  <SelectTrigger className="w-[110px]"><SelectValue placeholder="Risk" /></SelectTrigger>
+                  <SelectTrigger className="w-[110px]" aria-label="Filter risk level"><SelectValue placeholder="Risk" /></SelectTrigger>
                   <SelectContent><SelectItem value="all">All Risk</SelectItem>{PQR_RISK_LEVELS.map((l) => <SelectItem key={l} value={l}>{l}</SelectItem>)}</SelectContent>
                 </Select>
-                <Input type="date" className="w-[140px]" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)} />
-                <Input type="date" className="w-[140px]" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)} />
-                <Button variant="outline" size="icon" onClick={() => void loadRecords(selectedPqrId)} disabled={busy}>
+                <Input type="date" className="w-[140px]" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)} aria-label="Filter test date from" />
+                <Input type="date" className="w-[140px]" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)} aria-label="Filter test date to" />
+                <Button variant="outline" size="sm" onClick={resetFilters}>Reset</Button>
+                <Button variant="outline" size="icon" aria-label="Refresh" onClick={() => void loadRecords(selectedPqrId, selectedPqr)} disabled={busy}>
                   <RefreshCw className={`h-4 w-4 ${busy ? 'animate-spin' : ''}`} />
                 </Button>
               </div>
@@ -463,9 +621,9 @@ export function StabilityReviewPage() {
               <TabsContent value="narrative" className="mt-4">
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between">
-                    <CardTitle className="text-base">PQR Section Narrative</CardTitle>
+                    <CardTitle className="text-base">PQR Section Narrative — Stability Review</CardTitle>
                     {(canManage || canPull) && (
-                      <Button size="sm" onClick={() => void handleSaveSection()} disabled={busy}>
+                      <Button size="sm" onClick={() => void handleSaveSection()} disabled={busy || !narrativeDirty}>
                         <Save className="h-4 w-4 mr-1" />Save to PQR
                       </Button>
                     )}
@@ -475,15 +633,35 @@ export function StabilityReviewPage() {
                       className="min-h-[140px]"
                       value={narrative}
                       readOnly={!canManage && !canPull}
-                      onChange={(e) => {
-                        setNarrative(e.target.value);
-                        if (selectedPqr) void logStabilityNarrativeEdit(actor, selectedPqr.id);
-                      }}
+                      aria-label="Stability review narrative"
+                      onChange={(e) => onNarrativeChange(e.target.value)}
                     />
+                    {narrativeDirty && <p className="mt-2 text-xs text-amber-700">Unsaved narrative changes</p>}
                   </CardContent>
                 </Card>
               </TabsContent>
             </Tabs>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+              {sectionNav.prev ? (
+                <Button variant="outline" asChild>
+                  <Link href={sectionNav.prev.href}><ChevronLeft className="h-4 w-4 mr-1" />{sectionNav.prev.label}</Link>
+                </Button>
+              ) : <span />}
+              <div className="flex flex-wrap gap-2 text-xs">
+                <Link className="text-blue-600 hover:underline" href="/cpv/stability-monitoring">Stability Monitoring</Link>
+                <Link className="text-blue-600 hover:underline" href={pqrSectionHref('/pqr/dashboard', selectedPqrId)}>PQR Dashboard</Link>
+                <Link className="text-blue-600 hover:underline" href="/qms/oos">OOS</Link>
+                <Link className="text-blue-600 hover:underline" href="/qms/deviation">Deviations</Link>
+                <Link className="text-blue-600 hover:underline" href="/qms/capa">CAPA</Link>
+                <Link className="text-blue-600 hover:underline" href="/qms/change-control">Change Control</Link>
+              </div>
+              {sectionNav.next ? (
+                <Button variant="outline" asChild>
+                  <Link href={sectionNav.next.href}>{sectionNav.next.label}<ChevronRight className="h-4 w-4 ml-1" /></Link>
+                </Button>
+              ) : <span />}
+            </div>
           </>
         )}
 
@@ -499,17 +677,21 @@ export function StabilityReviewPage() {
                 <dl className="grid grid-cols-2 gap-2 text-sm">
                   {[
                     ['Study', `${detailRecord.studyNumber || '—'} (${detailRecord.studyType})`],
+                    ['Protocol Number', detailRecord.protocolNumber || '—'],
+                    ['Specification Version', detailRecord.specificationVersion || '—'],
+                    ['Chamber ID', detailRecord.chamberId || '—'],
                     ['Storage / Interval', `${detailRecord.storageCondition} / ${detailRecord.pullingInterval}`],
                     ['Observed Result', `${detailRecord.observedResult} ${detailRecord.unit}`],
                     ['Specification', `${detailRecord.lowerLimit} – ${detailRecord.upperLimit}`],
                     ['Test Date', detailRecord.testDate],
                     ['Sample Pull', `${detailRecord.samplePullingDueDate || '—'} → ${detailRecord.actualPullingDate || '—'} (${detailRecord.samplePullStatus})`],
                     ['OOT / OOS / CAPA', `${detailRecord.ootCount} / ${detailRecord.oosCount} / ${detailRecord.capaCount}`],
+                    ['Deviations / Change Controls', `${detailRecord.deviationCount ?? 0} / ${detailRecord.changeControlCount ?? 0}`],
                     ['Shelf Life Impact', detailRecord.impactOnShelfLife],
                     ['Quality Impact', detailRecord.impactOnProductQuality],
                     ['Conclusion', detailRecord.conclusion],
                   ].map(([k, v]) => (
-                    <div key={k}><dt className="text-muted-foreground">{k}</dt><dd className="font-medium">{String(v)}</dd></div>
+                    <div key={String(k)}><dt className="text-muted-foreground">{k}</dt><dd className="font-medium">{String(v)}</dd></div>
                   ))}
                 </dl>
                 <div className="flex flex-wrap gap-2">
@@ -517,6 +699,11 @@ export function StabilityReviewPage() {
                   <ComplianceBadge status={detailRecord.complianceStatus} />
                   <RiskBadge level={detailRecord.riskLevel} />
                 </div>
+                {(detailRecord.complianceReasons || []).length > 0 && (
+                  <ul className="list-disc pl-5 text-sm text-muted-foreground">
+                    {detailRecord.complianceReasons.map((reason) => <li key={reason}>{reason}</li>)}
+                  </ul>
+                )}
                 {(detailRecord.attachmentUrls || []).length > 0 && (
                   <ul className="space-y-1 text-sm">
                     {(detailRecord.attachmentUrls || []).map((url) => (
@@ -529,13 +716,14 @@ export function StabilityReviewPage() {
                             type="button"
                             variant="ghost"
                             size="sm"
+                            aria-label="Remove attachment"
                             onClick={() => {
                               if (!detailRecord.id || !selectedPqr) return;
                               void deleteStabilityReviewAttachment(selectedPqr.id, detailRecord.id, url, actor).then(({ error: err }) => {
                                 if (err) toast.error(err);
                                 else {
                                   toast.success('Attachment removed');
-                                  void loadRecords(selectedPqr.id);
+                                  void loadRecords(selectedPqr.id, selectedPqr);
                                   setDetailRecord({
                                     ...detailRecord,
                                     attachmentUrls: (detailRecord.attachmentUrls || []).filter((u) => u !== url),
@@ -556,7 +744,7 @@ export function StabilityReviewPage() {
                     onUpload={async (file) => {
                       const { url, error: err } = await uploadStabilityReviewAttachment(selectedPqr.id, detailRecord.id!, file, actor);
                       if (err) return { error: err };
-                      await loadRecords(selectedPqr.id);
+                      await loadRecords(selectedPqr.id, selectedPqr);
                       if (url) {
                         setDetailRecord({
                           ...detailRecord,

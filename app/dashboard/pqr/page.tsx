@@ -38,7 +38,7 @@ export default function PqrDashboardPage() {
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">PQR Dashboard</h1>
             <p className="text-muted-foreground text-sm">Product Quality Review — Annual compliance documentation</p>
           </div>
-          <Link href="/dashboard/pqr/create">
+          <Link href="/pqr/create">
             <Button className="bg-blue-600 hover:bg-blue-700 gap-2"><Plus className="h-4 w-4" />Create PQR</Button>
           </Link>
         </div>

@@ -18,6 +18,7 @@ import {
   type CcEffectivenessFormInput,
   type CcEffectivenessQaReviewInput,
 } from '@/lib/cc-effectiveness-records';
+import { polishRecommendationText } from '@/lib/ai/client';
 import {
   CC_COLLECTIONS,
   requiresHeadQaApproval,
@@ -98,17 +99,24 @@ function normalizeReview(docId: string, data: Record<string, unknown>): ChangeEf
   };
 }
 
-function buildPayload(
+async function buildPayload(
   change: ChangeControlRecord,
   input: CcEffectivenessFormInput,
   actor: CcEffectivenessActor,
   existing?: ChangeEffectivenessReview | null,
-): Partial<ChangeEffectivenessReview> {
+): Promise<Partial<ChangeEffectivenessReview>> {
   const score = computeCcEffectivenessScore(input);
   const autoResult = computeAutoCcEffectivenessResult(score);
   const result = input.effectiveness_result || autoResult;
   const capaRecommended = isCapaRecommendationRequired(result) || input.additional_actions_required;
-  const capaNotes = generateCapaRecommendation(input, score, result);
+  const baseCapaNotes = generateCapaRecommendation(input, score, result);
+  const capaNotes = await polishRecommendationText(baseCapaNotes, {
+    module: 'Change Control Effectiveness',
+    changeControlNumber: change.change_control_number,
+    score,
+    result,
+    capaRecommended,
+  });
   const timestamp = nowIso();
   return {
     change_id: change.id,
@@ -304,7 +312,7 @@ export async function saveCcEffectivenessDraft(
   const change = await getChangeById(input.change_id);
   if (!change) return { error: 'Change control not found' };
   const existing = await getCcEffectivenessReview(input.change_id);
-  const payload = buildPayload(change, input, actor, existing);
+  const payload = await buildPayload(change, input, actor, existing);
   let refId = existing?.id;
   if (existing) {
     await updateDoc(doc(getFirebaseFirestore(), CC_COLLECTIONS.effectiveness, existing.id), payload);

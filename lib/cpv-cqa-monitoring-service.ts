@@ -1,22 +1,20 @@
 import {
   collection, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchParameters, normalizeParameter } from '@/lib/admin/parameter-service';
 import type { Parameter } from '@/lib/admin/schemas';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
+import { isCpvProductOperational } from '@/lib/cpv-product-master';
 import { fetchCpvBatchById, fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS, type CqaRecord } from '@/lib/cpv';
-import { createAlert } from '@/lib/cpv-module-service';
 import {
   CQA_RESULTS_COLLECTION,
   CQA_MODULE_NAME,
   buildCqaResultId,
-  evaluateCqaStatus,
-  evaluateCqaRiskLevel,
   parameterMatchesCqaTestStage,
   type CqaResultFormData,
   type CqaResultRecord,
@@ -28,34 +26,6 @@ export interface CqaActor {
   role?: string;
 }
 
-function actorCtx(actor: CqaActor) {
-  return { moduleName: CQA_MODULE_NAME, actor: { id: actor.id, name: actor.name } as DocumentActor };
-}
-
-async function logCqaAudit(actionType: string, recordId: string, actor: CqaActor, oldVal?: unknown, newVal?: unknown, docNo?: string) {
-  await createAuditLog({
-    moduleName: CQA_MODULE_NAME,
-    collectionName: CQA_RESULTS_COLLECTION,
-    recordId,
-    documentNumber: docNo,
-    actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-  await writeAuditTrail({
-    collectionName: CQA_RESULTS_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: CQA_MODULE_NAME,
-  });
-}
-
 function str(v: unknown, fb = ''): string {
   if (v === null || v === undefined) return fb;
   return String(v);
@@ -64,6 +34,12 @@ function str(v: unknown, fb = ''): string {
 function num(v: unknown, fb = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fb;
+}
+
+function optionalNum(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 function observedVal(v: unknown): string | number {
@@ -78,13 +54,15 @@ function observedVal(v: unknown): string | number {
   return String(v);
 }
 
-function removeUndefined<T extends Record<string, unknown>>(obj: T): T {
-  return Object.fromEntries(
-    Object.entries(obj).filter(([, value]) => value !== undefined),
-  ) as T;
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const msg = String((e as { message?: string }).message || '');
+    if (msg) return msg.replace(/^Firebase:\s*/i, '').replace(/\s*\(.*\)$/, '').trim() || fallback;
+  }
+  return fallback;
 }
 
-function normalizeCqaResult(raw: Record<string, unknown>): CqaResultRecord {
+export function normalizeCqaResult(raw: Record<string, unknown>): CqaResultRecord {
   const batchNumber = str(raw.batchNumber || raw.batchNo || raw.batch_number);
   const parameterCode = str(raw.parameterCode || raw.parameter_code, 'PARAM');
   return {
@@ -93,6 +71,7 @@ function normalizeCqaResult(raw: Record<string, unknown>): CqaResultRecord {
     cpvProductId: str(raw.cpvProductId || raw.cpv_product_id),
     productName: str(raw.productName || raw.product_name),
     productCode: str(raw.productCode || raw.product_code),
+    productVersion: str(raw.productVersion),
     batchNumber,
     manufacturingDate: str(raw.manufacturingDate || raw.manufacturing_date),
     expiryDate: str(raw.expiryDate || raw.expiry_date),
@@ -105,15 +84,19 @@ function normalizeCqaResult(raw: Record<string, unknown>): CqaResultRecord {
     responsibility: str(raw.responsibility),
     specificationText: str(raw.specificationText || raw.specification_text),
     specificationNumber: str(raw.specificationNumber || raw.specification_number),
+    specificationVersion: str(raw.specificationVersion),
     stpNumber: str(raw.stpNumber || raw.stp_number),
+    testMethod: str(raw.testMethod),
     observedResult: observedVal(raw.observedResult ?? raw.observed_result ?? raw.observedValue ?? raw.observed_value),
     targetValue: num(raw.targetValue ?? raw.target_value ?? raw.target),
     lowerLimit: num(raw.lowerLimit ?? raw.lower_limit ?? raw.lsl),
     upperLimit: num(raw.upperLimit ?? raw.upper_limit ?? raw.usl),
-    alertLimitLow: num(raw.alertLimitLow ?? raw.alert_limit_low),
-    alertLimitHigh: num(raw.alertLimitHigh ?? raw.alert_limit_high),
-    actionLimitLow: num(raw.actionLimitLow ?? raw.action_limit_low),
-    actionLimitHigh: num(raw.actionLimitHigh ?? raw.action_limit_high),
+    alertLimitLow: optionalNum(raw.alertLimitLow ?? raw.alert_limit_low),
+    alertLimitHigh: optionalNum(raw.alertLimitHigh ?? raw.alert_limit_high),
+    actionLimitLow: optionalNum(raw.actionLimitLow ?? raw.action_limit_low),
+    actionLimitHigh: optionalNum(raw.actionLimitHigh ?? raw.action_limit_high),
+    ucl: optionalNum(raw.ucl) ?? null,
+    lcl: optionalNum(raw.lcl) ?? null,
     unit: str(raw.unit),
     resultType: (str(raw.resultType || raw.result_type, 'Numeric') as CqaResultRecord['resultType']),
     criticality: (str(raw.criticality, 'Major') as CqaResultRecord['criticality']),
@@ -122,6 +105,11 @@ function normalizeCqaResult(raw: Record<string, unknown>): CqaResultRecord {
     reviewedBy: str(raw.reviewedBy || raw.reviewed_by),
     reviewDate: str(raw.reviewDate || raw.review_date),
     remarks: str(raw.remarks),
+    site: str(raw.site),
+    department: str(raw.department),
+    shift: str(raw.shift),
+    equipmentId: str(raw.equipmentId),
+    equipmentName: str(raw.equipmentName),
     status: str(raw.status, 'Complies'),
     riskLevel: str(raw.riskLevel || raw.risk_level, 'Low'),
     oosRequired: Boolean(raw.oosRequired || raw.oos_required),
@@ -139,6 +127,7 @@ function normalizeCqaResult(raw: Record<string, unknown>): CqaResultRecord {
     createdByName: str(raw.createdByName),
     updatedByName: str(raw.updatedByName),
     isDeleted: Boolean(raw.isDeleted),
+    changeReason: str(raw.changeReason),
   };
 }
 
@@ -151,7 +140,9 @@ export async function fetchCqaResults(max = 500): Promise<CqaResultRecord[]> {
     } catch {
       primary = await getRecords<CqaResultRecord>(CQA_RESULTS_COLLECTION, [limit(max)]);
     }
-    const normalized = primary.map((r) => normalizeCqaResult(r as unknown as Record<string, unknown>));
+    const normalized = primary
+      .map((r) => normalizeCqaResult(r as unknown as Record<string, unknown>))
+      .filter((r) => !r.isDeleted);
     if (normalized.length) return normalized.sort((a, b) => b.testDate.localeCompare(a.testDate));
     const legacy = await listCpvRecords<CqaRecord>(CPV_COLLECTIONS.cqa, max);
     return legacy.map((r) => normalizeCqaResult({
@@ -173,7 +164,10 @@ export async function fetchCqaResults(max = 500): Promise<CqaResultRecord[]> {
 
 export async function fetchCqaResultById(id: string): Promise<CqaResultRecord | null> {
   const record = await getRecord<CqaResultRecord>(CQA_RESULTS_COLLECTION, id);
-  if (record) return normalizeCqaResult(record as unknown as Record<string, unknown>);
+  if (record) {
+    const n = normalizeCqaResult(record as unknown as Record<string, unknown>);
+    return n.isDeleted ? null : n;
+  }
   const all = await fetchCqaResults();
   return all.find((r) => r.id === id) ?? null;
 }
@@ -204,16 +198,14 @@ export async function fetchCqaParametersForProduct(
     let list = byProduct.length ? byProduct : cqa;
     if (microbiologyOnly) {
       list = list.filter((p) => {
-        const name = normalizeParameter(p).parameterName;
-        return ['Sterility', 'Bacterial Endotoxin', 'Endotoxin'].some((k) => name.toLowerCase().includes(k.toLowerCase()))
-          || name.toLowerCase().includes('microbial');
+        const name = normalizeParameter(p).parameterName.toLowerCase();
+        return name.includes('sterility') || name.includes('endotoxin');
       });
     }
     if (testStage) {
+      const explicitStage = testStage;
       list = list.filter((p) => {
         const n = normalizeParameter(p);
-        const raw = p as Parameter & { testStage?: string; test_stage?: string };
-        const explicitStage = raw.testStage || raw.test_stage || '';
         return parameterMatchesCqaTestStage(
           n.parameterName,
           testStage,
@@ -233,267 +225,139 @@ export async function fetchCqaBatchesForProduct(productName: string) {
   return batches.filter((b) => b.productName === productName || b.productCode === productName);
 }
 
-async function countParameterStatuses(
-  batchNumber: string,
-  parameterCode: string,
-  status: string,
-): Promise<number> {
-  const results = await fetchCqaResults(1000);
-  return results.filter((r) =>
-    r.batchNumber === batchNumber
-    && r.parameterCode === parameterCode
-    && r.status === status
-    && !r.isDeleted,
-  ).length;
-}
-
-async function maybeCreateOos(record: CqaResultRecord, actor: CqaActor, autoOos: boolean): Promise<string> {
-  if (!autoOos || record.status !== 'OOS') return '';
-  try {
-    const { createOosFromCpv } = await import('@/lib/oos-service');
-    const oos = await createOosFromCpv({
-      id: record.id,
-      product: record.productName,
-      batchNumber: record.batchNumber,
-      parameter: record.parameterName,
-      observedValue: Number(record.observedResult),
-      lower: record.lowerLimit,
-      upper: record.upperLimit,
-      unit: record.unit,
-      status: 'OOS',
-    }, { id: actor.id, name: actor.name, role: actor.role || 'qc' });
-    if (!oos) return '';
-    return String((oos as { oos_number?: string }).oos_number || oos.id || '');
-  } catch {
-    return '';
-  }
-}
-
-async function maybeCreateDeviation(record: CqaResultRecord, actor: CqaActor): Promise<string> {
-  if (!['OOS', 'Action', 'Alert'].includes(record.status)) return '';
-  try {
-    const { createDeviationFromCpv } = await import('@/lib/deviation-service');
-    const devStatus = record.status === 'OOS' ? 'OOS' : 'OOT';
-    const dev = await createDeviationFromCpv('cpv_cqa', {
-      id: record.id,
-      product: record.productName,
-      batchNumber: record.batchNumber,
-      parameter: record.parameterName,
-      observedValue: Number(record.observedResult),
-      status: devStatus,
-      department: 'QC',
-    }, { id: actor.id, name: actor.name, role: actor.role || 'qa' });
-    if (!dev) return '';
-    return String((dev as { deviation_number?: string }).deviation_number || dev.id || '');
-  } catch {
-    return '';
-  }
-}
-
-async function maybeCreateAlert(record: CqaResultRecord, actor: CqaActor) {
-  if (['Complies', 'Pass'].includes(record.status)) return;
-  try {
-    await createAlert({
-      alertType: 'Limit Exceeded',
-      severity: record.riskLevel === 'Critical' ? 'Critical' : record.riskLevel === 'High' ? 'High' : 'Medium',
-      module: 'CQA Monitoring',
-      productName: record.productName,
-      batchNo: record.batchNumber,
-      parameterName: record.parameterName,
-      message: `CQA ${record.parameterName} ${record.status} for batch ${record.batchNumber}`,
-      observedValue: Number(record.observedResult),
-      recordId: record.id,
-    }, { id: actor.id, name: actor.name, role: actor.role });
-  } catch { /* optional */ }
-}
-
 export async function createCqaResult(
   data: CqaResultFormData,
-  actor: CqaActor,
+  _actor: CqaActor,
   autoOos = true,
 ): Promise<{ result: CqaResultRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
+    if (!data.changeReason || data.changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
     const product = await fetchCpvProductById(data.cpvProductId);
-    if (product?.cpvStatus === 'Inactive') return { result: null, error: 'Inactive CPV product — entry not allowed.' };
+    if (product && !isCpvProductOperational(product.cpvStatus)) {
+      return { result: null, error: 'Selected CPV product is not operational for CQA entry.' };
+    }
     const batches = await fetchCqaBatchesForProduct(data.productName);
     const batchMatch = batches.find((b) => b.batchNumber === data.batchNumber);
     if (batches.length && !batchMatch) return { result: null, error: 'Batch does not belong to selected product.' };
-    if (batchMatch && ['Cancelled', 'Rejected'].includes(batchMatch.batchStatus)) {
-      return { result: null, error: 'Cancelled or rejected batch — entry not allowed.' };
+    if (batchMatch && ['Cancelled', 'Closed', 'Rejected', 'Archived'].includes(batchMatch.batchStatus)) {
+      return { result: null, error: 'Closed, rejected, or archived batch — entry not allowed.' };
     }
 
-    const existingResults = await fetchCqaResults(1000);
-    const duplicate = existingResults.find(
-      (r) => r.batchNumber === data.batchNumber
-        && r.parameterCode === data.parameterCode
-        && !r.isDeleted,
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminCqaResult',
     );
-    if (duplicate) return { result: null, error: 'CQA result already exists for this batch and parameter.' };
-
-    const status = evaluateCqaStatus(
-      data.observedResult,
-      data.lowerLimit,
-      data.upperLimit,
-      data.resultType,
-      data.alertLimitLow,
-      data.alertLimitHigh,
-      data.actionLimitLow,
-      data.actionLimitHigh,
-    );
-    const oosCount = await countParameterStatuses(data.batchNumber, data.parameterCode, 'OOS');
-    const alertCount = await countParameterStatuses(data.batchNumber, data.parameterCode, 'Alert');
-    const riskLevel = evaluateCqaRiskLevel(status, data.criticality, oosCount, alertCount);
-    const capaRequired = oosCount >= 2 || alertCount >= 3;
-
-    const payload = removeUndefined({
-      ...data,
-      cqaResultId: buildCqaResultId(data.batchNumber, data.parameterCode),
-      status,
-      riskLevel,
-      oosRequired: autoOos && status === 'OOS',
-      deviationRequired: !['Complies', 'Pass'].includes(status),
-      capaRequired,
-      linkedOosNumber: '',
-      linkedDeviationNumber: '',
-      linkedCapaNumber: '',
-      reviewStatus: 'Draft' as const,
-      isLocked: false,
-      createdByName: actor.name,
-      updatedByName: actor.name,
-      batchNo: data.batchNumber,
-      product_name: data.productName,
-      testParameter: data.parameterName,
-      lsl: data.lowerLimit,
-      usl: data.upperLimit,
-      target: data.targetValue,
-      observedValue: data.observedResult,
-      recordedBy: data.analyst,
-    });
-
-    const created = await createRecord(
-      CQA_RESULTS_COLLECTION,
-      payload as Omit<CqaResultRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
-    );
-    let result = normalizeCqaResult(created as unknown as Record<string, unknown>);
-
-    const oosNo = await maybeCreateOos(result, actor, autoOos);
-    if (oosNo) {
-      const updated = await updateRecord(CQA_RESULTS_COLLECTION, result.id, {
-        linkedOosNumber: oosNo,
-        oosRequired: true,
-      }, actorCtx(actor));
-      if (updated) result = normalizeCqaResult(updated as unknown as Record<string, unknown>);
-      await logCqaAudit('OOS auto-created', result.id, actor, null, oosNo, result.cqaResultId);
-    }
-
-    const devNo = await maybeCreateDeviation(result, actor);
-    if (devNo) {
-      const updated = await updateRecord(CQA_RESULTS_COLLECTION, result.id, {
-        linkedDeviationNumber: devNo,
-        deviationRequired: true,
-      }, actorCtx(actor));
-      if (updated) result = normalizeCqaResult(updated as unknown as Record<string, unknown>);
-      await logCqaAudit('deviation auto-created', result.id, actor, null, devNo, result.cqaResultId);
-    }
-
-    if (!['Complies', 'Pass'].includes(status)) {
-      await maybeCreateAlert(result, actor);
-      if (capaRequired) await logCqaAudit('CAPA suggested', result.id, actor, null, { parameter: data.parameterCode }, result.cqaResultId);
-    }
-
-    await logCqaAudit('create CQA result', result.id, actor, null, result, result.cqaResultId);
-    return { result, error: null };
+    const result = await fn({ ...data, autoOos, changeReason: data.changeReason });
+    return { result: normalizeCqaResult(result.data), error: null };
   } catch (e) {
     console.error('createCqaResult failed', e);
-    return { result: null, error: 'Failed to create CQA result.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to create CQA result.') };
   }
 }
 
 export async function updateCqaResult(
   id: string,
   data: Partial<CqaResultFormData>,
-  actor: CqaActor,
+  _actor: CqaActor,
   existing: CqaResultRecord,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean },
 ): Promise<{ result: CqaResultRecord | null; error: string | null }> {
-  if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Approved CQA result is locked. QA override required.' };
-  }
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    const merged = { ...existing, ...data };
-    const status = evaluateCqaStatus(
-      merged.observedResult,
-      merged.lowerLimit,
-      merged.upperLimit,
-      merged.resultType,
-      merged.alertLimitLow,
-      merged.alertLimitHigh,
-      merged.actionLimitLow,
-      merged.actionLimitHigh,
+    const changeReason = data.changeReason || existing.changeReason || '';
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (existing.isLocked && existing.reviewStatus === 'Approved' && !qaOverride) {
+      return { result: null, error: 'Approved CQA result is locked. QA override required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'updateAdminCqaResult',
     );
-    const oosCount = await countParameterStatuses(merged.batchNumber, merged.parameterCode, 'OOS');
-    const alertCount = await countParameterStatuses(merged.batchNumber, merged.parameterCode, 'Alert');
-    const riskLevel = evaluateCqaRiskLevel(status, merged.criticality, oosCount, alertCount);
-    const updates = removeUndefined({
+    const result = await fn({
+      ...existing,
       ...data,
-      status,
-      riskLevel,
-      capaRequired: oosCount >= 2 || alertCount >= 3,
-      updatedByName: actor.name,
+      id,
+      changeReason,
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
     });
-    const updated = await updateRecord(CQA_RESULTS_COLLECTION, id, updates as Partial<CqaResultRecord>, actorCtx(actor));
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeCqaResult(updated as unknown as Record<string, unknown>);
-    await logCqaAudit(qaOverride ? 'QA override' : 'edit CQA result', id, actor, existing, result, result.cqaResultId);
-    return { result, error: null };
+    return { result: normalizeCqaResult(result.data), error: null };
   } catch (e) {
     console.error('updateCqaResult failed', e);
-    return { result: null, error: 'Failed to update CQA result.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to update CQA result.') };
   }
 }
 
-export async function reviewCqaResult(id: string, actor: CqaActor, existing: CqaResultRecord) {
-  const updated = await updateRecord(CQA_RESULTS_COLLECTION, id, {
-    reviewStatus: 'Under Review',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeCqaResult(updated as unknown as Record<string, unknown>);
-  await logCqaAudit('review CQA result', id, actor, existing.reviewStatus, 'Under Review', result.cqaResultId);
-  return { result, error: null };
+export async function reviewCqaResult(
+  id: string,
+  _actor: CqaActor,
+  _existing: CqaResultRecord,
+  changeReason = 'Submitted for QA review',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'reviewAdminCqaResult',
+    );
+    const result = await fn({ id, changeReason });
+    return { result: normalizeCqaResult(result.data), error: null };
+  } catch (e) {
+    console.error('reviewCqaResult failed', e);
+    return { result: null, error: cfErrorMessage(e, 'Failed to submit review.') };
+  }
 }
 
-export async function approveCqaResult(id: string, actor: CqaActor, existing: CqaResultRecord) {
-  const updated = await updateRecord(CQA_RESULTS_COLLECTION, id, {
-    reviewStatus: 'Approved',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    isLocked: true,
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeCqaResult(updated as unknown as Record<string, unknown>);
-  await logCqaAudit('approve CQA result', id, actor, existing.reviewStatus, 'Approved', result.cqaResultId);
-  return { result, error: null };
+export async function approveCqaResult(
+  id: string,
+  _actor: CqaActor,
+  _existing: CqaResultRecord,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'approveAdminCqaResult',
+    );
+    const result = await fn({ id, changeReason, esignConfirmed: true });
+    return { result: normalizeCqaResult(result.data), error: null };
+  } catch (e) {
+    console.error('approveCqaResult failed', e);
+    return { result: null, error: cfErrorMessage(e, 'Failed to approve CQA result.') };
+  }
 }
 
 export async function bulkCreateCqaResults(
   rows: CqaResultFormData[],
-  actor: CqaActor,
+  _actor: CqaActor,
+  changeReason = 'Bulk CQA entry',
 ): Promise<{ created: number; errors: string[] }> {
-  let created = 0;
-  const errors: string[] = [];
-  for (const row of rows) {
-    const { error } = await createCqaResult(row, actor);
-    if (error) errors.push(`${row.parameterName}: ${error}`);
-    else created += 1;
+  if (!isFirebaseConfigured()) return { created: 0, errors: ['Firebase is not configured.'] };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, { created: number; errors: string[] }>(
+      getFirebaseFunctions(),
+      'bulkCreateAdminCqaResults',
+    );
+    const result = await fn({ rows, changeReason });
+    return result.data;
+  } catch (e) {
+    console.error('bulkCreateCqaResults failed', e);
+    return { created: 0, errors: [cfErrorMessage(e, 'Bulk create failed.')] };
   }
-  if (created) await logCqaAudit('bulk CQA entry', 'bulk', actor, null, { count: created });
-  return { created, errors };
 }
 
 export async function autofillFromBatch(batchId: string) {
@@ -512,14 +376,21 @@ export async function fetchCqaAuditTrail(recordId: string) {
   if (!isFirebaseConfigured()) return [];
   try {
     const snap = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('documentId', '==', recordId), limit(50)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (!snap.empty) return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap2 = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('recordId', '==', recordId), limit(50)));
+    return snap2.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch {
     return [];
   }
 }
 
 export async function logCqaExport(actor: CqaActor, count: number) {
-  await logCqaAudit('export CQA list', 'export', actor, null, { count });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminCqaExport');
+    await fn({ count, format: 'CSV', changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logCqaExport CF failed (non-blocking)', e);
+  }
 }
 
 export function parameterTrendData(results: CqaResultRecord[], parameterName: string) {
@@ -535,3 +406,46 @@ export function parameterTrendData(results: CqaResultRecord[], parameterName: st
       date: r.testDate,
     }));
 }
+
+export function buildCqaExportRows(results: CqaResultRecord[]): {
+  headers: string[];
+  rows: (string | number)[][];
+} {
+  const headers = [
+    'CQA Result ID', 'Product Code', 'Product', 'Batch', 'Test Stage',
+    'Parameter Code', 'Parameter', 'Observed', 'Target', 'LSL', 'USL', 'UCL', 'LCL',
+    'Unit', 'Status', 'Risk', 'Review Status', 'Spec No', 'STP', 'Analyst',
+    'Test Date', 'Site', 'OOS Ref', 'Deviation', 'CAPA Required',
+  ];
+  const rows = results.map((r) => [
+    r.cqaResultId,
+    r.productCode,
+    r.productName,
+    r.batchNumber,
+    r.testStage,
+    r.parameterCode,
+    r.parameterName,
+    r.observedResult,
+    r.targetValue ?? '',
+    r.lowerLimit,
+    r.upperLimit,
+    r.ucl ?? '',
+    r.lcl ?? '',
+    r.unit,
+    r.status,
+    r.riskLevel,
+    r.reviewStatus,
+    r.specificationNumber || '',
+    r.stpNumber || '',
+    r.analyst,
+    r.testDate,
+    r.site || '',
+    r.linkedOosNumber || '',
+    r.linkedDeviationNumber || '',
+    r.capaRequired ? 'Yes' : 'No',
+  ]);
+  return { headers, rows };
+}
+
+/** @deprecated Module name retained for callers */
+export const CQA_MODULE = CQA_MODULE_NAME;

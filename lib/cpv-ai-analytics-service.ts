@@ -18,6 +18,7 @@ import {
   type ProcessHealthResult, type RecommendationStatus, type RiskPrediction,
   type StabilityForecast, type YieldPrediction,
 } from '@/lib/cpv-ai-analytics-records';
+import { enrichAiClient } from '@/lib/ai/client';
 
 export type AiAnalyticsActor = { id: string; name: string; role?: string };
 
@@ -650,7 +651,7 @@ export async function generateAndPersistAiAnalytics(
       });
     }
 
-    const builtRecommendations: Array<{ finding: string; recommendation: string; priority: AiRecommendationRecord['priority']; riskLevel: string }> = [
+    let builtRecommendations: Array<{ finding: string; recommendation: string; priority: AiRecommendationRecord['priority']; riskLevel: string }> = [
       ...dashboard.riskPredictions.filter((r) => r.riskLevel === 'High' || r.riskLevel === 'Critical').map((r) => ({
         finding: `Elevated risk on ${r.product}`,
         recommendation: `Investigate: ${r.reason}. Assign QA owner and due date.`,
@@ -676,6 +677,69 @@ export async function generateAndPersistAiAnalytics(
         riskLevel: o.riskLevel,
       })),
     ].slice(0, 8);
+
+    try {
+      const enriched = await enrichAiClient({
+        task: 'recommendations',
+        context: {
+          product,
+          processHealth: dashboard.processHealth,
+          summary: dashboard.summary,
+          riskPredictions: dashboard.riskPredictions.slice(0, 5),
+          oosPredictions: dashboard.oosPredictions.slice(0, 5),
+          yieldPredictions: dashboard.yieldPredictions.filter((y) => y.alert).slice(0, 3),
+          cpkForecasts: dashboard.cpkForecasts.filter((c) => c.alert).slice(0, 3),
+          managementInsights: dashboard.managementInsights,
+        },
+        fallback: { recommendations: builtRecommendations },
+      });
+      const aiRecs = enriched.data.recommendations;
+      if (Array.isArray(aiRecs) && aiRecs.length) {
+        builtRecommendations = aiRecs.slice(0, 8).map((item, index) => {
+          const row = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+          const base = builtRecommendations[index] || builtRecommendations[0];
+          const priorityRaw = String(row.priority || base?.priority || 'Medium');
+          const priority = (
+            ['Critical', 'High', 'Medium', 'Low'].includes(priorityRaw) ? priorityRaw : 'Medium'
+          ) as AiRecommendationRecord['priority'];
+          return {
+            finding: String(row.finding || base?.finding || 'AI finding'),
+            recommendation: String(row.recommendation || base?.recommendation || ''),
+            priority,
+            riskLevel: String(row.riskLevel || base?.riskLevel || priority),
+          };
+        });
+      }
+
+      if (dashboard.managementInsights) {
+        const mgmt = await enrichAiClient({
+          task: 'management_summary',
+          context: {
+            product,
+            processHealth: dashboard.processHealth,
+            summary: dashboard.summary,
+            insights: dashboard.managementInsights,
+          },
+          fallback: {
+            summary: `Overall plant health ${dashboard.managementInsights.overallPlantHealth}/100 with CAPA effectiveness ${dashboard.managementInsights.capaEffectivenessPct}%.`,
+            bullets: dashboard.managementInsights.topRisks,
+          },
+        });
+        const summaryText = typeof mgmt.data.summary === 'string' ? mgmt.data.summary.trim() : '';
+        const bullets = Array.isArray(mgmt.data.bullets) ? mgmt.data.bullets.map(String).filter(Boolean) : [];
+        if (summaryText || bullets.length) {
+          dashboard.managementInsights = {
+            ...dashboard.managementInsights,
+            topRisks: summaryText
+              ? [summaryText, ...dashboard.managementInsights.topRisks].slice(0, 6)
+              : dashboard.managementInsights.topRisks,
+            trendingRisks: bullets.length ? bullets.slice(0, 6) : dashboard.managementInsights.trendingRisks,
+          };
+        }
+      }
+    } catch (enrichError) {
+      console.warn('OpenRouter enrich skipped for AI analytics', enrichError);
+    }
 
     for (const rec of builtRecommendations) {
       const doc = {

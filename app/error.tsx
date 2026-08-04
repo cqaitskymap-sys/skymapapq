@@ -22,11 +22,11 @@ export default function Error({
         <p className="text-muted-foreground text-sm">
           An unexpected error occurred. Please try again or return to the dashboard.
         </p>
-        {error.message && (
+        {process.env.NODE_ENV === 'development' && error.message ? (
           <p className="text-xs text-muted-foreground bg-slate-100 p-3 rounded-lg font-mono break-all">
             {error.message}
           </p>
-        )}
+        ) : null}
         <div className="flex gap-3 justify-center">
           <Button onClick={reset} className="bg-blue-600 hover:bg-blue-700">Try Again</Button>
           <Button asChild variant="outline">

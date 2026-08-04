@@ -3,6 +3,7 @@ import {
   BATCH_STATUSES,
   RELEASE_STATUSES,
   BATCH_SIZE_UNITS,
+  BATCH_STATUS_TRANSITIONS,
 } from '@/lib/admin/constants';
 import { CPV_REVIEW_FREQUENCIES } from '@/lib/cpv-product-master';
 
@@ -11,8 +12,10 @@ export const CPV_BATCH_MODULE = 'CPV Batch Registration';
 
 export const CPV_BATCH_STATUSES = BATCH_STATUSES;
 export const CPV_RELEASE_STATUSES = RELEASE_STATUSES;
+export const CPV_BATCH_STATUS_TRANSITIONS = BATCH_STATUS_TRANSITIONS;
 
 const requiredText = z.string().trim().min(1, 'Required');
+const optionalText = z.string().trim().default('');
 
 /** Normalizes stored date to YYYY-MM for month inputs (legacy YYYY-MM-DD supported). */
 export function toMonthYearValue(value: string): string {
@@ -65,35 +68,53 @@ export const formatExpiryMonthYear = formatMonthYear;
 export const cpvBatchFormSchema = z.object({
   cpvProductId: requiredText,
   batchNumber: requiredText,
+  batchCode: optionalText,
   productCode: requiredText,
   productName: requiredText,
-  genericName: z.string().trim().default(''),
-  strength: z.string().trim().default(''),
-  dosageForm: z.string().trim().default(''),
-  packSize: z.string().trim().default(''),
-  market: z.string().trim().default(''),
+  productVersion: optionalText,
+  productCategory: optionalText,
+  genericName: optionalText,
+  strength: optionalText,
+  dosageForm: optionalText,
+  packSize: optionalText,
+  market: optionalText,
   batchSize: z.coerce.number().positive('Batch size must be numeric'),
+  targetBatchSize: optionalText,
+  actualBatchSize: optionalText,
   batchSizeUnit: z.enum(BATCH_SIZE_UNITS).default('Vials'),
   manufacturingDate: requiredText,
   expiryDate: requiredText,
+  retestDate: optionalText,
+  shelfLifeMonths: optionalText,
+  manufacturingEndDate: optionalText,
+  packagingStartDate: optionalText,
+  packagingEndDate: optionalText,
   manufacturingSite: requiredText,
-  manufacturingLine: z.string().trim().default(''),
+  plant: optionalText,
+  manufacturingLine: optionalText,
+  department: optionalText,
   shift: z.string().trim().default('A'),
-  mfrNumber: z.string().trim().default(''),
-  bmrNumber: z.string().trim().default(''),
-  bprNumber: z.string().trim().default(''),
-  semiFinishedBatchNumber: z.string().trim().default(''),
-  finishedProductBatchNumber: z.string().trim().default(''),
-  packingBatchNumber: z.string().trim().default(''),
-  manufacturedFor: z.string().trim().default(''),
-  customerName: z.string().trim().default(''),
+  campaign: optionalText,
+  manufacturingOrderNumber: optionalText,
+  workOrderNumber: optionalText,
+  mfrNumber: optionalText,
+  bmrNumber: optionalText,
+  bprNumber: optionalText,
+  semiFinishedBatchNumber: optionalText,
+  finishedProductBatchNumber: optionalText,
+  packingBatchNumber: optionalText,
+  manufacturedFor: optionalText,
+  customerName: optionalText,
+  goldenBatchNumber: optionalText,
   cpvReviewPeriod: z.enum(CPV_REVIEW_FREQUENCIES).default('Yearly'),
   batchStatus: z.enum(CPV_BATCH_STATUSES).default('Planned'),
   releaseStatus: z.enum(CPV_RELEASE_STATUSES).default('Pending'),
-  qaReleaseDate: z.string().trim().default(''),
-  qaReleasedBy: z.string().trim().default(''),
-  statusChangeReason: z.string().trim().default(''),
-  remarks: z.string().trim().default(''),
+  qaReleaseDate: optionalText,
+  qaReleasedBy: optionalText,
+  statusChangeReason: optionalText,
+  description: optionalText,
+  remarks: optionalText,
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).superRefine((data, ctx) => {
   const mfgYm = toMonthYearValue(data.manufacturingDate);
   const expYm = toMonthYearValue(data.expiryDate);
@@ -122,11 +143,15 @@ export const cpvBatchFormSchema = z.object({
 
 export type CpvBatchFormData = z.infer<typeof cpvBatchFormSchema>;
 
-export interface CpvBatchRecord extends CpvBatchFormData, Record<string, unknown> {
+export interface CpvBatchRecord extends Omit<CpvBatchFormData, 'changeReason'>, Record<string, unknown> {
   id: string;
   cpvBatchId: string;
   specificationNumber?: string;
   stpNumber?: string;
+  equipmentIds?: string[];
+  operatorIds?: string[];
+  linkedCppParameterIds?: string[];
+  linkedCqaParameterIds?: string[];
   createdAt: string;
   updatedAt: string;
   createdBy: string;
@@ -135,6 +160,8 @@ export interface CpvBatchRecord extends CpvBatchFormData, Record<string, unknown
   updatedByName?: string;
   isDeleted: boolean;
   status?: string;
+  changeReason?: string;
+  recordType?: string;
 }
 
 export interface CpvBatchSummary {
@@ -154,25 +181,30 @@ export function buildCpvBatchId(batchNumber: string): string {
 }
 
 export function isBatchFieldLocked(batchStatus: string): boolean {
-  return batchStatus === 'Released';
+  return batchStatus === 'Released' || batchStatus === 'Archived' || batchStatus === 'Closed';
+}
+
+export function allowedBatchTransitions(from: string): readonly string[] {
+  return CPV_BATCH_STATUS_TRANSITIONS[from] || [];
 }
 
 export function summarizeCpvBatches(batches: CpvBatchRecord[]): CpvBatchSummary {
   const today = new Date().toISOString().split('T')[0];
+  const statusOf = (batch: CpvBatchRecord) => String(batch.batchStatus);
   return {
     total: batches.length,
-    planned: batches.filter((b) => b.batchStatus === 'Planned').length,
-    manufacturing: batches.filter((b) => b.batchStatus === 'Manufacturing').length,
-    qcTesting: batches.filter((b) => b.batchStatus === 'Under QC Testing').length,
-    qaReview: batches.filter((b) => b.batchStatus === 'Under QA Review').length,
-    released: batches.filter((b) => b.batchStatus === 'Released').length,
-    rejected: batches.filter((b) => b.batchStatus === 'Rejected').length,
-    hold: batches.filter((b) => b.batchStatus === 'Hold').length,
+    planned: batches.filter((b) => ['Planned', 'Scheduled'].includes(statusOf(b))).length,
+    manufacturing: batches.filter((b) => statusOf(b) === 'Manufacturing').length,
+    qcTesting: batches.filter((b) => ['Testing', 'Sampling', 'Under QC Testing'].includes(statusOf(b))).length,
+    qaReview: batches.filter((b) => ['Under Review', 'Under QA Review'].includes(statusOf(b))).length,
+    released: batches.filter((b) => statusOf(b) === 'Released').length,
+    rejected: batches.filter((b) => statusOf(b) === 'Rejected').length,
+    hold: batches.filter((b) => statusOf(b) === 'Hold').length,
     dueForReview: batches.filter((b) => {
-      if (b.batchStatus === 'Cancelled') return false;
+      if (['Cancelled', 'Closed', 'Archived'].includes(statusOf(b))) return false;
       const expiryEnd = monthYearComparableEnd(b.expiryDate);
       const due = b.qaReleaseDate || (expiryEnd ? expiryEnd.toISOString().slice(0, 10) : b.expiryDate);
-      return due && due <= today && b.batchStatus !== 'Released';
+      return due && due <= today && statusOf(b) !== 'Released';
     }).length,
   };
 }

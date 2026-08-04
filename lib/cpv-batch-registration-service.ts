@@ -6,73 +6,26 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import {
-  createRecord,
-  getRecord,
-  getRecords,
-  updateRecord,
-  type DocumentActor,
-} from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchBatches as fetchAdminBatches, normalizeBatch } from '@/lib/admin/batch-service';
 import { fetchCpvProducts, fetchCpvProductById } from '@/lib/cpv-product-master-service';
-import type { CpvProductRecord } from '@/lib/cpv-product-master';
+import { isCpvProductOperational, type CpvProductRecord } from '@/lib/cpv-product-master';
 import type { AdminBatch } from '@/lib/admin/schemas';
 import {
   CPV_BATCH_COLLECTION,
-  CPV_BATCH_MODULE,
   buildCpvBatchId,
   toMonthYearValue,
   type CpvBatchFormData,
   type CpvBatchRecord,
 } from '@/lib/cpv-batch-registration';
 
-const MODULE_NAME = CPV_BATCH_MODULE;
 const LEGACY_COLLECTION = 'batches';
 
 export interface CpvBatchActor {
   id: string;
   name: string;
-}
-
-function actorContext(actor: CpvBatchActor) {
-  return {
-    moduleName: MODULE_NAME,
-    actor: { id: actor.id, name: actor.name } as DocumentActor,
-  };
-}
-
-async function logBatchAudit(
-  actionType: string,
-  recordId: string,
-  actor: CpvBatchActor,
-  oldValue?: unknown,
-  newValue?: unknown,
-  documentNumber?: string,
-) {
-  await createAuditLog({
-    moduleName: MODULE_NAME,
-    collectionName: CPV_BATCH_COLLECTION,
-    recordId,
-    documentNumber,
-    actionType,
-    oldValue,
-    newValue,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-
-  await writeAuditTrail({
-    collectionName: CPV_BATCH_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue,
-    newValue,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: MODULE_NAME,
-  });
 }
 
 function str(v: unknown, fallback = ''): string {
@@ -85,27 +38,51 @@ function num(v: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function normalizeCpvBatch(raw: Record<string, unknown>): CpvBatchRecord {
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const msg = String((e as { message?: string }).message || '');
+    if (msg) return msg.replace(/^Firebase:\s*/i, '').replace(/\s*\(.*\)$/, '').trim() || fallback;
+  }
+  return fallback;
+}
+
+export function normalizeCpvBatch(raw: Record<string, unknown>): CpvBatchRecord {
   const batchNumber = str(raw.batchNumber || raw.batch_number || raw.batchNo);
   return {
     id: str(raw.id),
     cpvBatchId: str(raw.cpvBatchId || raw.cpv_batch_id, buildCpvBatchId(batchNumber)),
+    recordType: str(raw.recordType, 'cpv_batch'),
     cpvProductId: str(raw.cpvProductId || raw.cpv_product_id || raw.productId),
     batchNumber,
+    batchCode: str(raw.batchCode || raw.batch_code, buildCpvBatchId(batchNumber)),
     productCode: str(raw.productCode || raw.product_code),
     productName: str(raw.productName || raw.product_name),
+    productVersion: str(raw.productVersion),
+    productCategory: str(raw.productCategory),
     genericName: str(raw.genericName || raw.generic_name),
     strength: str(raw.strength),
     dosageForm: str(raw.dosageForm || raw.dosage_form),
     packSize: str(raw.packSize || raw.pack_size),
     market: str(raw.market),
     batchSize: num(raw.batchSize ?? raw.batch_size, 0),
+    targetBatchSize: str(raw.targetBatchSize),
+    actualBatchSize: str(raw.actualBatchSize),
     batchSizeUnit: (str(raw.batchSizeUnit || raw.batch_size_unit || raw.unit, 'Vials') as CpvBatchRecord['batchSizeUnit']),
     manufacturingDate: str(raw.manufacturingDate || raw.manufacturing_date),
     expiryDate: str(raw.expiryDate || raw.expiry_date),
+    retestDate: str(raw.retestDate),
+    shelfLifeMonths: str(raw.shelfLifeMonths),
+    manufacturingEndDate: str(raw.manufacturingEndDate),
+    packagingStartDate: str(raw.packagingStartDate),
+    packagingEndDate: str(raw.packagingEndDate),
     manufacturingSite: str(raw.manufacturingSite || raw.manufacturing_site || raw.site),
+    plant: str(raw.plant),
     manufacturingLine: str(raw.manufacturingLine || raw.manufacturing_line || raw.lineNumber),
+    department: str(raw.department),
     shift: str(raw.shift, 'A'),
+    campaign: str(raw.campaign),
+    manufacturingOrderNumber: str(raw.manufacturingOrderNumber),
+    workOrderNumber: str(raw.workOrderNumber),
     mfrNumber: str(raw.mfrNumber || raw.mfr_number),
     bmrNumber: str(raw.bmrNumber || raw.bmr_number),
     bprNumber: str(raw.bprNumber || raw.bpr_number),
@@ -114,15 +91,21 @@ function normalizeCpvBatch(raw: Record<string, unknown>): CpvBatchRecord {
     packingBatchNumber: str(raw.packingBatchNumber || raw.packing_batch_number),
     manufacturedFor: str(raw.manufacturedFor || raw.manufactured_for),
     customerName: str(raw.customerName || raw.customer_name),
+    goldenBatchNumber: str(raw.goldenBatchNumber),
     cpvReviewPeriod: (str(raw.cpvReviewPeriod || raw.cpv_review_period, 'Yearly') as CpvBatchRecord['cpvReviewPeriod']),
     batchStatus: (str(raw.batchStatus || raw.batch_status || raw.status, 'Planned') as CpvBatchRecord['batchStatus']),
     releaseStatus: (str(raw.releaseStatus || raw.release_status, 'Pending') as CpvBatchRecord['releaseStatus']),
     qaReleaseDate: str(raw.qaReleaseDate || raw.qa_release_date || raw.releaseDate),
     qaReleasedBy: str(raw.qaReleasedBy || raw.qa_released_by),
     statusChangeReason: str(raw.statusChangeReason || raw.status_change_reason || raw.reason),
+    description: str(raw.description),
     remarks: str(raw.remarks),
     specificationNumber: str(raw.specificationNumber || raw.specification_number),
     stpNumber: str(raw.stpNumber || raw.stp_number),
+    equipmentIds: Array.isArray(raw.equipmentIds) ? raw.equipmentIds.map(String) : [],
+    operatorIds: Array.isArray(raw.operatorIds) ? raw.operatorIds.map(String) : [],
+    linkedCppParameterIds: Array.isArray(raw.linkedCppParameterIds) ? raw.linkedCppParameterIds.map(String) : [],
+    linkedCqaParameterIds: Array.isArray(raw.linkedCqaParameterIds) ? raw.linkedCqaParameterIds.map(String) : [],
     createdAt: str(raw.createdAt || raw.created_at),
     updatedAt: str(raw.updatedAt || raw.updated_at),
     createdBy: str(raw.createdBy || raw.created_by),
@@ -131,6 +114,7 @@ function normalizeCpvBatch(raw: Record<string, unknown>): CpvBatchRecord {
     updatedByName: str(raw.updatedByName || raw.updated_by_name),
     isDeleted: Boolean(raw.isDeleted),
     status: str(raw.status || raw.batchStatus),
+    changeReason: str(raw.changeReason),
   };
 }
 
@@ -139,6 +123,8 @@ export function cpvProductToBatchAutofill(product: CpvProductRecord): Partial<Cp
     cpvProductId: product.id,
     productCode: product.productCode,
     productName: product.productName,
+    productVersion: product.version || '',
+    productCategory: product.productCategory || '',
     genericName: product.genericName || '',
     strength: product.strength || '',
     dosageForm: product.dosageForm || '',
@@ -148,6 +134,7 @@ export function cpvProductToBatchAutofill(product: CpvProductRecord): Partial<Cp
     mfrNumber: product.mfrNumber || '',
     bmrNumber: product.bmrNumber || '',
     bprNumber: product.bprNumber || '',
+    manufacturingSite: product.manufacturingSite || '',
     cpvReviewPeriod: product.cpvReviewFrequency,
   };
 }
@@ -178,59 +165,27 @@ export function adminBatchToCpvForm(batch: AdminBatch, cpvProductId = ''): Parti
     packingBatchNumber: b.packingBatchNumber || '',
     manufacturedFor: b.manufacturedFor || '',
     customerName: b.customerName || '',
-    batchStatus: (b.batchStatus || 'Planned') as CpvBatchFormData['batchStatus'],
-    releaseStatus: (b.releaseStatus || 'Pending') as CpvBatchFormData['releaseStatus'],
-    qaReleaseDate: b.releaseDate || '',
-    qaReleasedBy: b.qaReleasedBy || '',
+    batchStatus: 'Planned',
+    releaseStatus: 'Pending',
+    qaReleaseDate: '',
+    qaReleasedBy: '',
     remarks: b.remarks || '',
   };
-}
-
-async function syncToBatchesCollection(record: CpvBatchRecord, cpvBatchDocId: string) {
-  if (!isFirebaseConfigured()) return;
-  try {
-    await createRecord(
-      LEGACY_COLLECTION,
-      {
-        batch_number: record.batchNumber,
-        batchNumber: record.batchNumber,
-        product_name: record.productName,
-        productName: record.productName,
-        product_code: record.productCode,
-        productCode: record.productCode,
-        manufacturing_date: record.manufacturingDate,
-        manufacturingDate: record.manufacturingDate,
-        expiry_date: record.expiryDate,
-        expiryDate: record.expiryDate,
-        batch_size: String(record.batchSize),
-        batchSize: String(record.batchSize),
-        market: record.market,
-        shift: record.shift,
-        manufacturing_line: record.manufacturingLine,
-        status: record.batchStatus,
-        release_status: record.releaseStatus,
-        source: 'cpv',
-        cpv_batch_id: cpvBatchDocId,
-        cpvBatchId: record.cpvBatchId,
-      },
-      { moduleName: MODULE_NAME, actor: { id: 'system', name: 'CPV Sync' } },
-    );
-  } catch (e) {
-    console.warn('CPV batch sync to batches collection failed', e);
-  }
 }
 
 export async function fetchCpvBatches(): Promise<CpvBatchRecord[]> {
   if (!isFirebaseConfigured()) return [];
   try {
     const primary = await getRecords<CpvBatchRecord>(CPV_BATCH_COLLECTION);
-    const normalized = primary.map((r) => normalizeCpvBatch(r as unknown as Record<string, unknown>));
+    const normalized = primary
+      .map((r) => normalizeCpvBatch(r as unknown as Record<string, unknown>))
+      .filter((b) => !b.isDeleted && b.batchNumber);
     if (normalized.length) return normalized;
 
     const snap = await getDocs(query(collection(getFirebaseFirestore(), LEGACY_COLLECTION), limit(500)));
     return snap.docs
       .map((d) => normalizeCpvBatch({ id: d.id, ...d.data() }))
-      .filter((b) => b.batchNumber);
+      .filter((b) => b.batchNumber && !b.isDeleted);
   } catch (e) {
     console.error('fetchCpvBatches failed', e);
     return [];
@@ -245,7 +200,9 @@ export async function fetchCpvBatchById(id: string): Promise<CpvBatchRecord | nu
       const all = await fetchCpvBatches();
       return all.find((b) => b.id === id) ?? null;
     }
-    return normalizeCpvBatch(record as unknown as Record<string, unknown>);
+    const normalized = normalizeCpvBatch(record as unknown as Record<string, unknown>);
+    if (normalized.isDeleted) return null;
+    return normalized;
   } catch (e) {
     console.error('fetchCpvBatchById failed', e);
     return null;
@@ -270,7 +227,7 @@ export async function fetchAdminBatchesForImport(): Promise<AdminBatch[]> {
 
 export async function fetchActiveCpvProductsForBatch(): Promise<CpvProductRecord[]> {
   const products = await fetchCpvProducts();
-  return products.filter((p) => p.cpvStatus === 'Active' || p.cpvStatus === 'Under Review');
+  return products.filter((p) => isCpvProductOperational(p.cpvStatus));
 }
 
 async function safeQuery(name: string, max = 100): Promise<Record<string, unknown>[]> {
@@ -345,7 +302,7 @@ export async function fetchBatchAuditTrail(recordId: string): Promise<Record<str
 
 export async function createCpvBatch(
   data: CpvBatchFormData,
-  actor: CpvBatchActor,
+  _actor: CpvBatchActor,
 ): Promise<{ batch: CpvBatchRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { batch: null, error: 'Firebase is not configured.' };
   try {
@@ -353,170 +310,170 @@ export async function createCpvBatch(
       return { batch: null, error: 'A batch with this number already exists.' };
     }
     const product = await fetchCpvProductById(data.cpvProductId);
-    if (product && product.cpvStatus === 'Inactive') {
-      return { batch: null, error: 'Selected CPV product is inactive. Batch registration is not allowed.' };
+    if (product && !isCpvProductOperational(product.cpvStatus)) {
+      return { batch: null, error: 'Selected CPV product is not operational for batch registration.' };
     }
-    const payload = {
-      ...data,
-      manufacturingDate: toMonthYearValue(data.manufacturingDate),
-      expiryDate: toMonthYearValue(data.expiryDate),
-      cpvBatchId: buildCpvBatchId(data.batchNumber),
-      status: data.batchStatus,
-      createdByName: actor.name,
-      updatedByName: actor.name,
-      specificationNumber: product?.specificationNumber || '',
-      stpNumber: product?.stpNumber || '',
-      batch_number: data.batchNumber,
-      product_name: data.productName,
-      product_code: data.productCode,
-    };
-    const created = await createRecord(
-      CPV_BATCH_COLLECTION,
-      payload as Omit<CpvBatchRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorContext(actor),
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminCpvBatch',
     );
-    const batch = normalizeCpvBatch(created as unknown as Record<string, unknown>);
-    await syncToBatchesCollection(batch, batch.id);
-    await logBatchAudit('create CPV batch', batch.id, actor, null, batch, batch.cpvBatchId);
-    return { batch, error: null };
+    const result = await fn({ ...data, changeReason: data.changeReason });
+    return { batch: normalizeCpvBatch(result.data), error: null };
   } catch (e) {
     console.error('createCpvBatch failed', e);
-    return { batch: null, error: 'Failed to create CPV batch.' };
+    return { batch: null, error: cfErrorMessage(e, 'Failed to create CPV batch.') };
   }
 }
 
 export async function updateCpvBatch(
   id: string,
   data: Partial<CpvBatchFormData>,
-  actor: CpvBatchActor,
+  _actor: CpvBatchActor,
   existing: CpvBatchRecord,
 ): Promise<{ batch: CpvBatchRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { batch: null, error: 'Firebase is not configured.' };
   try {
-    if (existing.batchStatus === 'Released' && (
-      data.batchNumber || data.productName || data.manufacturingDate || data.expiryDate || data.batchSize
-    )) {
-      return { batch: null, error: 'Released batches cannot modify critical fields.' };
+    const changeReason = data.changeReason || existing.changeReason || '';
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { batch: null, error: 'Change reason (min 5 characters) is required.' };
     }
     if (data.batchNumber && await isDuplicateBatchNumber(data.batchNumber, id)) {
       return { batch: null, error: 'A batch with this number already exists.' };
     }
-    const updates = {
-      ...data,
-      ...(data.manufacturingDate !== undefined && { manufacturingDate: toMonthYearValue(data.manufacturingDate) }),
-      ...(data.expiryDate !== undefined && { expiryDate: toMonthYearValue(data.expiryDate) }),
-      status: data.batchStatus ?? existing.batchStatus,
-      updatedByName: actor.name,
-      ...(data.batchNumber && { batch_number: data.batchNumber }),
-      ...(data.productName && { product_name: data.productName }),
-    };
-    const updated = await updateRecord(
-      CPV_BATCH_COLLECTION,
-      id,
-      updates as Partial<CpvBatchRecord>,
-      actorContext(actor),
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'updateAdminCpvBatch',
     );
-    if (!updated) return { batch: null, error: 'Batch not found.' };
-    const batch = normalizeCpvBatch(updated as unknown as Record<string, unknown>);
-    await logBatchAudit('edit CPV batch', id, actor, existing, batch, batch.cpvBatchId);
-    return { batch, error: null };
+    const result = await fn({
+      ...existing,
+      ...data,
+      id,
+      changeReason,
+    });
+    return { batch: normalizeCpvBatch(result.data), error: null };
   } catch (e) {
     console.error('updateCpvBatch failed', e);
-    return { batch: null, error: 'Failed to update CPV batch.' };
+    return { batch: null, error: cfErrorMessage(e, 'Failed to update CPV batch.') };
   }
 }
 
 export async function changeCpvBatchStatus(
   id: string,
   batchStatus: CpvBatchRecord['batchStatus'],
-  actor: CpvBatchActor,
-  existing: CpvBatchRecord,
+  _actor: CpvBatchActor,
+  _existing: CpvBatchRecord,
   reason?: string,
-  releaseStatus?: CpvBatchRecord['releaseStatus'],
+  options?: { esignConfirmed?: boolean },
 ): Promise<{ batch: CpvBatchRecord | null; error: string | null }> {
-  const updates: Partial<CpvBatchFormData> = {
-    batchStatus,
-    statusChangeReason: reason || existing.statusChangeReason,
-  };
-  if (releaseStatus) updates.releaseStatus = releaseStatus;
-  if (batchStatus === 'Released') {
-    updates.qaReleaseDate = new Date().toISOString().split('T')[0];
-    updates.qaReleasedBy = actor.name;
-    updates.releaseStatus = 'Released';
-  }
-  if (batchStatus === 'Rejected') updates.releaseStatus = 'Rejected';
-  if (batchStatus === 'Hold') updates.releaseStatus = 'On Hold';
-
-  const actionMap: Record<string, string> = {
-    Released: 'release batch',
-    Rejected: 'reject batch',
-    Hold: 'hold batch',
-  };
-  const result = await updateCpvBatch(id, updates, actor, existing);
-  if (result.batch) {
-    await logBatchAudit(
-      actionMap[batchStatus] || 'status change',
-      id,
-      actor,
-      existing.batchStatus,
-      batchStatus,
-      existing.cpvBatchId,
+  if (!isFirebaseConfigured()) return { batch: null, error: 'Firebase is not configured.' };
+  try {
+    if (!reason || reason.trim().length < 5) {
+      return { batch: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'setAdminCpvBatchStatus',
     );
+    const result = await fn({
+      id,
+      batchStatus,
+      changeReason: reason,
+      esignConfirmed: options?.esignConfirmed === true,
+    });
+    return { batch: normalizeCpvBatch(result.data), error: null };
+  } catch (e) {
+    console.error('changeCpvBatchStatus failed', e);
+    return { batch: null, error: cfErrorMessage(e, 'Failed to update batch status.') };
   }
-  return result;
 }
 
 export async function importCpvBatchFromAdmin(
   adminBatchId: string,
   cpvProductId: string,
-  actor: CpvBatchActor,
+  _actor: CpvBatchActor,
+  changeReason = 'Import from Admin Batch Master',
 ): Promise<{ batch: CpvBatchRecord | null; error: string | null }> {
-  const adminBatches = await fetchAdminBatchesForImport();
-  const adminBatch = adminBatches.find((b) => b.id === adminBatchId);
-  if (!adminBatch) return { batch: null, error: 'Admin batch not found.' };
-
-  const partial = adminBatchToCpvForm(adminBatch, cpvProductId);
-  const data = {
-    ...partial,
-    cpvProductId,
-    batchNumber: partial.batchNumber || '',
-    productCode: partial.productCode || '',
-    productName: partial.productName || '',
-    batchSize: partial.batchSize || 1,
-    manufacturingDate: partial.manufacturingDate || new Date().toISOString().split('T')[0],
-    expiryDate: partial.expiryDate || '',
-    manufacturingSite: partial.manufacturingSite || 'Site 1',
-    batchStatus: 'Planned' as const,
-    releaseStatus: 'Pending' as const,
-    cpvReviewPeriod: 'Yearly' as const,
-    batchSizeUnit: partial.batchSizeUnit || 'Vials',
-    shift: partial.shift || 'A',
-    statusChangeReason: '',
-    qaReleaseDate: '',
-    qaReleasedBy: '',
-    remarks: partial.remarks || '',
-  } as CpvBatchFormData;
-
-  const result = await createCpvBatch(data, actor);
-  if (result.batch) {
-    await logBatchAudit('import batch', result.batch.id, actor, null, { adminBatchId }, result.batch.cpvBatchId);
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'importAdminCpvBatch',
+    );
+    const result = await fn({ adminBatchId, cpvProductId, changeReason });
+    return { batch: normalizeCpvBatch(result.data), error: null };
+  } catch (e) {
+    console.error('importCpvBatchFromAdmin failed', e);
+    return { batch: null, error: cfErrorMessage(e, 'Failed to import batch.') };
   }
-  return result;
 }
 
-export async function logCpvBatchExport(actor: CpvBatchActor, count: number): Promise<void> {
-  await logBatchAudit('export batch list', 'export', actor, null, { count });
+export function buildCpvBatchesExportRows(batches: CpvBatchRecord[]): {
+  headers: string[];
+  rows: (string | number)[][];
+} {
+  const headers = [
+    'CPV Batch ID', 'Batch Number', 'Batch Code', 'Product Code', 'Product Name', 'Product Version',
+    'Batch Size', 'Target Size', 'Actual Size', 'Unit', 'Shelf Life (months)',
+    'Mfg Date', 'Expiry', 'Retest', 'Site', 'Plant', 'Line', 'Department',
+    'Shift', 'Campaign', 'MO Number', 'WO Number', 'Batch Status', 'Release Status',
+    'QA Release Date', 'Review Period', 'Golden Batch', 'Customer', 'Description',
+  ];
+  const rows = batches.map((b) => [
+    b.cpvBatchId,
+    b.batchNumber,
+    b.batchCode || '',
+    b.productCode,
+    b.productName,
+    b.productVersion || '',
+    b.batchSize,
+    b.targetBatchSize || '',
+    b.actualBatchSize || '',
+    b.batchSizeUnit,
+    b.shelfLifeMonths || '',
+    b.manufacturingDate,
+    b.expiryDate,
+    b.retestDate || '',
+    b.manufacturingSite,
+    b.plant || '',
+    b.manufacturingLine,
+    b.department || '',
+    b.shift,
+    b.campaign || '',
+    b.manufacturingOrderNumber || '',
+    b.workOrderNumber || '',
+    b.batchStatus,
+    b.releaseStatus,
+    b.qaReleaseDate,
+    b.cpvReviewPeriod,
+    b.goldenBatchNumber || '',
+    b.customerName,
+    b.description || '',
+  ]);
+  return { headers, rows };
+}
+
+export async function logCpvBatchExport(actor: CpvBatchActor, count: number, format = 'CSV'): Promise<void> {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminCpvBatchExport');
+    await fn({ count, format, changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logCpvBatchExport CF failed (non-blocking)', e);
+  }
 }
 
 export async function logQaOverride(actor: CpvBatchActor, batchId: string, detail: string): Promise<void> {
-  await logBatchAudit('QA override', batchId, actor, null, detail);
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminCpvBatchExport');
+    await fn({ count: 0, format: 'QA_OVERRIDE', changeReason: `${batchId}: ${detail} by ${actor.name}` });
+  } catch (e) {
+    console.warn('logQaOverride failed', e);
+  }
 }
 
 /** For CPP/CQA batch dropdowns */
 export async function listCpvBatchesForDropdown(): Promise<Array<{ id: string; batch_number: string; product_name: string }>> {
   const batches = await fetchCpvBatches();
   return batches
-    .filter((b) => b.batchStatus !== 'Cancelled' && b.batchStatus !== 'Rejected')
+    .filter((b) => !['Cancelled', 'Closed', 'Rejected', 'Archived'].includes(String(b.batchStatus)))
     .map((b) => ({
       id: b.id,
       batch_number: b.batchNumber,

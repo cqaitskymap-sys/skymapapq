@@ -23,10 +23,22 @@ import {
   type CpvBatchFormData,
   type CpvBatchRecord,
 } from '@/lib/cpv-batch-registration';
+import { BATCH_SIZE_UNITS } from '@/lib/admin/constants';
 import { cpvProductToBatchAutofill } from '@/lib/cpv-batch-registration-service';
 import type { CpvProductRecord } from '@/lib/cpv-product-master';
 import { CPV_REVIEW_FREQUENCIES } from '@/lib/cpv-product-master';
 
+/** Statuses editable in the form — critical GMP statuses use e-sign actions. */
+const FORM_SAFE_STATUSES = CPV_BATCH_STATUSES.filter(
+  (s) => !['Released', 'Rejected', 'Hold', 'Closed', 'Archived'].includes(s),
+);
+
+function statusOptionsFor(current?: string) {
+  if (current && !FORM_SAFE_STATUSES.includes(current as typeof FORM_SAFE_STATUSES[number])) {
+    return [current, ...FORM_SAFE_STATUSES] as string[];
+  }
+  return [...FORM_SAFE_STATUSES];
+}
 interface CpvBatchFormSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -51,20 +63,35 @@ export function CpvBatchFormSheet({
     defaultValues: {
       cpvProductId: '',
       batchNumber: '',
+      batchCode: '',
       productCode: '',
       productName: '',
+      productVersion: '',
+      productCategory: '',
       genericName: '',
       strength: '',
       dosageForm: '',
       packSize: '',
       market: '',
       batchSize: 1,
+      targetBatchSize: '',
+      actualBatchSize: '',
       batchSizeUnit: 'Vials',
       manufacturingDate: new Date().toISOString().slice(0, 7),
       expiryDate: '',
+      retestDate: '',
+      shelfLifeMonths: '',
+      manufacturingEndDate: '',
+      packagingStartDate: '',
+      packagingEndDate: '',
       manufacturingSite: '',
+      plant: '',
       manufacturingLine: '',
+      department: '',
       shift: 'A',
+      campaign: '',
+      manufacturingOrderNumber: '',
+      workOrderNumber: '',
       mfrNumber: '',
       bmrNumber: '',
       bprNumber: '',
@@ -73,13 +100,16 @@ export function CpvBatchFormSheet({
       packingBatchNumber: '',
       manufacturedFor: '',
       customerName: '',
+      goldenBatchNumber: '',
       cpvReviewPeriod: 'Yearly',
       batchStatus: 'Planned',
       releaseStatus: 'Pending',
       qaReleaseDate: '',
       qaReleasedBy: '',
       statusChangeReason: '',
+      description: '',
       remarks: '',
+      changeReason: '',
     },
   });
 
@@ -91,20 +121,35 @@ export function CpvBatchFormSheet({
       form.reset({
         cpvProductId: editing.cpvProductId,
         batchNumber: editing.batchNumber,
+        batchCode: editing.batchCode || '',
         productCode: editing.productCode,
         productName: editing.productName,
+        productVersion: editing.productVersion || '',
+        productCategory: editing.productCategory || '',
         genericName: editing.genericName,
         strength: editing.strength,
         dosageForm: editing.dosageForm,
         packSize: editing.packSize,
         market: editing.market,
         batchSize: editing.batchSize,
+        targetBatchSize: editing.targetBatchSize || '',
+        actualBatchSize: editing.actualBatchSize || '',
         batchSizeUnit: editing.batchSizeUnit,
         manufacturingDate: toMonthYearValue(editing.manufacturingDate),
         expiryDate: toMonthYearValue(editing.expiryDate),
+        retestDate: editing.retestDate || '',
+        shelfLifeMonths: editing.shelfLifeMonths || '',
+        manufacturingEndDate: editing.manufacturingEndDate || '',
+        packagingStartDate: editing.packagingStartDate || '',
+        packagingEndDate: editing.packagingEndDate || '',
         manufacturingSite: editing.manufacturingSite,
+        plant: editing.plant || '',
         manufacturingLine: editing.manufacturingLine,
+        department: editing.department || '',
         shift: editing.shift,
+        campaign: editing.campaign || '',
+        manufacturingOrderNumber: editing.manufacturingOrderNumber || '',
+        workOrderNumber: editing.workOrderNumber || '',
         mfrNumber: editing.mfrNumber,
         bmrNumber: editing.bmrNumber,
         bprNumber: editing.bprNumber,
@@ -113,13 +158,24 @@ export function CpvBatchFormSheet({
         packingBatchNumber: editing.packingBatchNumber,
         manufacturedFor: editing.manufacturedFor,
         customerName: editing.customerName,
+        goldenBatchNumber: editing.goldenBatchNumber || '',
         cpvReviewPeriod: editing.cpvReviewPeriod,
         batchStatus: editing.batchStatus,
         releaseStatus: editing.releaseStatus,
         qaReleaseDate: editing.qaReleaseDate,
         qaReleasedBy: editing.qaReleasedBy,
         statusChangeReason: editing.statusChangeReason,
+        description: editing.description || '',
         remarks: editing.remarks,
+        changeReason: '',
+      });
+    } else {
+      form.reset({
+        ...form.getValues(),
+        changeReason: '',
+        batchStatus: 'Planned',
+        releaseStatus: 'Pending',
+        manufacturingDate: new Date().toISOString().slice(0, 7),
       });
     }
   }, [open, editing, form]);
@@ -143,7 +199,10 @@ export function CpvBatchFormSheet({
       <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{editing ? 'Edit CPV Batch' : 'Register CPV Batch'}</SheetTitle>
-          <SheetDescription>Register manufacturing batch under Continued Process Verification.</SheetDescription>
+          <SheetDescription>
+            Register manufacturing batch under Continued Process Verification. Change reason is required (ALCOA+ / Part 11).
+            Release / Reject / Hold use electronic signature actions — not this form.
+          </SheetDescription>
         </SheetHeader>
         <Form {...form}>
           <form onSubmit={submit} className="mt-6 space-y-4">
@@ -184,12 +243,30 @@ export function CpvBatchFormSheet({
               <FormField control={form.control} name="batchNumber" render={({ field }) => (
                 <FormItem><FormLabel>Batch Number *</FormLabel><FormControl><Input {...field} readOnly={locked} /></FormControl><FormMessage /></FormItem>
               )} />
+              <FormField control={form.control} name="batchCode" render={({ field }) => (
+                <FormItem><FormLabel>Batch Code</FormLabel><FormControl><Input {...field} placeholder="Defaults to CPV-BATCH-…" readOnly={locked} /></FormControl></FormItem>
+              )} />
               <FormField control={form.control} name="batchSize" render={({ field }) => (
                 <FormItem><FormLabel>Batch Size *</FormLabel><FormControl><Input type="number" {...field} readOnly={locked} onChange={(e) => field.onChange(Number(e.target.value))} /></FormControl><FormMessage /></FormItem>
               )} />
+              <FormField control={form.control} name="batchSizeUnit" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Unit of Measure</FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange} disabled={locked}>
+                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                    <SelectContent>{BATCH_SIZE_UNITS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
+                  </Select>
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="targetBatchSize" render={({ field }) => (
+                <FormItem><FormLabel>Target Batch Size</FormLabel><FormControl><Input {...field} readOnly={locked} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="actualBatchSize" render={({ field }) => (
+                <FormItem><FormLabel>Actual Batch Size</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
               <FormField control={form.control} name="manufacturingDate" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Mfg Date *</FormLabel>
+                  <FormLabel>Mfg Start *</FormLabel>
                   <FormControl>
                     <Input
                       type="month"
@@ -200,6 +277,9 @@ export function CpvBatchFormSheet({
                   </FormControl>
                   <FormMessage />
                 </FormItem>
+              )} />
+              <FormField control={form.control} name="manufacturingEndDate" render={({ field }) => (
+                <FormItem><FormLabel>Mfg End</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="expiryDate" render={({ field }) => (
                 <FormItem>
@@ -215,20 +295,47 @@ export function CpvBatchFormSheet({
                   <FormMessage />
                 </FormItem>
               )} />
+              <FormField control={form.control} name="retestDate" render={({ field }) => (
+                <FormItem><FormLabel>Retest Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="shelfLifeMonths" render={({ field }) => (
+                <FormItem><FormLabel>Shelf Life (months)</FormLabel><FormControl><Input {...field} placeholder="e.g. 24" /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="packagingStartDate" render={({ field }) => (
+                <FormItem><FormLabel>Packaging Start</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="packagingEndDate" render={({ field }) => (
+                <FormItem><FormLabel>Packaging End</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
+              )} />
               <FormField control={form.control} name="manufacturingSite" render={({ field }) => (
                 <FormItem><FormLabel>Manufacturing Site *</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
               )} />
+              <FormField control={form.control} name="plant" render={({ field }) => (
+                <FormItem><FormLabel>Plant</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
               <FormField control={form.control} name="manufacturingLine" render={({ field }) => (
-                <FormItem><FormLabel>Manufacturing Line</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>Production Line</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="department" render={({ field }) => (
+                <FormItem><FormLabel>Department</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="shift" render={({ field }) => (
                 <FormItem><FormLabel>Shift</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
+              <FormField control={form.control} name="campaign" render={({ field }) => (
+                <FormItem><FormLabel>Campaign</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="manufacturingOrderNumber" render={({ field }) => (
+                <FormItem><FormLabel>Manufacturing Order</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="workOrderNumber" render={({ field }) => (
+                <FormItem><FormLabel>Work Order</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
               <FormField control={form.control} name="mfrNumber" render={({ field }) => (
-                <FormItem><FormLabel>MFR Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>MFR / Recipe</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="bmrNumber" render={({ field }) => (
-                <FormItem><FormLabel>BMR Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>BMR / MBR</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="bprNumber" render={({ field }) => (
                 <FormItem><FormLabel>BPR Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
@@ -241,6 +348,9 @@ export function CpvBatchFormSheet({
               )} />
               <FormField control={form.control} name="packingBatchNumber" render={({ field }) => (
                 <FormItem><FormLabel>Packing Batch</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              )} />
+              <FormField control={form.control} name="goldenBatchNumber" render={({ field }) => (
+                <FormItem><FormLabel>Golden Batch</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="manufacturedFor" render={({ field }) => (
                 <FormItem><FormLabel>Manufactured For</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
@@ -260,16 +370,22 @@ export function CpvBatchFormSheet({
               <FormField control={form.control} name="batchStatus" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Batch Status *</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
+                  <Select
+                    value={field.value}
+                    onValueChange={field.onChange}
+                    disabled={locked || !FORM_SAFE_STATUSES.includes(field.value as typeof FORM_SAFE_STATUSES[number])}
+                  >
                     <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                    <SelectContent>{CPV_BATCH_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                    <SelectContent>
+                      {statusOptionsFor(field.value).map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectContent>
                   </Select>
                 </FormItem>
               )} />
               <FormField control={form.control} name="releaseStatus" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Release Status</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
+                  <Select value={field.value} onValueChange={field.onChange} disabled>
                     <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                     <SelectContent>{CPV_RELEASE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
                   </Select>
@@ -287,13 +403,25 @@ export function CpvBatchFormSheet({
               )} />
             )}
 
+            <FormField control={form.control} name="description" render={({ field }) => (
+              <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
+            )} />
+
             <FormField control={form.control} name="remarks" render={({ field }) => (
               <FormItem><FormLabel>Remarks</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
             )} />
 
+            <FormField control={form.control} name="changeReason" render={({ field }) => (
+              <FormItem>
+                <FormLabel>Change Reason * (ALCOA+ / Part 11)</FormLabel>
+                <FormControl><Textarea rows={2} placeholder="Describe why this create/update is being performed" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )} />
+
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button type="submit" disabled={submitting}>{submitting ? 'Saving...' : editing ? 'Update' : 'Register'}</Button>
+              <Button type="submit" disabled={submitting || locked}>{submitting ? 'Saving...' : editing ? 'Update' : 'Register'}</Button>
             </div>
           </form>
         </Form>

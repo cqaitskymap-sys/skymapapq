@@ -5,9 +5,13 @@ export const CPV_PRODUCT_COLLECTION = 'cpv_products';
 export const CPV_PRODUCT_MODULE = 'CPV Product Master';
 
 export const CPV_PRODUCT_STATUSES = [
+  'Draft',
+  'Under Review',
+  'Approved',
   'Active',
   'Inactive',
-  'Under Review',
+  'Obsolete',
+  'Archived',
   'Discontinued',
 ] as const;
 
@@ -18,41 +22,78 @@ export const CPV_REVIEW_FREQUENCIES = [
   'Yearly',
 ] as const;
 
+export const CPV_LIFECYCLE_STATUSES = [
+  'Development',
+  'Technology Transfer',
+  'Validation',
+  'Commercial',
+  'Discontinued',
+] as const;
+
 const requiredText = z.string().trim().min(1, 'Required');
+const optionalText = z.string().trim().default('');
 
 export const cpvProductFormSchema = z.object({
   adminProductId: requiredText,
   productCode: requiredText,
   productName: requiredText,
-  genericName: z.string().trim().default(''),
-  brandName: z.string().trim().default(''),
+  genericName: optionalText,
+  brandName: optionalText,
+  productCategory: optionalText,
+  productFamily: optionalText,
   strength: requiredText,
   dosageForm: requiredText,
-  routeOfAdministration: z.string().trim().default(''),
-  packSize: z.string().trim().default(''),
-  market: z.string().trim().default(''),
-  shelfLife: z.string().trim().default(''),
-  storageCondition: z.string().trim().default(''),
-  standardBatchSize: z.string().trim().default(''),
-  manufacturingLicenseNumber: z.string().trim().default(''),
-  mfrNumber: z.string().trim().default(''),
-  bmrNumber: z.string().trim().default(''),
-  bprNumber: z.string().trim().default(''),
-  specificationNumber: z.string().trim().default(''),
-  stpNumber: z.string().trim().default(''),
-  cpvStatus: z.enum(CPV_PRODUCT_STATUSES).default('Active'),
+  routeOfAdministration: optionalText,
+  packSize: optionalText,
+  packType: optionalText,
+  market: optionalText,
+  manufacturingSite: optionalText,
+  businessUnit: optionalText,
+  department: optionalText,
+  productOwner: optionalText,
+  lifecycleStatus: optionalText,
+  developmentStage: optionalText,
+  validationStatus: optionalText,
+  marketStatus: optionalText,
+  version: optionalText,
+  revision: optionalText,
+  effectiveDate: optionalText,
+  reviewDate: optionalText,
+  expiryDate: optionalText,
+  description: optionalText,
+  manufacturingProcess: optionalText,
+  productionLine: optionalText,
+  manufacturingArea: optionalText,
+  packagingProcess: optionalText,
+  shelfLife: optionalText,
+  storageCondition: optionalText,
+  standardBatchSize: optionalText,
+  manufacturingLicenseNumber: optionalText,
+  mfrNumber: optionalText,
+  bmrNumber: optionalText,
+  bprNumber: optionalText,
+  specificationNumber: optionalText,
+  specificationVersion: optionalText,
+  stpNumber: optionalText,
+  upperSpecificationLimit: optionalText,
+  lowerSpecificationLimit: optionalText,
+  targetValue: optionalText,
+  samplingPlan: optionalText,
+  testingFrequency: optionalText,
+  cpvStatus: z.enum(CPV_PRODUCT_STATUSES).default('Draft'),
   cpvStartDate: requiredText,
   cpvReviewFrequency: z.enum(CPV_REVIEW_FREQUENCIES),
   cpvOwner: requiredText,
-  qaReviewer: z.string().trim().default(''),
-  remarks: z.string().trim().default(''),
+  qaReviewer: optionalText,
+  remarks: optionalText,
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
   linkedCppParameterIds: z.array(z.string()).default([]),
   linkedCqaParameterIds: z.array(z.string()).default([]),
 });
 
 export type CpvProductFormData = z.infer<typeof cpvProductFormSchema>;
 
-export interface CpvProductRecord extends CpvProductFormData, Record<string, unknown> {
+export interface CpvProductRecord extends Omit<CpvProductFormData, 'changeReason'>, Record<string, unknown> {
   id: string;
   cpvProductId: string;
   nextReviewDueDate?: string;
@@ -64,6 +105,8 @@ export interface CpvProductRecord extends CpvProductFormData, Record<string, unk
   updatedByName?: string;
   isDeleted: boolean;
   status?: string;
+  changeReason?: string;
+  recordType?: string;
 }
 
 export interface LinkedParameterRow {
@@ -85,6 +128,7 @@ export interface CpvProductSummary {
   active: number;
   inactive: number;
   underReview: number;
+  draft: number;
   withoutCppLink: number;
   withoutCqaLink: number;
   dueForReview: number;
@@ -111,9 +155,10 @@ export function computeNextReviewDueDate(
   return d.toISOString().split('T')[0];
 }
 
+/** Products that may receive new CPV monitoring / batch activity. */
 export function isCpvProductOperational(status: string): boolean {
   const s = status.toLowerCase();
-  return s === 'active' || s === 'under review';
+  return s === 'active' || s === 'under review' || s === 'approved';
 }
 
 export function summarizeCpvProducts(products: CpvProductRecord[]): CpvProductSummary {
@@ -122,7 +167,8 @@ export function summarizeCpvProducts(products: CpvProductRecord[]): CpvProductSu
     total: products.length,
     active: products.filter((p) => p.cpvStatus === 'Active').length,
     inactive: products.filter((p) => p.cpvStatus === 'Inactive').length,
-    underReview: products.filter((p) => p.cpvStatus === 'Under Review').length,
+    underReview: products.filter((p) => p.cpvStatus === 'Under Review' || p.cpvStatus === 'Approved').length,
+    draft: products.filter((p) => p.cpvStatus === 'Draft').length,
     withoutCppLink: products.filter((p) => !p.linkedCppParameterIds?.length).length,
     withoutCqaLink: products.filter((p) => !p.linkedCqaParameterIds?.length).length,
     dueForReview: products.filter((p) => {

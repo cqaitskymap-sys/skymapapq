@@ -2,13 +2,16 @@ import {
   collection, doc, getDoc, getDocs, addDoc, updateDoc, deleteDoc,
   query, where, orderBy, limit, writeBatch,
 } from 'firebase/firestore';
-import { getFirebaseFirestore } from '@/lib/firebase';
+import { EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
+import { getFirebaseAuth, getFirebaseFirestore } from '@/lib/firebase';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
 import { getPackagingReviews } from '@/lib/packaging-service';
 import { getMaterialReviewsByPQR } from '@/lib/material-service';
 import {
   PQR_COLLECTIONS, PqrDocument, PqrApproval, PqrDataSnapshot, PqrDocumentStatus, ESignPayload,
 } from '@/lib/pqr-types';
+import { createAuditLog } from '@/lib/audit-trail';
+import { enrichAiClient } from '@/lib/ai/client';
 
 type Actor = { id?: string; name?: string; role?: string; email?: string };
 
@@ -56,9 +59,84 @@ export async function listPqrDocuments(): Promise<PqrDocument[]> {
 }
 
 export async function getPqrDocument(id: string): Promise<PqrDocument | null> {
-  const snap = await getDoc(doc(getFirebaseFirestore(), PQR_COLLECTIONS.documents, id));
-  if (!snap.exists()) return null;
-  return { id: snap.id, ...snap.data() } as PqrDocument;
+  const legacy = await getDoc(doc(getFirebaseFirestore(), PQR_COLLECTIONS.documents, id));
+  if (legacy.exists()) {
+    return { id: legacy.id, ...legacy.data() } as PqrDocument;
+  }
+
+  // Modern create writes to pqr_records — map into legacy document shape for detail views.
+  try {
+    const modern = await getDoc(doc(getFirebaseFirestore(), 'pqr_records', id));
+    if (!modern.exists()) return null;
+    const r = modern.data() as Record<string, unknown>;
+    const statusRaw = String(r.status || 'draft').toLowerCase().replace(/\s+/g, '_');
+    const statusMap: Record<string, PqrDocumentStatus> = {
+      draft: 'draft',
+      data_collection: 'draft',
+      generated: 'draft',
+      under_review: 'under_review',
+      qa_review: 'under_review',
+      approval_pending: 'under_review',
+      approved: 'approved',
+      closed: 'approved',
+      rejected: 'rejected',
+      archived: 'archived',
+      cancelled: 'archived',
+      returned_for_correction: 'under_review',
+    };
+    const summary = (r.collectedSummary || {}) as Record<string, unknown>;
+    return {
+      id: modern.id,
+      company_name: String(r.companyName || ''),
+      site_name: String(r.site || r.manufacturingSite || r.plant || ''),
+      address: String(r.address || ''),
+      document_title: String(r.pqrTitle || 'Annual Product Quality Review'),
+      product_name: String(r.productName || ''),
+      product_id: String(r.productId || ''),
+      product_code: String(r.productCode || ''),
+      pqr_number: String(r.pqrNumber || ''),
+      page_number: '1',
+      revision_number: String(r.version || '00'),
+      format_number: '',
+      review_period_from: String(r.reviewPeriodFrom || ''),
+      review_period_to: String(r.reviewPeriodTo || ''),
+      pqr_year: Number(r.reviewYear) || new Date().getFullYear(),
+      total_batches_manufactured: Number(summary.totalBatches) || 0,
+      total_released_batches: Number(summary.releasedBatches) || 0,
+      total_rejected_batches: Number(summary.rejectedBatches) || 0,
+      total_reworked_batches: 0,
+      total_reprocessed_batches: 0,
+      document_status: statusMap[statusRaw] || 'draft',
+      review_frequency: String(r.pqrFrequency || 'Yearly'),
+      current_revision: String(r.version || '00'),
+      previous_revision: '',
+      next_review_due_date: String(r.dueDate || '') || null,
+      document_owner_department: String(r.department || ''),
+      effective_date: null,
+      prepared_date: String(r.createdAt || '').slice(0, 10) || null,
+      company_logo_url: '',
+      observations: String(r.remarks || ''),
+      conclusions: String(r.conclusion || ''),
+      recommendations: String(r.recommendations || ''),
+      overall_compliance: String(r.overallQualityStatus || '').toLowerCase().includes('unsatisfactory')
+        ? 'unsatisfactory'
+        : String(r.overallQualityStatus || '').toLowerCase().includes('improvement')
+          ? 'needs_improvement'
+          : 'satisfactory',
+      oos_count: Number(summary.oos) || 0,
+      deviation_count: Number(summary.deviations) || 0,
+      capa_count: Number(summary.capa) || 0,
+      change_control_count: Number(summary.changeControls) || 0,
+      generic_name: String(r.genericName || ''),
+      strength: String(r.strength || ''),
+      dosage_form: String(r.dosageForm || ''),
+      created_by: String(r.createdByName || r.createdBy || ''),
+      created_at: String(r.createdAt || ''),
+      updated_at: String(r.updatedAt || ''),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function getPqrApprovals(pqrId: string): Promise<PqrApproval[]> {
@@ -113,7 +191,7 @@ export async function listProducts() {
       dosage_form: String(p.dosageForm || p.dosage_form || ''),
     }));
   }
-  return [{ id: 'default', product_name: 'Amikacin Injection IP', product_code: 'AMI-500', generic_name: 'Amikacin Sulphate IP', strength: '500mg/2ml', dosage_form: 'Injection' }];
+  return [];
 }
 
 export async function generatePqrNumber(productCode: string, year: number): Promise<string> {
@@ -185,7 +263,11 @@ export async function buildPqrSnapshot(pqr: PqrDocument): Promise<PqrDataSnapsho
     records.filter((r) => String(r[statusField] || r.batch_status || r.status || '').toLowerCase().includes(statusVal)).length;
 
   const manufactured = batches.length;
-  const released = countByStatus(batches as Record<string, unknown>[], 'status', 'released') || countByStatus(batches as Record<string, unknown>[], 'batch_status', 'released') || Math.floor(manufactured * 0.92);
+  const released = countByStatus(batches as Record<string, unknown>[], 'status', 'released')
+    || countByStatus(batches as Record<string, unknown>[], 'batch_status', 'released')
+    || countByStatus(batches as Record<string, unknown>[], 'release_status', 'released')
+    || countByStatus(batches as Record<string, unknown>[], 'releaseStatus', 'released');
+
   const rejected = countByStatus(batches as Record<string, unknown>[], 'status', 'reject') || pqr.total_rejected_batches || 0;
 
   const cppRecords = filterRecords(cppRaw);
@@ -309,6 +391,44 @@ export async function buildPqrSnapshot(pqr: PqrDocument): Promise<PqrDataSnapsho
     },
   };
 
+  try {
+    const narrative = snapshot.autoGeneratedNarrative || {
+      observations: '',
+      conclusions: '',
+      recommendations: '',
+    };
+    const enriched = await enrichAiClient({
+      task: 'pqr_narrative',
+      context: {
+        product: pqr.product_name,
+        reviewPeriodFrom: from,
+        reviewPeriodTo: to,
+        batches: snapshot.batches,
+        deviations: snapshot.deviations,
+        oos: snapshot.oos,
+        capa: snapshot.capa,
+      },
+      fallback: {
+        observations: narrative.observations,
+        conclusions: narrative.conclusions,
+        recommendations: String(narrative.recommendations || '')
+          .split(/(?<=\.)\s+/)
+          .map((s) => s.trim())
+          .filter(Boolean),
+      },
+    });
+    const recs = Array.isArray(enriched.data.recommendations)
+      ? enriched.data.recommendations.map(String)
+      : null;
+    snapshot.autoGeneratedNarrative = {
+      observations: String(enriched.data.observations || narrative.observations),
+      conclusions: String(enriched.data.conclusions || narrative.conclusions),
+      recommendations: recs?.length ? recs.join(' ') : narrative.recommendations,
+    };
+  } catch {
+    // Keep heuristic narrative if OpenRouter is unavailable.
+  }
+
   return snapshot;
 }
 
@@ -413,21 +533,69 @@ export async function updatePqrStatus(id: string, status: PqrDocumentStatus, act
 }
 
 export async function signPqrApproval(pqrId: string, payload: ESignPayload, actor: Actor) {
+  if (!payload.password || payload.password.length < 6) {
+    throw new Error('Password re-authentication is required for electronic signature');
+  }
+  if (!payload.reason?.trim()) {
+    throw new Error('Reason/comment is required for electronic signature');
+  }
+
+  const auth = getFirebaseAuth();
+  const currentUser = auth.currentUser;
+  if (!currentUser || (actor.id && currentUser.uid !== actor.id)) {
+    throw new Error('You can only sign as the authenticated user');
+  }
+  const email = actor.email || currentUser.email;
+  if (!email) {
+    throw new Error('Authenticated user email is required for e-signature');
+  }
+  try {
+    const credential = EmailAuthProvider.credential(email, payload.password);
+    await reauthenticateWithCredential(currentUser, credential);
+  } catch {
+    try {
+      await createAuditLog({
+        moduleName: 'PQR Approval',
+        collectionName: PQR_COLLECTIONS.approvals,
+        recordId: payload.approvalId,
+        actionType: 'e-signature failed',
+        user: { id: actor.id || currentUser.uid, name: actor.name || email },
+        status: 'Failed',
+        newValue: { meaning: payload.meaning, pqrId },
+      });
+    } catch { /* audit optional */ }
+    throw new Error('Invalid password. Electronic signature was not applied.');
+  }
+
   const approvalRef = doc(getFirebaseFirestore(), PQR_COLLECTIONS.approvals, payload.approvalId);
   const approvalSnap = await getDoc(approvalRef);
   if (!approvalSnap.exists()) throw new Error('Approval record not found');
 
+  const signedAt = now();
   await updateDoc(approvalRef, {
     name: actor.name || approvalSnap.data().name,
     signature_text: actor.name,
-    approval_date: now().split('T')[0],
+    approval_date: signedAt.split('T')[0],
     status: payload.meaning === 'Rejected By' ? 'rejected' : 'approved',
-    esign_user_id: actor.id,
+    esign_user_id: actor.id || currentUser.uid,
     esign_role: actor.role,
+    esign_email: email,
+    esign_timestamp: signedAt,
+    esign_record_version: String(approvalSnap.data().version || '1'),
     esign_ip: 'client',
     esign_meaning: payload.meaning,
     esign_reason: payload.reason,
     remarks: payload.reason,
+  });
+
+  await createAuditLog({
+    moduleName: 'PQR Approval',
+    collectionName: PQR_COLLECTIONS.approvals,
+    recordId: payload.approvalId,
+    actionType: 'electronic signature applied',
+    user: { id: actor.id || currentUser.uid, name: actor.name || email },
+    status: 'Success',
+    newValue: { meaning: payload.meaning, reason: payload.reason, pqrId, signedAt },
   });
 
   const approvals = await getPqrApprovals(pqrId);

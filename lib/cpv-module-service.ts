@@ -37,7 +37,6 @@ import {
   classifyEnvironment,
   rawMaterialStatus,
   stabilityStatus,
-  calculateVendorScore,
 } from '@/lib/cpv-modules';
 
 type Actor = { id?: string; name?: string; role?: string };
@@ -151,61 +150,235 @@ export async function updateBatchStatus(id: string, status: BatchInput['status']
 }
 
 export async function createRawMaterial(input: RawMaterialInput, actor: Actor, allRecords: RawMaterialRecord[] = []) {
+  // Legacy workspace helper — writes are CF-only via Raw Material Monitoring.
+  // Prefer createRawMaterialRecord from @/lib/cpv-raw-material-monitoring-service.
+  void allRecords;
+  const { createRawMaterialRecord } = await import('@/lib/cpv-raw-material-monitoring-service');
   const status = rawMaterialStatus(input.assay, input.lsl, input.usl);
-  const vendorScore = calculateVendorScore([...allRecords, { ...input, status, vendorScore: 0, id: '' }], input.vendor);
-  const record = await createModuleRecord<RawMaterialRecord>(
-    CPV_MODULE_COLLECTIONS.rawMaterials,
-    'Raw Material Monitoring',
-    { ...input, status, vendorScore },
-    actor,
-  );
-  if (status !== 'Complies') {
-    await createAlert({
-      alertType: status === 'OOS' ? 'Limit Exceeded' : 'OOT',
-      severity: status === 'OOS' ? 'High' : 'Medium',
-      module: 'Raw Material Monitoring',
-      productName: input.productName,
-      batchNo: input.batchNo,
-      parameterName: 'Assay',
-      message: `${input.apiName} assay ${status} for batch ${input.batchNo}`,
-      observedValue: input.assay,
-      recordId: record.id,
-    }, actor);
+  const mapped = {
+    cpvProductId: String((input as { cpvProductId?: string }).cpvProductId || ''),
+    productName: input.productName,
+    productCode: String((input as { productCode?: string }).productCode || input.productName),
+    batchNumber: input.batchNo,
+    materialCode: String((input as { materialCode?: string }).materialCode || input.apiName),
+    materialName: input.apiName,
+    materialType: 'API' as const,
+    materialGrade: '',
+    materialCategory: 'API',
+    manufacturerName: input.vendor,
+    supplierName: input.vendor,
+    vendorId: '',
+    vendorName: input.vendor,
+    vendorStatus: 'Active',
+    avlStatus: 'Approved',
+    vendorCode: '',
+    pharmacopoeiaStandard: '',
+    grnNumber: input.grnNo || '',
+    purchaseOrderNumber: '',
+    arNumber: input.arNo,
+    coaNumber: '',
+    materialLotNumber: '',
+    supplierBatchNumber: '',
+    mfgDate: String((input as { mfgDate?: string }).mfgDate || new Date().toISOString().slice(0, 10)),
+    expDate: String((input as { expDate?: string }).expDate || new Date().toISOString().slice(0, 10)),
+    retestDate: '',
+    shelfLifeMonths: '',
+    receivedQuantity: 0,
+    acceptedQuantity: 0,
+    rejectedQuantity: 0,
+    quarantineQuantity: 0,
+    issuedQuantity: 0,
+    usedQuantity: 0,
+    unit: 'kg',
+    storageCondition: '',
+    warehouseLocation: '',
+    storageArea: '',
+    site: '',
+    department: 'Warehouse',
+    shift: '',
+    qcStatus: (status === 'OOS' ? 'Rejected' : 'Under Test') as 'Approved' | 'Rejected' | 'Under Test' | 'Quarantine' | 'Retest Required',
+    qaStatus: '',
+    releaseStatus: '',
+    samplingStatus: '',
+    coaAvailable: 'Yes' as const,
+    specificationNumber: '',
+    specificationVersion: '',
+    stpNumber: '',
+    testParameter: 'Assay',
+    observedResult: input.assay,
+    lowerLimit: input.lsl,
+    upperLimit: input.usl,
+    testUnit: '',
+    testResultSummary: '',
+    remarks: 'Created via legacy CPV workspace helper',
+    effectiveDate: '',
+    version: '1.0',
+    changeReason: 'Legacy workspace raw material entry',
+  };
+  if (!mapped.cpvProductId) {
+    throw new Error('cpvProductId is required. Use Raw Material Monitoring (/cpv/raw-material-monitoring).');
   }
-  return record;
+  const { result, error } = await createRawMaterialRecord(mapped, {
+    id: actor.id || 'system',
+    name: actor.name || actor.id || 'system',
+    role: actor.role,
+  });
+  if (error || !result) throw new Error(error || 'Failed to create raw material record');
+  return result as unknown as RawMaterialRecord;
 }
 
 export async function createPackingMaterial(input: PackingMaterialInput, actor: Actor) {
-  return createModuleRecord<PackingMaterialRecord>(
-    CPV_MODULE_COLLECTIONS.packingMaterials,
-    'Packing Material Monitoring',
-    input,
-    actor,
-  );
+  // Legacy workspace helper — writes are CF-only via Packing Material Monitoring.
+  const { createPackingMaterialRecord } = await import('@/lib/cpv-packing-material-monitoring-service');
+  const matTypeRaw = String(input.materialType || '');
+  const materialType = (matTypeRaw.includes('Secondary')
+    ? 'Secondary Packing Material'
+    : matTypeRaw.includes('Tertiary')
+      ? 'Tertiary Packing Material'
+      : 'Primary Packing Material') as 'Primary Packing Material' | 'Secondary Packing Material' | 'Tertiary Packing Material';
+  const today = new Date().toISOString().slice(0, 10);
+  const mapped = {
+    cpvProductId: String((input as { cpvProductId?: string }).cpvProductId || ''),
+    productName: input.productName,
+    productCode: String((input as { productCode?: string }).productCode || input.productName),
+    batchNumber: input.batchNo,
+    materialCode: String((input as { materialCode?: string }).materialCode || input.materialType),
+    materialName: String((input as { materialName?: string }).materialName || input.materialType),
+    materialType,
+    materialCategory: 'Other' as const,
+    manufacturerName: input.vendor || 'Unknown',
+    supplierName: input.vendor || 'Unknown',
+    vendorId: '',
+    vendorName: input.vendor || 'Unknown',
+    vendorStatus: 'Active',
+    avlStatus: 'Approved',
+    vendorCode: '',
+    grnNumber: input.grnNo || '',
+    purchaseOrderNumber: '',
+    arNumber: input.arNo || `AR-${Date.now()}`,
+    coaNumber: '',
+    materialLotNumber: '',
+    supplierBatchNumber: '',
+    mfgDate: today,
+    expDate: today,
+    retestDate: '',
+    shelfLifeMonths: '',
+    receivedQuantity: 0,
+    acceptedQuantity: 0,
+    rejectedQuantity: 0,
+    quarantineQuantity: 0,
+    returnedQuantity: 0,
+    issuedQuantity: 0,
+    usedQuantity: 0,
+    unit: 'nos',
+    storageCondition: '',
+    warehouseLocation: '',
+    storageArea: '',
+    site: '',
+    department: 'Warehouse',
+    shift: '',
+    qcStatus: (input.status === 'Fail' ? 'Rejected' : 'Under Test') as 'Approved' | 'Rejected' | 'Under Test' | 'Quarantine' | 'Retest Required',
+    qaStatus: '',
+    releaseStatus: '',
+    samplingStatus: '',
+    coaAvailable: 'Yes' as const,
+    specificationNumber: '',
+    specificationVersion: '',
+    artworkVersion: '',
+    barcode: '',
+    qrCode: '',
+    rfid: '',
+    artworkVerified: '',
+    barcodeVerified: '',
+    labelVerified: '',
+    packagingIntegrity: '',
+    damageInspection: '',
+    printingVerified: '',
+    dimensionCheck: '',
+    sealIntegrity: '',
+    stpNumber: '',
+    testParameter: '',
+    testUnit: '',
+    testResultSummary: String(input.testResult || ''),
+    remarks: 'Created via legacy CPV workspace helper',
+    effectiveDate: '',
+    reviewDate: '',
+    version: '1.0',
+    description: '',
+    changeReason: 'Legacy workspace packing material entry',
+  };
+  if (!mapped.cpvProductId) {
+    throw new Error('cpvProductId is required. Use Packing Material Monitoring (/cpv/packing-material-monitoring).');
+  }
+  const { result, error } = await createPackingMaterialRecord(mapped, {
+    id: actor.id || 'system',
+    name: actor.name || actor.id || 'system',
+    role: actor.role,
+  });
+  if (error || !result) throw new Error(error || 'Failed to create packing material record');
+  return result as unknown as PackingMaterialRecord;
 }
 
 export async function createUtilityRecord(input: UtilityMonitoringInput, actor: Actor) {
-  const status = classifySpecification(input.observedValue, (input.lsl + input.usl) / 2, input.lsl, input.usl);
-  const record = await createModuleRecord<UtilityMonitoringRecord>(
-    CPV_MODULE_COLLECTIONS.utilityMonitoring,
-    'Utility Monitoring',
-    { ...input, status },
-    actor,
-  );
-  if (status !== 'Complies') {
-    await createAlert({
-      alertType: status === 'OOS' ? 'Limit Exceeded' : 'OOT',
-      severity: status === 'OOS' ? 'Critical' : 'Medium',
-      module: 'Utility Monitoring',
-      productName: input.productName || input.utilityType,
-      batchNo: input.batchNo || 'N/A',
-      parameterName: input.parameterName,
-      message: `${input.utilityType} ${input.parameterName} ${status}`,
-      observedValue: input.observedValue,
-      recordId: record.id,
-    }, actor);
+  // Legacy workspace helper — writes are CF-only via Utility Monitoring.
+  const { createUtilityRecord: createUtil } = await import('@/lib/cpv-utility-monitoring-service');
+  const today = new Date().toISOString().slice(0, 10);
+  const mapped = {
+    cpvProductId: String((input as { cpvProductId?: string }).cpvProductId || ''),
+    productName: String(input.productName || input.utilityType),
+    productCode: String((input as { productCode?: string }).productCode || input.utilityType),
+    batchNumber: String(input.batchNo || 'N/A'),
+    utilityType: (['Purified Water', 'Water for Injection', 'Clean Steam', 'Compressed Air', 'Nitrogen', 'HVAC', 'Chilled Water', 'Cooling Water', 'Vacuum', 'Electricity', 'Gas', 'Temperature', 'Humidity', 'Differential Pressure', 'Boiler Steam', 'Other'].includes(String(input.utilityType))
+      ? String(input.utilityType)
+      : 'Other') as 'Purified Water' | 'Water for Injection' | 'Clean Steam' | 'Compressed Air' | 'Nitrogen' | 'HVAC' | 'Chilled Water' | 'Cooling Water' | 'Vacuum' | 'Electricity' | 'Gas' | 'Temperature' | 'Humidity' | 'Differential Pressure' | 'Boiler Steam' | 'Other',
+    utilitySystemName: String(input.utilityType),
+    utilitySystemCode: '',
+    samplingPoint: 'Main',
+    areaRoomNo: '',
+    building: '',
+    site: '',
+    department: 'Utilities',
+    shift: '',
+    productionLine: '',
+    equipmentId: '',
+    equipmentName: '',
+    dataSource: 'Manual' as const,
+    sensorId: '',
+    alarmStatus: '',
+    communicationStatus: 'OK',
+    parameterId: '',
+    parameterCode: String(input.parameterName || 'PARAM').replace(/\s+/g, '_').toUpperCase(),
+    parameterName: input.parameterName,
+    observedValue: input.observedValue,
+    targetValue: (input.lsl + input.usl) / 2,
+    lowerLimit: input.lsl,
+    upperLimit: input.usl,
+    unit: input.unit,
+    resultType: 'Numeric' as const,
+    monitoringDate: input.recordedDate || today,
+    monitoringTime: '00:00',
+    recordedBy: input.recordedBy || actor.name || 'system',
+    reviewedBy: '',
+    reviewDate: '',
+    remarks: 'Created via legacy CPV workspace helper',
+    utilityCriticality: 'Major',
+    autoDeviationRequired: true,
+    specificationNumber: '',
+    version: '1.0',
+    effectiveDate: '',
+    description: '',
+    changeReason: 'Legacy workspace utility entry',
+  };
+  if (!mapped.cpvProductId) {
+    throw new Error('cpvProductId is required. Use Utility Monitoring (/cpv/utility-monitoring).');
   }
-  return record;
+  const { result, error } = await createUtil(mapped, {
+    id: actor.id || 'system',
+    name: actor.name || actor.id || 'system',
+    role: actor.role,
+  });
+  if (error || !result) throw new Error(error || 'Failed to create utility record');
+  return result as unknown as UtilityMonitoringRecord;
 }
 
 export async function createEnvironment(input: EnvironmentInput, actor: Actor) {

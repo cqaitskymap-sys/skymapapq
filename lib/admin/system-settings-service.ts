@@ -1,82 +1,80 @@
-import { writeAuditTrail, createAuditLog } from '@/lib/audit-trail';
-import { collection, getDocs, limit, query } from 'firebase/firestore';
-import {
-  createAdminRecord, updateAdminRecord, logAuditEvent,
-  checkFirebaseConnection,
-} from './admin-service';
+/**
+ * System Settings — client service.
+ * Reads via Firestore; privileged mutations via Cloud Functions.
+ */
+import { doc, getDoc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { ADMIN_COLLECTIONS } from './constants';
 import type { SystemSettings } from './schemas';
-import { isFirebaseConfigured, getFirebaseAuth, getFirebaseFirestore } from '@/lib/firebase';
+import { isFirebaseConfigured, getFirebaseAuth, getFirebaseFirestore, getFirebaseFunctions } from '@/lib/firebase';
 import { getFirebaseStorageHealthStatus } from '@/lib/firebase-config';
+import { checkFirebaseConnection } from './admin-service';
 
 export interface SystemSettingsAuditMeta {
   userId: string;
   userName: string;
 }
 
+export interface SystemSettingsSaveOptions {
+  changeReason?: string;
+  esignConfirmed?: boolean;
+}
+
+export interface SystemSettingsVersionRow {
+  id: string;
+  versionId?: string;
+  version?: number;
+  section?: string;
+  action?: string;
+  reason?: string;
+  createdAt?: string;
+  createdByName?: string;
+  electronicSignatureApplied?: boolean;
+  snapshot?: Record<string, unknown>;
+}
+
 const SETTINGS_DOC_KEY = 'global';
 
-async function logSettingsAudit(
-  action: string,
-  section: string,
-  meta: SystemSettingsAuditMeta,
-  oldValue: unknown,
-  newValue: unknown,
-) {
-  await logAuditEvent({
-    userId: meta.userId,
-    userName: meta.userName,
-    module: 'System Settings',
-    recordId: SETTINGS_DOC_KEY,
-    action,
-    oldValue: typeof oldValue === 'string' ? oldValue : JSON.stringify(oldValue ?? ''),
-    newValue: typeof newValue === 'string' ? newValue : JSON.stringify(newValue ?? ''),
-    reason: section,
-    ipAddress: typeof window !== 'undefined' ? 'client' : 'server',
-    device: typeof navigator !== 'undefined' ? navigator.userAgent : 'browser',
-    status: 'Success',
-  });
+const CRITICAL_SECTIONS = new Set([
+  'security', 'password policy', 'password-policy', 'session', 'maintenance',
+  'compliance', 'authentication', 'import', 'reset', 'rollback', 'publish',
+]);
 
-  await writeAuditTrail({
-    collectionName: ADMIN_COLLECTIONS.systemSettings,
-    documentId: SETTINGS_DOC_KEY,
-    action,
-    oldValue,
-    newValue,
-    userId: meta.userId,
-    userName: meta.userName,
-    moduleName: 'System Settings',
-  });
+export function isCriticalSettingsSection(section: string): boolean {
+  return CRITICAL_SECTIONS.has(section.toLowerCase());
+}
 
-  await createAuditLog({
-    moduleName: 'System Settings',
-    collectionName: ADMIN_COLLECTIONS.systemSettings,
-    recordId: SETTINGS_DOC_KEY,
-    actionType: action,
-    actionDescription: `${action} — ${section}`,
-    oldValue,
-    newValue,
-    user: { id: meta.userId, name: meta.userName },
-    status: 'Success',
-  });
+function callableErrorMessage(error: unknown, fallback: string): string {
+  const err = error as { message?: string };
+  return (err.message || fallback)
+    .replace(/^Firebase:\s*/i, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim() || fallback;
 }
 
 export function getDefaultSystemSettings(): Omit<SystemSettings, 'id'> {
   return {
     applicationName: 'Skymap PharmaQMS',
     applicationShortName: 'PharmaQMS',
+    companyName: '',
+    businessUnit: '',
     companyDefaultSite: '',
     defaultLanguage: 'en',
     timezone: 'Asia/Kolkata',
     dateFormat: 'DD/MM/YYYY',
     timeFormat: '24h',
     defaultCurrency: 'INR',
+    numberFormat: 'en-IN',
     financialYearStartMonth: 'April',
     supportEmail: 'support@pharmaqms.com',
     supportPhone: '',
     applicationVersion: '1.0.0',
     environment: 'Production',
     status: 'Active',
+    defaultDashboard: '/admin',
+    landingPage: '/dashboard',
+    faviconUrl: '',
+    secondaryColor: '#0f172a',
     enableRoleBasedAccess: true,
     enablePermissionGuard: true,
     enableAuditTrail: true,
@@ -88,6 +86,11 @@ export function getDefaultSystemSettings(): Omit<SystemSettings, 'id'> {
     enableAccountLockout: true,
     maxFailedLoginAttempts: 5,
     accountLockDurationMinutes: 30,
+    enableGoogleLogin: false,
+    enableMicrosoftLogin: false,
+    ssoReady: false,
+    ldapReady: false,
+    oauthReady: false,
     minPasswordLength: 8,
     requireUppercase: true,
     requireLowercase: true,
@@ -124,6 +127,29 @@ export function getDefaultSystemSettings(): Omit<SystemSettings, 'id'> {
     logRetentionDays: 90,
     enableErrorTracking: true,
     enablePerformanceLogs: false,
+    enableCaching: true,
+    cacheTtlSeconds: 120,
+    enableFda21CfrPart11: true,
+    enableEuGmpAnnex11: true,
+    enableAlcoaPlus: true,
+    enableWhoGmp: true,
+    enablePicsGmp: true,
+    enableIchQ10: true,
+    enableIso27001: true,
+    enableGamp5: true,
+    enableDocumentVersioning: true,
+    enableApprovalWorkflow: true,
+    recordRetentionDays: 2555,
+    enableBetaFeatures: false,
+    enableExperimentalFeatures: false,
+    enableRestApi: false,
+    enableWebhooks: false,
+    smtpConfigured: false,
+    smsGatewayConfigured: false,
+    configVersion: 1,
+    publishedVersion: 1,
+    configurationStatus: 'Published',
+    draftMode: false,
     passwordPolicy: '',
     createdBy: 'system',
     updatedBy: 'system',
@@ -131,6 +157,7 @@ export function getDefaultSystemSettings(): Omit<SystemSettings, 'id'> {
 }
 
 export function normalizeSystemSettings(raw: SystemSettings): SystemSettings {
+  const defaults = getDefaultSystemSettings();
   const maintenanceEnabled = raw.maintenanceModeEnabled ?? raw.maintenanceMode ?? false;
   const sessionTimeout = Number(raw.sessionTimeoutMinutes ?? raw.sessionTimeout ?? 30);
   const maxAttempts = Number(raw.maxFailedLoginAttempts ?? raw.maxLoginAttempts ?? 5);
@@ -146,6 +173,7 @@ export function normalizeSystemSettings(raw: SystemSettings): SystemSettings {
   ].filter(Boolean);
 
   return {
+    ...defaults,
     ...raw,
     maintenanceModeEnabled: maintenanceEnabled,
     maintenanceMode: maintenanceEnabled,
@@ -160,6 +188,8 @@ export function normalizeSystemSettings(raw: SystemSettings): SystemSettings {
     passwordPolicy: raw.passwordPolicy || passwordParts.join(', ') || 'Min 8 chars, uppercase, number, special',
     dateFormat: (raw.dateFormat as SystemSettings['dateFormat']) || 'DD/MM/YYYY',
     timeFormat: (raw.timeFormat as SystemSettings['timeFormat']) || '24h',
+    configVersion: Number(raw.configVersion ?? 1),
+    configurationStatus: (raw.configurationStatus as SystemSettings['configurationStatus']) || 'Published',
   };
 }
 
@@ -177,75 +207,131 @@ export async function fetchSystemSettings(): Promise<SystemSettings | null> {
   if (!auth.currentUser) return null;
 
   try {
-    const fetchPromise = getDocs(
-      query(collection(getFirebaseFirestore(), ADMIN_COLLECTIONS.systemSettings), limit(1)),
-    );
+    const ref = doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.systemSettings, SETTINGS_DOC_KEY);
     const snap = await Promise.race([
-      fetchPromise,
+      getDoc(ref),
       new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 15000)),
     ]);
-    if (!snap || snap === null || snap.empty) return getLocalSystemSettings('default');
-    const docSnap = snap.docs[0];
-    return normalizeSystemSettings({ id: docSnap.id, ...docSnap.data() } as SystemSettings);
+    if (!snap || snap === null) return getLocalSystemSettings('default');
+    if (!snap.exists()) return getLocalSystemSettings('default');
+    return normalizeSystemSettings({ id: snap.id, ...snap.data() } as SystemSettings);
   } catch {
     return getLocalSystemSettings('local');
   }
+}
+
+export function subscribeSystemSettings(
+  onData: (settings: SystemSettings | null) => void,
+  onError?: (message: string) => void,
+): Unsubscribe {
+  if (!isFirebaseConfigured()) {
+    onData(null);
+    return () => undefined;
+  }
+  const ref = doc(getFirebaseFirestore(), ADMIN_COLLECTIONS.systemSettings, SETTINGS_DOC_KEY);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) {
+        onData(getLocalSystemSettings('default'));
+        return;
+      }
+      onData(normalizeSystemSettings({ id: snap.id, ...snap.data() } as SystemSettings));
+    },
+    (err) => {
+      onError?.(err.message);
+      onData(getLocalSystemSettings('local'));
+    },
+  );
 }
 
 export async function updateSystemSettings(
   updates: Partial<SystemSettings>,
   meta: SystemSettingsAuditMeta,
   section: string,
+  options?: SystemSettingsSaveOptions,
 ): Promise<SystemSettings | null> {
-  const existing = await fetchSystemSettings();
-  const payload = { ...updates, updatedBy: meta.userId };
-
-  if (existing?.id) {
-    const updated = await updateAdminRecord<SystemSettings>(
-      ADMIN_COLLECTIONS.systemSettings,
-      existing.id,
-      payload,
-      { userId: meta.userId, userName: meta.userName, module: 'System Settings' },
-    );
-    if (updated) {
-      await logSettingsAudit(`${section} setting change`, section, meta, existing, updated);
-    }
-    return updated ? normalizeSystemSettings(updated) : null;
+  if (!isFirebaseConfigured()) return null;
+  const reason = options?.changeReason?.trim() || `${section} configuration updated`;
+  if (reason.length < 5) {
+    throw new Error('Change reason must be at least 5 characters');
+  }
+  const critical = isCriticalSettingsSection(section);
+  if (critical && !options?.esignConfirmed) {
+    throw new Error('Electronic signature confirmation is required for this section');
   }
 
-  const created = await createAdminRecord<SystemSettings>(
-    ADMIN_COLLECTIONS.systemSettings,
-    { ...getDefaultSystemSettings(), ...payload },
-    { userId: meta.userId, userName: meta.userName, module: 'System Settings', action: 'CREATE' },
-  );
-  if (created) {
-    await logSettingsAudit(`${section} setting change`, section, meta, null, created);
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'updateAdminSystemSettings');
+    const result = await fn({
+      section,
+      updates,
+      changeReason: reason,
+      esignConfirmed: Boolean(options?.esignConfirmed || !critical),
+    });
+    return normalizeSystemSettings({ id: SETTINGS_DOC_KEY, ...(result.data as object) } as SystemSettings);
+  } catch (error) {
+    throw new Error(callableErrorMessage(error, 'Failed to save system settings'));
   }
-  return created ? normalizeSystemSettings(created) : null;
 }
 
 export async function resetSystemSettingsToDefault(
   meta: SystemSettingsAuditMeta,
+  options?: SystemSettingsSaveOptions,
 ): Promise<SystemSettings | null> {
-  const existing = await fetchSystemSettings();
-  const defaults = getDefaultSystemSettings();
-  if (existing?.id) {
-    const updated = await updateAdminRecord<SystemSettings>(
-      ADMIN_COLLECTIONS.systemSettings,
-      existing.id,
-      { ...defaults, updatedBy: meta.userId },
-      { userId: meta.userId, userName: meta.userName, module: 'System Settings' },
-    );
-    await logSettingsAudit('reset to default', 'all', meta, existing, defaults);
-    return updated ? normalizeSystemSettings(updated) : null;
+  void meta;
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'resetAdminSystemSettings');
+    const result = await fn({
+      changeReason: options?.changeReason || 'Reset system settings to factory defaults',
+      esignConfirmed: options?.esignConfirmed !== false,
+    });
+    return normalizeSystemSettings({ id: SETTINGS_DOC_KEY, ...(result.data as object) } as SystemSettings);
+  } catch (error) {
+    throw new Error(callableErrorMessage(error, 'Failed to reset system settings'));
   }
-  const created = await createAdminRecord<SystemSettings>(
-    ADMIN_COLLECTIONS.systemSettings,
-    defaults,
-    { userId: meta.userId, userName: meta.userName, module: 'System Settings' },
-  );
-  await logSettingsAudit('reset to default', 'all', meta, null, defaults);
-  return created ? normalizeSystemSettings(created) : null;
+}
+
+export async function publishSystemSettings(
+  options?: SystemSettingsSaveOptions,
+): Promise<SystemSettings | null> {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'publishAdminSystemSettings');
+    const result = await fn({
+      changeReason: options?.changeReason || 'Publish system configuration',
+      esignConfirmed: options?.esignConfirmed !== false,
+    });
+    return normalizeSystemSettings({ id: SETTINGS_DOC_KEY, ...(result.data as object) } as SystemSettings);
+  } catch (error) {
+    throw new Error(callableErrorMessage(error, 'Failed to publish system settings'));
+  }
+}
+
+export async function rollbackSystemSettings(
+  versionId: string,
+  options?: SystemSettingsSaveOptions,
+): Promise<SystemSettings | null> {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'rollbackAdminSystemSettings');
+    const result = await fn({
+      versionId,
+      changeReason: options?.changeReason || 'Rollback system configuration',
+      esignConfirmed: options?.esignConfirmed !== false,
+    });
+    return normalizeSystemSettings({ id: SETTINGS_DOC_KEY, ...(result.data as object) } as SystemSettings);
+  } catch (error) {
+    throw new Error(callableErrorMessage(error, 'Failed to rollback system settings'));
+  }
+}
+
+export async function fetchSystemSettingsVersions(): Promise<SystemSettingsVersionRow[]> {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'fetchAdminSystemSettingsVersions');
+    const result = await fn({});
+    return ((result.data as { rows?: SystemSettingsVersionRow[] })?.rows || []);
+  } catch {
+    return [];
+  }
 }
 
 export function exportSystemSettingsJson(settings: SystemSettings): string {
@@ -257,16 +343,33 @@ export function exportSystemSettingsJson(settings: SystemSettings): string {
 export async function importSystemSettingsJson(
   json: string,
   meta: SystemSettingsAuditMeta,
+  options?: SystemSettingsSaveOptions,
 ): Promise<{ settings: SystemSettings | null; error?: string }> {
+  void meta;
   try {
     const parsed = JSON.parse(json) as Partial<SystemSettings>;
-    const forbidden = ['id', 'createdAt', 'createdBy'];
+    const forbidden = ['id', 'createdAt', 'createdBy', 'configVersion', 'publishedVersion'];
     forbidden.forEach((k) => delete (parsed as Record<string, unknown>)[k]);
-    const updated = await updateSystemSettings(parsed, meta, 'import');
-    await logSettingsAudit('settings import', 'import', meta, null, { keys: Object.keys(parsed) });
-    return { settings: updated };
+    const fn = httpsCallable(getFirebaseFunctions(), 'importAdminSystemSettings');
+    const result = await fn({
+      settings: parsed,
+      changeReason: options?.changeReason || 'Import system configuration JSON',
+      esignConfirmed: options?.esignConfirmed !== false,
+    });
+    return {
+      settings: normalizeSystemSettings({ id: SETTINGS_DOC_KEY, ...(result.data as object) } as SystemSettings),
+    };
   } catch (e) {
-    return { settings: null, error: (e as Error).message };
+    return { settings: null, error: callableErrorMessage(e, (e as Error).message) };
+  }
+}
+
+export async function logSystemSettingsExport(description: string, changeReason?: string): Promise<void> {
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminSystemSettingsExport');
+    await fn({ description, changeReason: changeReason || 'Report export' });
+  } catch {
+    // non-blocking
   }
 }
 
@@ -353,8 +456,9 @@ export async function checkFirebaseHealth(): Promise<FirebaseHealthStatus> {
 }
 
 export async function logFirebaseHealthCheck(meta: SystemSettingsAuditMeta): Promise<FirebaseHealthStatus> {
+  void meta;
   const health = await checkFirebaseHealth();
-  await logSettingsAudit('firebase health check', 'firebase', meta, null, health);
+  await logSystemSettingsExport('Firebase health check from System Settings', 'Firebase health probe');
   return health;
 }
 
@@ -385,7 +489,9 @@ export function validateFileAgainstSettings(
   file: File,
   settings: SystemSettings | null,
 ): { allowed: boolean; error?: string } {
-  const s = settings ? normalizeSystemSettings(settings) : normalizeSystemSettings(getDefaultSystemSettings() as SystemSettings);
+  const s = settings
+    ? normalizeSystemSettings(settings)
+    : normalizeSystemSettings(getDefaultSystemSettings() as SystemSettings);
   const maxBytes = s.maxFileSizeMb * 1024 * 1024;
   if (file.size > maxBytes) {
     return {

@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
 import { Plus, Download, Eye, Printer } from 'lucide-react';
@@ -12,7 +13,7 @@ import {
 import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
 import {
-  RISK_CATEGORIES, RISK_SOURCES, RISK_STATUSES,
+  RISK_CATEGORIES, RISK_METHODOLOGIES, RISK_SOURCES, RISK_STATUSES,
   riskAssessmentFormSchema, calculateRiskAssessment, summarizeRiskAssessments,
   buildRiskAssessmentMatrix, buildRiskAssessmentHeatMap, buildRiskAssessmentCharts,
   riskLevelColor, isOverdue, generateRiskNumber,
@@ -89,6 +90,9 @@ function ScoreField({ form, name, label }: {
 
 export function RiskAssessmentPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const productQuery = searchParams.get('product') || '';
+  const batchQuery = searchParams.get('batch') || '';
   const { user, profile } = useAuth();
   const role = profile?.role;
   const canCreate = cpvPermissions.canCreateRiskAssessment(role);
@@ -101,8 +105,8 @@ export function RiskAssessmentPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const [search, setSearch] = useState('');
-  const [productFilter, setProductFilter] = useState('all');
+  const [search, setSearch] = useState(batchQuery || '');
+  const [productFilter, setProductFilter] = useState(productQuery || 'all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [levelFilter, setLevelFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -119,6 +123,8 @@ export function RiskAssessmentPage() {
       productName: '',
       productCode: '',
       batchNumber: '',
+      title: '',
+      methodology: 'FMEA',
       riskCategory: 'Process Risk',
       riskSource: 'Manual Assessment',
       processStage: '',
@@ -140,6 +146,7 @@ export function RiskAssessmentPage() {
       linkedOosNumber: '',
       linkedChangeControlNumber: '',
       remarks: '',
+      changeReason: '',
     },
   });
 
@@ -154,7 +161,7 @@ export function RiskAssessmentPage() {
     setError(null);
     try {
       const [rows, prods] = await Promise.all([fetchRiskAssessmentRecords(), fetchProducts()]);
-      setRecords(rows);
+      setRecords(rows.filter((r) => !r.isDeleted));
       setProducts(prods);
     } catch {
       setError('Failed to load risk assessments.');
@@ -165,10 +172,18 @@ export function RiskAssessmentPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  useEffect(() => {
+    if (productQuery) setProductFilter(productQuery);
+  }, [productQuery]);
+
+  useEffect(() => {
+    if (batchQuery) setSearch(batchQuery);
+  }, [batchQuery]);
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return records.filter((r) => {
-      if (productFilter !== 'all' && r.productName !== productFilter) return false;
+      if (productFilter !== 'all' && r.productName !== productFilter && r.productCode !== productFilter) return false;
       if (categoryFilter !== 'all' && r.riskCategory !== categoryFilter) return false;
       if (levelFilter !== 'all' && r.riskLevel !== levelFilter) return false;
       if (statusFilter !== 'all' && r.riskStatus !== statusFilter) return false;
@@ -185,6 +200,14 @@ export function RiskAssessmentPage() {
   }, [records, search, productFilter, categoryFilter, levelFilter, statusFilter, ownerFilter, dateFrom, dateTo]);
 
   const summary = useMemo(() => summarizeRiskAssessments(records), [records]);
+  const avgHealth = useMemo(() => {
+    if (!records.length) return 0;
+    return Math.round(records.reduce((s, r) => {
+      const calc = calculateRiskAssessment(r.severityScore, r.occurrenceScore, r.detectionScore);
+      return s + (Number(r.healthScore) || calc.healthScore);
+    }, 0) / records.length);
+  }, [records]);
+  const capaSuggestedCount = useMemo(() => records.filter((r) => r.capaSuggested).length, [records]);
   const matrix = useMemo(() => buildRiskAssessmentMatrix(filtered), [filtered]);
   const heatMap = useMemo(() => buildRiskAssessmentHeatMap(filtered), [filtered]);
   const charts = useMemo(() => buildRiskAssessmentCharts(filtered), [filtered]);
@@ -212,19 +235,42 @@ export function RiskAssessmentPage() {
 
   const exportRegister = () => {
     downloadCsv('cpv-risk-register.csv',
-      ['Risk Number', 'Product', 'Batch', 'Category', 'Source', 'Description', 'S', 'O', 'D', 'RPN', 'Level', 'Status', 'Owner'],
-      filtered.map((r) => [
-        r.riskNumber, r.productName, r.batchNumber, r.riskCategory, r.riskSource,
-        r.riskDescription, r.severityScore, r.occurrenceScore, r.detectionScore,
-        r.rpnScore, r.riskLevel, r.riskStatus, r.riskOwner,
-      ]),
+      ['Risk Number', 'Product', 'Batch', 'Category', 'Methodology', 'Description', 'RPN', 'Residual RPN', 'Health', 'Level', 'Status', 'Owner'],
+      filtered.map((r) => {
+        const calc = calculateRiskAssessment(r.severityScore, r.occurrenceScore, r.detectionScore, {
+          severity: r.residualSeverity,
+          occurrence: r.residualOccurrence,
+          detection: r.residualDetection,
+        });
+        return [
+          r.riskNumber, r.productName, r.batchNumber, r.riskCategory,
+          r.methodology || 'FMEA',
+          r.riskDescription,
+          r.rpnScore,
+          r.residualRpn || calc.residualRpn || '',
+          Number(r.healthScore) || calc.healthScore,
+          r.riskLevel, r.riskStatus, r.riskOwner,
+        ];
+      }),
     );
     void logRiskExport(actor, 'register', filtered.length);
     toast.success('Risk register exported');
   };
 
   const columns: ColumnDef<RiskAssessmentRecord>[] = [
-    { key: 'riskNumber', header: 'Risk No.' },
+    {
+      key: 'riskNumber',
+      header: 'Risk No.',
+      render: (r) => (
+        <button
+          type="button"
+          className="font-mono text-left text-primary hover:underline"
+          onClick={() => router.push(`/cpv/risk-assessment/${r.id}`)}
+        >
+          {r.riskNumber}
+        </button>
+      ),
+    },
     { key: 'productName', header: 'Product' },
     { key: 'batchNumber', header: 'Batch' },
     { key: 'riskCategory', header: 'Category' },
@@ -254,7 +300,7 @@ export function RiskAssessmentPage() {
         description="Quality Risk Management and Risk Control based on ICH Q9"
         trail={[
           { label: 'Dashboard', href: '/dashboard' },
-          { label: 'Continued Process Verification', href: '/cpv/dashboard' },
+          { label: 'CPV', href: '/cpv/dashboard' },
           { label: 'Risk Assessment Worksheet' },
         ]}
         actions={
@@ -272,10 +318,35 @@ export function RiskAssessmentPage() {
             {canCreate && (
               <Button size="sm" className="gap-2" onClick={() => {
                 form.reset({
-                  ...form.formState.defaultValues,
+                  cpvProductId: '',
+                  productName: '',
+                  productCode: '',
+                  batchNumber: batchQuery || '',
+                  title: '',
+                  methodology: 'FMEA',
+                  riskCategory: 'Process Risk',
+                  riskSource: 'Manual Assessment',
+                  processStage: '',
+                  parameterType: 'CPP',
+                  parameterName: '',
+                  riskDescription: '',
+                  potentialImpact: '',
+                  potentialCause: '',
+                  existingControls: '',
+                  severityScore: 5,
+                  occurrenceScore: 4,
+                  detectionScore: 5,
                   riskOwner: profile?.full_name || '',
+                  mitigationAction: '',
                   targetCompletionDate: '',
-                } as RiskAssessmentFormData);
+                  effectivenessCheckRequired: true,
+                  linkedCapaNumber: '',
+                  linkedDeviationNumber: '',
+                  linkedOosNumber: '',
+                  linkedChangeControlNumber: '',
+                  remarks: '',
+                  changeReason: '',
+                });
                 setDialogOpen(true);
               }}>
                 <Plus className="h-4 w-4" />New Risk
@@ -285,16 +356,40 @@ export function RiskAssessmentPage() {
         }
       />
 
+      <div className="no-print flex flex-wrap gap-1.5">
+        {[
+          { href: batchQuery ? `/cpv/cpp?batch=${encodeURIComponent(batchQuery)}` : productQuery ? `/cpv/cpp?product=${encodeURIComponent(productQuery)}` : '/cpv/cpp', label: 'CPP' },
+          { href: productQuery ? `/cpv/cqa?product=${encodeURIComponent(productQuery)}` : '/cpv/cqa', label: 'CQA' },
+          { href: '/cpv/yield-monitoring', label: 'Yield' },
+          { href: '/cpv/environmental-monitoring', label: 'Environmental' },
+          { href: '/cpv/utility-monitoring', label: 'Utility' },
+          { href: '/cpv/process-capability', label: 'Process Capability' },
+          { href: productQuery ? `/cpv/trend-analysis?product=${encodeURIComponent(productQuery)}` : '/cpv/trend-analysis', label: 'Trend Analysis' },
+          { href: '/cpv/statistical-process-control', label: 'SPC' },
+          { href: batchQuery ? `/cpv/batch-registration?batch=${encodeURIComponent(batchQuery)}` : '/cpv/batch-registration', label: 'Batch' },
+          { href: '/qms/deviation', label: 'Deviation' },
+          { href: '/qms/capa', label: 'CAPA' },
+          { href: '/qms/change-control', label: 'Change Control' },
+          { href: '/admin/audit-trail', label: 'Audit Trail' },
+          { href: '/cpv/reports-analytics', label: 'Reports' },
+          { href: '/cpv/ai-analytics', label: 'AI Analytics' },
+        ].map((link) => (
+          <Link key={link.label} href={link.href} className="rounded-md border px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900">
+            {link.label}
+          </Link>
+        ))}
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
         <KpiCard label="Total Risks" value={summary.total} />
         <KpiCard label="Open" value={summary.open} tone="amber" />
-        <KpiCard label="Closed" value={summary.closed} tone="green" />
         <KpiCard label="Critical" value={summary.critical} tone="red" />
         <KpiCard label="High" value={summary.high} tone="amber" />
-        <KpiCard label="Medium" value={summary.medium} />
-        <KpiCard label="Low" value={summary.low} tone="green" />
-        <KpiCard label="CAPA Linked" value={summary.capaLinked} tone="blue" />
         <KpiCard label="Overdue" value={summary.overdue} tone={summary.overdue ? 'red' : 'green'} />
+        <KpiCard label="Avg Health" value={avgHealth} tone="blue" />
+        <KpiCard label="CAPA Suggested" value={capaSuggestedCount} tone={capaSuggestedCount ? 'amber' : 'green'} />
+        <KpiCard label="Closed" value={summary.closed} tone="green" />
+        <KpiCard label="CAPA Linked" value={summary.capaLinked} tone="blue" />
       </div>
 
       <Card>
@@ -448,7 +543,12 @@ export function RiskAssessmentPage() {
             <CardHeader><CardTitle className="text-base">Top 10 Risks by RPN</CardTitle></CardHeader>
             <CardContent className="space-y-2">
               {charts.topRisks.length ? charts.topRisks.map((r) => (
-                <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-sm">
+                <button
+                  key={r.id}
+                  type="button"
+                  className="flex w-full flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-left text-sm hover:bg-slate-50"
+                  onClick={() => router.push(`/cpv/risk-assessment/${r.id}`)}
+                >
                   <div>
                     <p className="font-mono font-semibold">{r.riskNumber}</p>
                     <p className="text-muted-foreground line-clamp-1">{r.riskDescription}</p>
@@ -458,7 +558,7 @@ export function RiskAssessmentPage() {
                     <RiskBadge level={r.riskLevel} />
                     {isOverdue(r) && <span className="text-xs text-red-600">Overdue</span>}
                   </div>
-                </div>
+                </button>
               )) : <EmptyState title="No risks" message="No risks recorded." />}
             </CardContent>
           </Card>
@@ -494,6 +594,25 @@ export function RiskAssessmentPage() {
                   <FormItem>
                     <FormLabel>Batch Number</FormLabel>
                     <FormControl><Input {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={form.control} name="title" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Title (optional)</FormLabel>
+                    <FormControl><Input {...field} placeholder="Short risk title" /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={form.control} name="methodology" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Methodology</FormLabel>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
+                      <SelectContent>
+                        {RISK_METHODOLOGIES.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
                     <FormMessage />
                   </FormItem>
                 )} />
@@ -561,6 +680,13 @@ export function RiskAssessmentPage() {
                   <FormItem>
                     <FormLabel>Target Completion Date</FormLabel>
                     <FormControl><Input type="date" {...field} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={form.control} name="changeReason" render={({ field }) => (
+                  <FormItem className="sm:col-span-2">
+                    <FormLabel>Change Reason * (ALCOA+)</FormLabel>
+                    <FormControl><Textarea {...field} rows={2} placeholder="Minimum 5 characters" /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )} />

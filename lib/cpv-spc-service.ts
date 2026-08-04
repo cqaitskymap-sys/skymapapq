@@ -1,13 +1,13 @@
 import {
-  addDoc, collection, getDocs, limit, orderBy, query, where,
+  collection, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
-import { createRecord, getRecord, getRecords, updateRecord, type DocumentActor } from '@/lib/firestore';
-import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
+import { isCpvProductOperational } from '@/lib/cpv-product-master';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
-import { createAlert } from '@/lib/cpv-module-service';
 import { fetchCppResults } from '@/lib/cpv-cpp-monitoring-service';
 import { fetchCqaResults } from '@/lib/cpv-cqa-monitoring-service';
 import { fetchYieldRecords } from '@/lib/cpv-yield-monitoring-service';
@@ -18,8 +18,6 @@ import { fetchHoldTimeRecords } from '@/lib/cpv-hold-time-monitoring-service';
 import {
   CONTROL_CHARTS_COLLECTION,
   CONTROL_CHARTS_LEGACY,
-  SPC_VIOLATIONS_COLLECTION,
-  SPC_MODULE,
   buildSpcRecordId,
   calculateSpcAnalysis,
   dataSourceForParameterType,
@@ -29,7 +27,9 @@ import {
   type SpcCalculationResult,
   type SpcSourcePoint,
   type SpcRuleViolationRecord,
+  type SpcChartPoint,
 } from '@/lib/cpv-spc-records';
+import { polishRecommendationText } from '@/lib/ai/client';
 
 export interface SpcActor {
   id: string;
@@ -37,39 +37,16 @@ export interface SpcActor {
   role?: string;
 }
 
-function actorCtx(actor: SpcActor) {
-  return { moduleName: SPC_MODULE, actor: { id: actor.id, name: actor.name } as DocumentActor };
-}
-
-async function logSpcAudit(
-  actionType: string,
-  recordId: string,
-  actor: SpcActor,
-  oldVal?: unknown,
-  newVal?: unknown,
-  docNo?: string,
-) {
-  await createAuditLog({
-    moduleName: SPC_MODULE,
-    collectionName: CONTROL_CHARTS_COLLECTION,
-    recordId,
-    documentNumber: docNo,
-    actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    user: { id: actor.id, name: actor.name },
-    status: 'Success',
-  });
-  await writeAuditTrail({
-    collectionName: CONTROL_CHARTS_COLLECTION,
-    documentId: recordId,
-    action: actionType,
-    oldValue: oldVal,
-    newValue: newVal,
-    userId: actor.id,
-    userName: actor.name,
-    moduleName: SPC_MODULE,
-  });
+function cfErrorMessage(e: unknown, fallback: string): string {
+  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string') {
+    const msg = (e as { message: string }).message;
+    if (msg.includes('FirebaseError:') || msg.includes('functions/')) {
+      const cleaned = msg.replace(/^FirebaseError:\s*/i, '').replace(/^functions\/[\w-]+:\s*/i, '');
+      return cleaned || fallback;
+    }
+    return msg || fallback;
+  }
+  return fallback;
 }
 
 function str(v: unknown, fb = ''): string {
@@ -80,6 +57,10 @@ function str(v: unknown, fb = ''): string {
 function num(v: unknown, fb = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fb;
+}
+
+function chartPoints(v: unknown): SpcChartPoint[] {
+  return Array.isArray(v) ? v as SpcChartPoint[] : [];
 }
 
 function normalizeRecord(raw: Record<string, unknown>): SpcRecord {
@@ -94,6 +75,21 @@ function normalizeRecord(raw: Record<string, unknown>): SpcRecord {
     cpvProductId: str(raw.cpvProductId || raw.cpv_product_id),
     productName: str(raw.productName || raw.product_name),
     productCode,
+    spcCode: str(raw.spcCode || raw.spc_code),
+    studyNumber: str(raw.studyNumber || raw.study_number),
+    productVersion: str(raw.productVersion || raw.product_version),
+    batchNumber: str(raw.batchNumber || raw.batch_number),
+    manufacturingOrder: str(raw.manufacturingOrder || raw.manufacturing_order),
+    process: str(raw.process),
+    processStep: str(raw.processStep || raw.process_step),
+    equipmentId: str(raw.equipmentId || raw.equipment_id),
+    equipmentName: str(raw.equipmentName || raw.equipment_name),
+    machine: str(raw.machine),
+    department: str(raw.department),
+    productionLine: str(raw.productionLine || raw.production_line),
+    operator: str(raw.operator),
+    shift: str(raw.shift),
+    site: str(raw.site),
     chartType: (str(raw.chartType || raw.chart_type, 'Individuals Chart') as SpcRecord['chartType']),
     dataSource: (str(raw.dataSource || raw.data_source, 'CPP Results') as SpcRecord['dataSource']),
     parameterType: (str(raw.parameterType || raw.parameter_type, 'CPP') as SpcRecord['parameterType']),
@@ -102,8 +98,18 @@ function normalizeRecord(raw: Record<string, unknown>): SpcRecord {
     reviewPeriodFrom: str(raw.reviewPeriodFrom || raw.review_period_from),
     reviewPeriodTo: str(raw.reviewPeriodTo || raw.review_period_to),
     subgroupSize: num(raw.subgroupSize ?? raw.subgroup_size, 4),
+    sampleSize: num(raw.sampleSize ?? raw.sample_size, 1),
+    samplingFrequency: str(raw.samplingFrequency || raw.sampling_frequency),
+    targetValue: raw.targetValue == null || raw.targetValue === '' ? undefined : num(raw.targetValue),
+    effectiveDate: str(raw.effectiveDate || raw.effective_date),
+    description: str(raw.description),
     batchCount: num(raw.batchCount ?? raw.batch_count),
     dataPointsCount: num(raw.dataPointsCount ?? raw.data_points_count),
+    mean: num(raw.mean),
+    median: num(raw.median),
+    mode: raw.mode == null || raw.mode === '' ? null : num(raw.mode),
+    range: num(raw.range),
+    variance: num(raw.variance),
     centerLine: num(raw.centerLine ?? raw.center_line),
     upperControlLimit: num(raw.upperControlLimit ?? raw.upper_control_limit ?? raw.ucl),
     lowerControlLimit: num(raw.lowerControlLimit ?? raw.lower_control_limit ?? raw.lcl),
@@ -112,27 +118,64 @@ function normalizeRecord(raw: Record<string, unknown>): SpcRecord {
     movingRangeAverage: num(raw.movingRangeAverage ?? raw.moving_range_average ?? raw.mrBar),
     averageRange: num(raw.averageRange ?? raw.average_range ?? raw.rBar),
     standardDeviation: num(raw.standardDeviation ?? raw.standard_deviation),
+    cp: num(raw.cp),
+    cpk: num(raw.cpk),
+    cpu: num(raw.cpu),
+    cpl: num(raw.cpl),
+    pp: num(raw.pp),
+    ppk: num(raw.ppk),
+    sigmaLevel: num(raw.sigmaLevel ?? raw.sigma_level),
+    zScoreMean: num(raw.zScoreMean ?? raw.z_score_mean),
+    confidenceIntervalLow: num(raw.confidenceIntervalLow ?? raw.confidence_interval_low),
+    confidenceIntervalHigh: num(raw.confidenceIntervalHigh ?? raw.confidence_interval_high),
+    skewness: num(raw.skewness),
+    kurtosis: num(raw.kurtosis),
+    outlierCount: num(raw.outlierCount ?? raw.outlier_count),
+    ewmaLast: num(raw.ewmaLast ?? raw.ewma_last),
+    cusumHighLast: num(raw.cusumHighLast ?? raw.cusum_high_last),
+    cusumLowLast: num(raw.cusumLowLast ?? raw.cusum_low_last),
+    ewmaData: chartPoints(raw.ewmaData ?? raw.ewma_data),
+    cusumHighData: chartPoints(raw.cusumHighData ?? raw.cusum_high_data),
+    cusumLowData: chartPoints(raw.cusumLowData ?? raw.cusum_low_data),
+    sChartData: chartPoints(raw.sChartData ?? raw.s_chart_data),
+    processDriftDetected: Boolean(raw.processDriftDetected ?? raw.process_drift_detected),
+    specialCauseVariation: Boolean(raw.specialCauseVariation ?? raw.special_cause_variation),
+    commonCauseOnly: Boolean(raw.commonCauseOnly ?? raw.common_cause_only),
+    healthScore: num(raw.healthScore ?? raw.health_score),
+    confidenceScore: num(raw.confidenceScore ?? raw.confidence_score),
+    aiRecommendation: str(raw.aiRecommendation ?? raw.ai_recommendation),
+    goldenBatchNumber: str(raw.goldenBatchNumber ?? raw.golden_batch_number),
+    goldenBatchDelta: num(raw.goldenBatchDelta ?? raw.golden_batch_delta),
+    forecastNext: num(raw.forecastNext ?? raw.forecast_next),
+    westernElectricCount: num(raw.westernElectricCount ?? raw.western_electric_count),
+    nelsonRuleCount: num(raw.nelsonRuleCount ?? raw.nelson_rule_count),
     spcStatus: (str(raw.spcStatus || raw.spc_status, 'Insufficient Data') as SpcRecord['spcStatus']),
     ruleViolationsCount: num(raw.ruleViolationsCount ?? raw.rule_violations_count),
     outOfControlPoints: num(raw.outOfControlPoints ?? raw.out_of_control_points),
     riskLevel: str(raw.riskLevel || raw.risk_level, 'Low') as SpcRecord['riskLevel'],
     capaSuggested: Boolean(raw.capaSuggested || raw.capa_suggested),
+    deviationRequired: Boolean(raw.deviationRequired ?? raw.deviation_required),
     conclusion: str(raw.conclusion),
     recommendation: str(raw.recommendation),
+    changeReason: str(raw.changeReason ?? raw.change_reason),
     generatedBy: str(raw.generatedBy || raw.generated_by),
     generatedDate: str(raw.generatedDate || raw.generated_date || raw.createdAt),
     reviewedBy: str(raw.reviewedBy || raw.reviewed_by),
     reviewDate: str(raw.reviewDate || raw.review_date),
+    approvedBy: str(raw.approvedBy ?? raw.approved_by),
+    approvalDate: str(raw.approvalDate ?? raw.approval_date),
     status: (workflowStatuses.includes(rawStatus)
       ? rawStatus
       : str(raw.workflowStatus, 'Generated')) as SpcRecord['status'],
     remarks: str(raw.remarks),
     linkedRiskId: str(raw.linkedRiskId || raw.linked_risk_id),
+    linkedDeviationNumber: str(raw.linkedDeviationNumber ?? raw.linked_deviation_number),
+    linkedCapaNumber: str(raw.linkedCapaNumber ?? raw.linked_capa_number),
     isLocked: Boolean(raw.isLocked || raw.is_locked),
-    chartData: Array.isArray(raw.chartData) ? raw.chartData as SpcRecord['chartData'] : [],
-    movingRangeData: Array.isArray(raw.movingRangeData) ? raw.movingRangeData as SpcRecord['movingRangeData'] : [],
-    xbarChartData: Array.isArray(raw.xbarChartData) ? raw.xbarChartData as SpcRecord['xbarChartData'] : [],
-    rChartData: Array.isArray(raw.rChartData) ? raw.rChartData as SpcRecord['rChartData'] : [],
+    chartData: chartPoints(raw.chartData ?? raw.chart_data),
+    movingRangeData: chartPoints(raw.movingRangeData ?? raw.moving_range_data),
+    xbarChartData: chartPoints(raw.xbarChartData ?? raw.xbar_chart_data),
+    rChartData: chartPoints(raw.rChartData ?? raw.r_chart_data),
     violations: Array.isArray(raw.violations) ? raw.violations as SpcRuleViolationRecord[] : [],
     sourcePreview: Array.isArray(raw.sourcePreview) ? raw.sourcePreview as SpcSourcePoint[] : [],
     createdAt: str(raw.createdAt || raw.created_at),
@@ -345,273 +388,232 @@ export function previewSpcCalculation(
   return calculateSpcAnalysis(sourceData, form, spcId);
 }
 
-async function saveViolations(
-  spcRecordId: string,
-  violations: SpcRuleViolationRecord[],
-  actor: SpcActor,
-): Promise<void> {
-  if (!isFirebaseConfigured() || !violations.length) return;
-  try {
-    const now = new Date().toISOString();
-    for (const v of violations) {
-      await addDoc(collection(getFirebaseFirestore(), SPC_VIOLATIONS_COLLECTION), {
-        ...v,
-        spcRecordId,
-        createdAt: now,
-        updatedAt: now,
-        createdBy: actor.id,
-        updatedBy: actor.id,
-        isDeleted: false,
-      });
-    }
-  } catch (e) {
-    console.error('saveViolations failed', e);
-  }
-}
-
-async function maybeCreateRiskAndAlert(record: SpcRecord, actor: SpcActor): Promise<string> {
-  let riskId = '';
-  const needsRisk = record.spcStatus === 'Out Of Control' || record.spcStatus === 'Warning';
-  if (needsRisk) {
-    try {
-      const { createRisk } = await import('@/lib/cpv-service');
-      const risk = await createRisk({
-        productName: record.productName,
-        batchNo: '',
-        factor: record.parameterName,
-        riskDescription: `SPC ${record.spcStatus} for ${record.parameterName}`,
-        occurrence: record.outOfControlPoints > 0 ? 4 : 3,
-        severity: record.riskLevel === 'Critical' ? 5 : record.riskLevel === 'High' ? 4 : 3,
-        detectability: 3,
-        mitigation: 'Review control chart and investigate special cause variation.',
-        owner: actor.name,
-        dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      }, { id: actor.id, name: actor.name, role: actor.role || 'qa' }, 0);
-      if (risk) riskId = String((risk as { id?: string }).id || '');
-      await logSpcAudit('risk created', record.id, actor, null, riskId, record.spcRecordId);
-    } catch { /* optional */ }
-  }
-  if (record.capaSuggested || record.outOfControlPoints > 0) {
-    try {
-      await createAlert({
-        alertType: record.outOfControlPoints > 0 ? 'OOT' : 'Trend Deteriorating',
-        severity: record.riskLevel === 'Critical' ? 'Critical' : 'High',
-        module: SPC_MODULE,
-        productName: record.productName,
-        batchNo: '',
-        parameterName: record.parameterName,
-        message: `SPC ${record.spcStatus}: ${record.ruleViolationsCount} violations`,
-        observedValue: record.centerLine,
-        recordId: record.id,
-      }, { id: actor.id, name: actor.name, role: actor.role });
-      await logSpcAudit('CAPA suggested', record.id, actor, null, { violations: record.ruleViolationsCount }, record.spcRecordId);
-    } catch { /* optional */ }
-    if (isFirebaseConfigured()) {
-      try {
-        await addDoc(collection(getFirebaseFirestore(), 'notifications'), {
-          title: 'SPC Alert',
-          message: `${record.parameterName}: ${record.spcStatus}`,
-          module: SPC_MODULE,
-          record_id: record.id,
-          target_roles: ['qa', 'cpv'],
-          read: false,
-          created_at: new Date().toISOString(),
-        });
-      } catch { /* optional */ }
-    }
-  }
-  return riskId;
-}
-
 export async function createSpcRecord(
   form: SpcFormData,
   sourceData: SpcSourcePoint[],
-  actor: SpcActor,
+  _actor: SpcActor,
 ): Promise<{ result: SpcRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
+    if (!form.changeReason || form.changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
     const product = await fetchCpvProductById(form.cpvProductId);
-    if (product?.cpvStatus === 'Inactive') return { result: null, error: 'Inactive product — SPC generation not allowed.' };
-
-    const spcRecordId = buildSpcRecordId(form.productCode, form.parameterCode);
-    const calc = calculateSpcAnalysis(sourceData, form, spcRecordId);
-    if (calc.dataPointsCount < 5) return { result: null, error: 'At least 5 numeric data points required for SPC.' };
-
-    const today = new Date().toISOString().split('T')[0];
-    const payload = {
-      ...form,
-      spcRecordId,
-      batchCount: calc.batchCount,
-      dataPointsCount: calc.dataPointsCount,
-      centerLine: calc.centerLine,
-      upperControlLimit: calc.upperControlLimit,
-      lowerControlLimit: calc.lowerControlLimit,
-      upperSpecificationLimit: calc.upperSpecificationLimit,
-      lowerSpecificationLimit: calc.lowerSpecificationLimit,
-      movingRangeAverage: calc.movingRangeAverage,
-      averageRange: calc.averageRange,
-      standardDeviation: calc.standardDeviation,
-      spcStatus: calc.spcStatus,
-      ruleViolationsCount: calc.ruleViolationsCount,
-      outOfControlPoints: calc.outOfControlPoints,
-      riskLevel: calc.riskLevel,
-      capaSuggested: calc.capaSuggested,
-      generatedBy: actor.name,
-      generatedDate: today,
-      status: 'Generated' as const,
-      isLocked: false,
-      linkedRiskId: '',
-      chartData: calc.chartData,
-      movingRangeData: calc.movingRangeData,
-      xbarChartData: calc.xbarChartData,
-      rChartData: calc.rChartData,
-      violations: calc.violations,
-      sourcePreview: sourceData.slice(0, 50),
-      reviewedBy: '',
-      reviewDate: '',
-      createdByName: actor.name,
-      updatedByName: actor.name,
-    };
-
-    const created = await createRecord(
-      CONTROL_CHARTS_COLLECTION,
-      payload as Omit<SpcRecord, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted'>,
-      actorCtx(actor),
+    if (product && !isCpvProductOperational(product.cpvStatus)) {
+      return { result: null, error: 'Selected CPV product is not operational.' };
+    }
+    if (sourceData.length < 5) {
+      return { result: null, error: 'At least 5 numeric data points required for SPC.' };
+    }
+    const preview = previewSpcCalculation(form, sourceData);
+    const aiRecommendation = await polishRecommendationText(preview.aiRecommendation, {
+      module: 'SPC',
+      parameterName: form.parameterName,
+      productName: form.productName,
+      spcStatus: preview.spcStatus,
+      ruleViolations: preview.ruleViolationsCount,
+    });
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'createAdminSpcRecord',
     );
-    let result = normalizeRecord(created as unknown as Record<string, unknown>);
-
-    await saveViolations(result.id, calc.violations.map((v) => ({ ...v, spcRecordId: result.id })), actor);
-
-    const riskId = await maybeCreateRiskAndAlert(result, actor);
-    if (riskId) {
-      const updated = await updateRecord(CONTROL_CHARTS_COLLECTION, result.id, { linkedRiskId: riskId }, actorCtx(actor));
-      if (updated) result = normalizeRecord(updated as unknown as Record<string, unknown>);
-    }
-
-    await logSpcAudit('generate SPC chart', result.id, actor, null, result, result.spcRecordId);
-    await logSpcAudit('control limit calculation', result.id, actor, null, calc, result.spcRecordId);
-    if (calc.violations.length) {
-      await logSpcAudit('rule violation detected', result.id, actor, null, calc.violations.length, result.spcRecordId);
-    }
-    return { result, error: null };
+    const result = await fn({
+      ...form,
+      points: sourceData,
+      changeReason: form.changeReason,
+      aiRecommendation,
+    });
+    return { result: normalizeRecord(result.data), error: null };
   } catch (e) {
     console.error('createSpcRecord failed', e);
-    return { result: null, error: 'Failed to save SPC record.' };
+    return { result: null, error: cfErrorMessage(e, 'Failed to save SPC record.') };
   }
 }
 
 export async function regenerateSpcRecord(
   id: string,
-  actor: SpcActor,
+  _actor: SpcActor,
   existing: SpcRecord,
   qaOverride = false,
+  options?: { esignConfirmed?: boolean; changeReason?: string; sourceData?: SpcSourcePoint[] },
 ): Promise<{ result: SpcRecord | null; error: string | null }> {
-  if (existing.isLocked && existing.status === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Approved record is locked. QA override required.' };
-  }
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
   try {
-    const sourceData = await fetchSpcSourceData(
-      existing.dataSource,
-      existing.productName,
-      existing.parameterName,
-      existing.reviewPeriodFrom,
-      existing.reviewPeriodTo,
-    );
-    const calc = calculateSpcAnalysis(sourceData, existing as SpcFormData, existing.spcRecordId);
-    if (calc.dataPointsCount < 5) {
-      return { result: null, error: 'At least 5 numeric data points required for SPC.' };
+    const changeReason = options?.changeReason || existing.changeReason || '';
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
     }
-    const updates = {
-      batchCount: calc.batchCount,
-      dataPointsCount: calc.dataPointsCount,
-      centerLine: calc.centerLine,
-      upperControlLimit: calc.upperControlLimit,
-      lowerControlLimit: calc.lowerControlLimit,
-      upperSpecificationLimit: calc.upperSpecificationLimit,
-      lowerSpecificationLimit: calc.lowerSpecificationLimit,
-      movingRangeAverage: calc.movingRangeAverage,
-      averageRange: calc.averageRange,
-      standardDeviation: calc.standardDeviation,
-      spcStatus: calc.spcStatus,
-      ruleViolationsCount: calc.ruleViolationsCount,
-      outOfControlPoints: calc.outOfControlPoints,
-      riskLevel: calc.riskLevel,
-      capaSuggested: calc.capaSuggested,
-      chartData: calc.chartData,
-      movingRangeData: calc.movingRangeData,
-      xbarChartData: calc.xbarChartData,
-      rChartData: calc.rChartData,
-      violations: calc.violations,
-      sourcePreview: sourceData.slice(0, 50),
-      status: 'Generated' as const,
-      isLocked: qaOverride ? false : existing.isLocked,
-      generatedBy: actor.name,
-      generatedDate: new Date().toISOString().split('T')[0],
-      updatedByName: actor.name,
-    };
-    const updated = await updateRecord(CONTROL_CHARTS_COLLECTION, id, updates as Partial<SpcRecord>, actorCtx(actor));
-    if (!updated) return { result: null, error: 'Not found.' };
-    const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-    await saveViolations(result.id, calc.violations.map((v) => ({ ...v, spcRecordId: result.id })), actor);
-    await logSpcAudit(qaOverride ? 'QA override' : 're-generate SPC chart', id, actor, existing, result, result.spcRecordId);
-    return { result, error: null };
+    if (existing.isLocked && existing.status === 'Approved' && !qaOverride) {
+      return { result: null, error: 'Approved record is locked. QA override required.' };
+    }
+    if (qaOverride && options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required for QA override.' };
+    }
+    let sourceData = options?.sourceData;
+    if (!sourceData?.length) {
+      sourceData = await fetchSpcSourceData(
+        existing.dataSource,
+        existing.productName,
+        existing.parameterName,
+        existing.reviewPeriodFrom,
+        existing.reviewPeriodTo,
+      );
+    }
+    if ((sourceData?.length || 0) < 5 && existing.sourcePreview.length < 5) {
+      return { result: null, error: 'Insufficient source data to regenerate.' };
+    }
+    const points = sourceData && sourceData.length >= 5 ? sourceData : existing.sourcePreview;
+    const preview = previewSpcCalculation(
+      {
+        ...existing,
+        parameterName: existing.parameterName,
+        productName: existing.productName,
+        subgroupSize: existing.subgroupSize,
+        changeReason,
+      } as SpcFormData,
+      points,
+    );
+    const aiRecommendation = await polishRecommendationText(preview.aiRecommendation, {
+      module: 'SPC',
+      parameterName: existing.parameterName,
+      productName: existing.productName,
+      spcStatus: preview.spcStatus,
+      ruleViolations: preview.ruleViolationsCount,
+    });
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'regenerateAdminSpcRecord',
+    );
+    const result = await fn({
+      ...existing,
+      id,
+      points,
+      changeReason,
+      qaOverride,
+      esignConfirmed: options?.esignConfirmed === true,
+      aiRecommendation,
+    });
+    return { result: normalizeRecord(result.data), error: null };
   } catch (e) {
     console.error('regenerateSpcRecord failed', e);
-    return { result: null, error: 'Regeneration failed.' };
+    return { result: null, error: cfErrorMessage(e, 'Regeneration failed.') };
   }
 }
 
-export async function reviewSpcRecord(id: string, actor: SpcActor, existing: SpcRecord) {
-  const updated = await updateRecord(CONTROL_CHARTS_COLLECTION, id, {
-    status: 'Under Review',
-    reviewedBy: actor.name,
-    reviewDate: new Date().toISOString().split('T')[0],
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-  await logSpcAudit('review SPC', id, actor, existing.status, 'Under Review', result.spcRecordId);
-  return { result, error: null };
-}
-
-export async function approveSpcRecord(id: string, actor: SpcActor, existing: SpcRecord, qaOverride = false) {
-  if (existing.isLocked && existing.status === 'Approved' && !qaOverride) {
-    return { result: null, error: 'Already approved.' };
+export async function reviewSpcRecord(
+  id: string,
+  _actor: SpcActor,
+  _existing: SpcRecord,
+  changeReason = 'Submitted for QA review',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'reviewAdminSpcRecord',
+    );
+    const result = await fn({ id, changeReason });
+    return { result: normalizeRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to submit review.') };
   }
-  const updated = await updateRecord(CONTROL_CHARTS_COLLECTION, id, {
-    status: 'Approved',
-    isLocked: true,
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-  await logSpcAudit(qaOverride ? 'QA override' : 'approve SPC', id, actor, existing.status, 'Approved', result.spcRecordId);
-  return { result, error: null };
 }
 
-export async function rejectSpcRecord(id: string, actor: SpcActor, existing: SpcRecord) {
-  const updated = await updateRecord(CONTROL_CHARTS_COLLECTION, id, {
-    status: 'Rejected',
-    updatedByName: actor.name,
-  }, actorCtx(actor));
-  if (!updated) return { result: null, error: 'Not found.' };
-  const result = normalizeRecord(updated as unknown as Record<string, unknown>);
-  await logSpcAudit('reject SPC', id, actor, existing.status, 'Rejected', result.spcRecordId);
-  return { result, error: null };
+export async function approveSpcRecord(
+  id: string,
+  _actor: SpcActor,
+  _existing: SpcRecord,
+  changeReason?: string,
+  options?: { esignConfirmed?: boolean },
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const reason = changeReason || 'Approved by QA reviewer';
+    if (!reason || reason.trim().length < 5) {
+      return { result: null, error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { result: null, error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'approveAdminSpcRecord',
+    );
+    const result = await fn({ id, changeReason: reason, esignConfirmed: true });
+    return { result: normalizeRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to approve.') };
+  }
+}
+
+export async function rejectSpcRecord(
+  id: string,
+  _actor: SpcActor,
+  _existing: SpcRecord,
+  changeReason = 'Rejected by QA',
+) {
+  if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  try {
+    const fn = httpsCallable<Record<string, unknown>, Record<string, unknown>>(
+      getFirebaseFunctions(),
+      'rejectAdminSpcRecord',
+    );
+    const result = await fn({ id, changeReason });
+    return { result: normalizeRecord(result.data), error: null };
+  } catch (e) {
+    return { result: null, error: cfErrorMessage(e, 'Failed to reject.') };
+  }
+}
+
+export async function softDeleteSpcRecord(
+  id: string,
+  _actor: SpcActor,
+  changeReason: string,
+  options?: { esignConfirmed?: boolean },
+): Promise<{ error: string | null }> {
+  if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  try {
+    if (!changeReason || changeReason.trim().length < 5) {
+      return { error: 'Change reason (min 5 characters) is required.' };
+    }
+    if (options?.esignConfirmed !== true) {
+      return { error: 'Electronic signature confirmation required.' };
+    }
+    const fn = httpsCallable(getFirebaseFunctions(), 'softDeleteAdminSpcRecord');
+    await fn({ id, changeReason, esignConfirmed: true });
+    return { error: null };
+  } catch (e) {
+    return { error: cfErrorMessage(e, 'Failed to archive.') };
+  }
 }
 
 export async function fetchSpcAuditTrail(recordId: string) {
   if (!isFirebaseConfigured()) return [];
   try {
-    const snap = await getDocs(query(collection(getFirebaseFirestore(), 'audit_trail'), where('documentId', '==', recordId), limit(50)));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap = await getDocs(query(
+      collection(getFirebaseFirestore(), 'audit_trail'),
+      where('documentId', '==', recordId),
+      limit(50),
+    ));
+    if (!snap.empty) return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const snap2 = await getDocs(query(
+      collection(getFirebaseFirestore(), 'audit_trail'),
+      where('recordId', '==', recordId),
+      limit(50),
+    ));
+    return snap2.docs.map((d) => ({ id: d.id, ...d.data() }));
   } catch {
     return [];
   }
 }
 
 export async function logSpcExport(actor: SpcActor, type: string, count: number) {
-  await logSpcAudit(`export SPC ${type}`, 'export', actor, null, { type, count });
+  try {
+    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminSpcExport');
+    await fn({ count, format: type || 'CSV', changeReason: `Export by ${actor.name}` });
+  } catch (e) {
+    console.warn('logSpcExport CF failed (non-blocking)', e);
+  }
 }
 
 export async function fetchParametersForSpc(dataSource: string, productName: string): Promise<string[]> {
@@ -645,21 +647,15 @@ export async function fetchParametersForSpc(dataSource: string, productName: str
 
 export async function previewSpcSourceData(
   form: SpcFormData,
-  actor: SpcActor,
+  _actor: SpcActor,
 ): Promise<SpcSourcePoint[]> {
-  const data = await fetchSpcSourceData(
+  return fetchSpcSourceData(
     form.dataSource,
     form.productName,
     form.parameterName,
     form.reviewPeriodFrom,
     form.reviewPeriodTo,
   );
-  await logSpcAudit('source data preview', 'preview', actor, null, {
-    product: form.productName,
-    parameter: form.parameterName,
-    count: data.length,
-  }, form.productCode);
-  return data;
 }
 
 export { dataSourceForParameterType, parameterTypeForDataSource };

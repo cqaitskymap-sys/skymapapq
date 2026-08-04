@@ -21,7 +21,7 @@ export function AdminAuthGuard({
   requireManageUsers,
   requireManageMaster,
 }: AdminAuthGuardProps) {
-  const { user, loading: authLoading } = useAuth();
+  const { user, profile, loading: authLoading, signOut } = useAuth();
   const perms = useAdminPermissions();
   const router = useRouter();
   const pathname = usePathname();
@@ -32,6 +32,9 @@ export function AdminAuthGuard({
     if (!user) {
       clearAuthSessionCookies();
       router.replace('/auth/login?redirect=/admin');
+      return;
+    }
+    if (profile && (!profile.is_active || profile.access_status === 'pending')) {
       return;
     }
     if (!perms.canAccessAdmin) {
@@ -55,6 +58,7 @@ export function AdminAuthGuard({
     }
   }, [
     user,
+    profile,
     authLoading,
     perms.loading,
     perms.canAccessAdmin,
@@ -87,6 +91,29 @@ export function AdminAuthGuard({
       </div>
     );
   }
+
+  if (!profile || !profile.is_active || profile.access_status === 'pending') {
+    return (
+      <div className="mx-auto mt-12 max-w-lg space-y-4 p-6 text-center">
+        <p className="text-sm text-muted-foreground">
+          {!profile
+            ? 'Your profile could not be loaded. Sign out and try again.'
+            : 'Your account is pending approval or inactive.'}
+        </p>
+        <button
+          type="button"
+          className="text-sm text-blue-600 underline"
+          onClick={async () => {
+            await signOut();
+            router.replace('/auth/login');
+          }}
+        >
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
   if (!perms.canAccessAdmin) {
     return (
       <div className="space-y-4 p-6">

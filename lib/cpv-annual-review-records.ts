@@ -84,6 +84,7 @@ export interface CpvReviewMetrics {
   releasedBatches: number;
   rejectedBatches: number;
   holdBatches: number;
+  batchAcceptanceRate: number;
   cppCompliancePct: number;
   cqaCompliancePct: number;
   yieldAverage: number;
@@ -91,16 +92,41 @@ export interface CpvReviewMetrics {
   oosCount: number;
   deviationCount: number;
   capaCount: number;
+  changeControlCount: number;
   openRiskCount: number;
   highRiskCount: number;
   criticalOpenRiskCount: number;
   criticalOosOpen: number;
   repeatedOot: boolean;
+  repeatedDeviation: boolean;
   sterilityEndotoxinFailure: boolean;
   averageCp: number;
   averageCpk: number;
   averagePp: number;
   averagePpk: number;
+  sigmaLevel: number;
+  overallCompliancePct: number;
+  calibrationCompliancePct: number;
+  trainingCompliancePct: number;
+  maintenanceEffectivenessPct: number;
+  supplierPerformancePct: number;
+  complaintRate: number;
+  capaEffectivenessPct: number;
+}
+
+export interface CpvReviewAiInsights {
+  processHealthScore: number;
+  productHealthScore: number;
+  complianceScore: number;
+  confidenceScore: number;
+  riskScore: number;
+  aiExecutiveSummary: string;
+  aiQualityReview: string;
+  aiRiskPrediction: string;
+  aiPreventiveRecommendations: string;
+  capabilityReductionDetected: boolean;
+  negativeTrendDetected: boolean;
+  escalationRequired: boolean;
 }
 
 export interface CpvReviewSectionRecord {
@@ -135,12 +161,26 @@ export interface CpvAnnualReviewRecord extends Record<string, unknown> {
   cpvReviewNumber: string;
   productName: string;
   productCode: string;
+  productFamily: string;
+  productVersion: string;
   genericName: string;
   strength: string;
   dosageForm: string;
+  site: string;
+  plant: string;
+  department: string;
+  batchRange: string;
+  manufacturingCampaign: string;
   reviewPeriodFrom: string;
   reviewPeriodTo: string;
   reviewYear: number;
+  reviewOwner: string;
+  effectiveDate: string;
+  approvalDate: string;
+  nextReviewDate: string;
+  version: string;
+  description: string;
+  changeReason: string;
   totalBatchesReviewed: number;
   totalCppParametersReviewed: number;
   totalCqaParametersReviewed: number;
@@ -152,6 +192,12 @@ export interface CpvAnnualReviewRecord extends Record<string, unknown> {
   averagePpk: number;
   overallProcessStatus: OverallProcessStatus;
   overallRiskLevel: OverallRiskLevel;
+  processHealthScore: number;
+  productHealthScore: number;
+  complianceScore: number;
+  confidenceScore: number;
+  riskScore: number;
+  aiInsights: CpvReviewAiInsights;
   executiveSummary: string;
   conclusion: string;
   recommendations: string;
@@ -159,6 +205,7 @@ export interface CpvAnnualReviewRecord extends Record<string, unknown> {
   reviewedBy: string;
   approvedBy: string;
   reviewStatus: CpvReviewStatus;
+  isLocked: boolean;
   metrics: CpvReviewMetrics;
   snapshot: Record<string, unknown>;
   sections: CpvReviewSectionRecord[];
@@ -188,14 +235,27 @@ const requiredText = z.string().trim().min(1, 'Required');
 export const cpvReviewFormSchema = z.object({
   productName: requiredText,
   productCode: z.string().trim().optional().default(''),
+  productFamily: z.string().trim().optional().default(''),
+  productVersion: z.string().trim().optional().default(''),
   genericName: z.string().trim().optional().default(''),
   strength: z.string().trim().optional().default(''),
   dosageForm: z.string().trim().optional().default(''),
+  site: z.string().trim().optional().default(''),
+  plant: z.string().trim().optional().default(''),
+  department: z.string().trim().optional().default(''),
+  batchRange: z.string().trim().optional().default(''),
+  manufacturingCampaign: z.string().trim().optional().default(''),
   reviewPeriodFrom: requiredText,
   reviewPeriodTo: requiredText,
+  reviewOwner: z.string().trim().optional().default(''),
+  effectiveDate: z.string().trim().optional().default(''),
+  nextReviewDate: z.string().trim().optional().default(''),
+  version: z.string().trim().optional().default('1.0'),
+  description: z.string().trim().optional().default(''),
   executiveSummary: z.string().trim().optional().default(''),
   conclusion: z.string().trim().optional().default(''),
   recommendations: z.string().trim().optional().default(''),
+  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => new Date(d.reviewPeriodTo) >= new Date(d.reviewPeriodFrom), {
   message: 'Review period end must be on or after start date',
   path: ['reviewPeriodTo'],
@@ -222,6 +282,61 @@ export function reviewStatusLabel(status: string): string {
   return legacy[status] || status;
 }
 
+export function enrichCpvReviewMetrics(partial: Partial<CpvReviewMetrics>): CpvReviewMetrics {
+  const totalBatches = Number(partial.totalBatchesReviewed || 0);
+  const released = Number(partial.releasedBatches || 0);
+  const rejected = Number(partial.rejectedBatches || 0);
+  const hold = Number(partial.holdBatches || 0);
+  const batchAcceptanceRate = totalBatches > 0
+    ? Math.round((released / totalBatches) * 1000) / 10
+    : Number(partial.batchAcceptanceRate || 0);
+  const cpp = Number(partial.cppCompliancePct ?? 100);
+  const cqa = Number(partial.cqaCompliancePct ?? 100);
+  const averageCpk = Number(partial.averageCpk || 0);
+  const averagePpk = Number(partial.averagePpk || 0);
+  const averageCp = Number(partial.averageCp || averageCpk);
+  const averagePp = Number(partial.averagePp || averagePpk);
+  const sigmaLevel = averageCpk > 0
+    ? Math.round(Math.min(6, Math.max(0, 0.5 + averageCpk * 1.5)) * 100) / 100
+    : Number(partial.sigmaLevel || 0);
+  const overallCompliancePct = Math.round(((cpp + cqa) / 2) * 10) / 10;
+
+  return {
+    totalBatchesReviewed: totalBatches,
+    releasedBatches: released,
+    rejectedBatches: rejected,
+    holdBatches: hold,
+    batchAcceptanceRate,
+    cppCompliancePct: cpp,
+    cqaCompliancePct: cqa,
+    yieldAverage: Number(partial.yieldAverage || 0),
+    ootCount: Number(partial.ootCount || 0),
+    oosCount: Number(partial.oosCount || 0),
+    deviationCount: Number(partial.deviationCount || 0),
+    capaCount: Number(partial.capaCount || 0),
+    changeControlCount: Number(partial.changeControlCount || 0),
+    openRiskCount: Number(partial.openRiskCount || 0),
+    highRiskCount: Number(partial.highRiskCount || 0),
+    criticalOpenRiskCount: Number(partial.criticalOpenRiskCount || 0),
+    criticalOosOpen: Number(partial.criticalOosOpen || 0),
+    repeatedOot: Boolean(partial.repeatedOot),
+    repeatedDeviation: Boolean(partial.repeatedDeviation),
+    sterilityEndotoxinFailure: Boolean(partial.sterilityEndotoxinFailure),
+    averageCp,
+    averageCpk,
+    averagePp,
+    averagePpk,
+    sigmaLevel,
+    overallCompliancePct,
+    calibrationCompliancePct: Number(partial.calibrationCompliancePct ?? 100),
+    trainingCompliancePct: Number(partial.trainingCompliancePct ?? 100),
+    maintenanceEffectivenessPct: Number(partial.maintenanceEffectivenessPct ?? 100),
+    supplierPerformancePct: Number(partial.supplierPerformancePct ?? 100),
+    complaintRate: Number(partial.complaintRate || 0),
+    capaEffectivenessPct: Number(partial.capaEffectivenessPct ?? 100),
+  };
+}
+
 export function computeOverallAssessment(metrics: CpvReviewMetrics): {
   overallProcessStatus: OverallProcessStatus;
   overallRiskLevel: OverallRiskLevel;
@@ -229,10 +344,10 @@ export function computeOverallAssessment(metrics: CpvReviewMetrics): {
   if (metrics.criticalOosOpen || metrics.criticalOpenRiskCount > 0 || metrics.sterilityEndotoxinFailure) {
     return { overallProcessStatus: 'Not In Control', overallRiskLevel: 'Critical' };
   }
-  if (metrics.averageCpk < 1.33 || metrics.repeatedOot || metrics.highRiskCount > 0) {
+  if (metrics.averageCpk < 1.33 || metrics.repeatedOot || metrics.highRiskCount > 0 || metrics.repeatedDeviation) {
     return {
       overallProcessStatus: 'Needs Improvement',
-      overallRiskLevel: metrics.highRiskCount > 0 ? 'High' : 'Medium',
+      overallRiskLevel: metrics.highRiskCount > 0 || metrics.repeatedDeviation ? 'High' : 'Medium',
     };
   }
   if (
@@ -252,11 +367,93 @@ export function computeProcessHealthScore(metrics: CpvReviewMetrics): number {
   if (metrics.cppCompliancePct < 95) score -= 10;
   if (metrics.cqaCompliancePct < 95) score -= 10;
   if (metrics.averageCpk < 1.33) score -= 15;
-  if (metrics.oosCount > 0) score -= 10;
+  if (metrics.averageCpk > 0 && metrics.averageCpk < 1.0) score -= 10;
+  if (metrics.oosCount > 0) score -= Math.min(20, metrics.oosCount * 5);
+  if (metrics.ootCount > 3) score -= 8;
   if (metrics.openRiskCount > 0) score -= 5;
   if (metrics.highRiskCount > 0) score -= 10;
   if (metrics.criticalOpenRiskCount > 0) score -= 25;
-  return Math.max(0, Math.min(100, score));
+  if (metrics.batchAcceptanceRate > 0 && metrics.batchAcceptanceRate < 95) score -= 8;
+  if (metrics.calibrationCompliancePct < 95) score -= 5;
+  if (metrics.trainingCompliancePct < 95) score -= 5;
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+export function computeAiInsights(
+  metrics: CpvReviewMetrics,
+  assessment: { overallProcessStatus: OverallProcessStatus; overallRiskLevel: OverallRiskLevel },
+): CpvReviewAiInsights {
+  const processHealthScore = computeProcessHealthScore(metrics);
+  const complianceScore = Math.round(metrics.overallCompliancePct);
+  const productHealthScore = Math.max(
+    0,
+    Math.min(100, Math.round((processHealthScore + complianceScore + Math.min(100, metrics.batchAcceptanceRate || 100)) / 3)),
+  );
+  let riskScore = 20;
+  if (assessment.overallRiskLevel === 'Critical') riskScore = 95;
+  else if (assessment.overallRiskLevel === 'High') riskScore = 75;
+  else if (assessment.overallRiskLevel === 'Medium') riskScore = 45;
+  else riskScore = 15;
+  if (metrics.oosCount > 2) riskScore = Math.min(100, riskScore + 10);
+  if (metrics.repeatedDeviation) riskScore = Math.min(100, riskScore + 8);
+
+  const capabilityReductionDetected = metrics.averageCpk > 0 && metrics.averageCpk < 1.33;
+  const negativeTrendDetected = metrics.repeatedOot || metrics.oosCount > 0 || metrics.deviationCount > 5;
+  const escalationRequired = assessment.overallRiskLevel === 'Critical'
+    || assessment.overallProcessStatus === 'Not In Control'
+    || metrics.criticalOpenRiskCount > 0;
+
+  const confidenceScore = Math.max(
+    45,
+    Math.min(
+      99,
+      55
+      + (metrics.totalBatchesReviewed >= 10 ? 15 : metrics.totalBatchesReviewed >= 3 ? 8 : 0)
+      + (metrics.averageCpk > 0 ? 10 : 0)
+      + (metrics.cppCompliancePct > 0 ? 5 : 0),
+    ),
+  );
+
+  const aiExecutiveSummary = [
+    `Annual process health ${processHealthScore}% (${assessment.overallProcessStatus}).`,
+    `CPP/CQA compliance ${metrics.cppCompliancePct.toFixed(1)}% / ${metrics.cqaCompliancePct.toFixed(1)}%.`,
+    metrics.averageCpk > 0 ? `Mean Cpk ${metrics.averageCpk.toFixed(2)} (σ≈${metrics.sigmaLevel.toFixed(1)}).` : 'Capability data limited.',
+    `Risk posture: ${assessment.overallRiskLevel}.`,
+  ].join(' ');
+
+  const aiQualityReview = [
+    `Batch acceptance ${metrics.batchAcceptanceRate || 0}%; OOS ${metrics.oosCount}; OOT ${metrics.ootCount}; deviations ${metrics.deviationCount}; CAPA ${metrics.capaCount}.`,
+    metrics.yieldAverage > 0 ? `Average yield ${metrics.yieldAverage.toFixed(1)}%.` : '',
+  ].filter(Boolean).join(' ');
+
+  const aiRiskPrediction = escalationRequired
+    ? 'Elevated residual risk — escalate to management review and consider CAPA/change control.'
+    : capabilityReductionDetected
+      ? 'Capability trending below target — intensify CPP/CQA monitoring and trend review.'
+      : 'Residual risk within acceptance for continued Stage 3 CPV monitoring.';
+
+  const tips: string[] = [];
+  if (capabilityReductionDetected) tips.push('Investigate capability reduction and verify control strategy.');
+  if (metrics.oosCount > 0) tips.push('Link OOS events to deviation/CAPA effectiveness checks.');
+  if (metrics.repeatedDeviation) tips.push('Repeated deviations detected — initiate risk assessment.');
+  if (metrics.calibrationCompliancePct < 95) tips.push('Close calibration compliance gaps.');
+  if (metrics.trainingCompliancePct < 95) tips.push('Address training compliance gaps before next campaign.');
+  if (!tips.length) tips.push('Continue approved CPV plan; schedule next annual review.');
+
+  return {
+    processHealthScore,
+    productHealthScore,
+    complianceScore,
+    confidenceScore,
+    riskScore,
+    aiExecutiveSummary,
+    aiQualityReview,
+    aiRiskPrediction,
+    aiPreventiveRecommendations: tips.join(' '),
+    capabilityReductionDetected,
+    negativeTrendDetected,
+    escalationRequired,
+  };
 }
 
 export function summarizeCpvReviews(records: CpvAnnualReviewRecord[]): CpvReviewListSummary {
@@ -275,7 +472,7 @@ export function summarizeCpvReviews(records: CpvAnnualReviewRecord[]): CpvReview
     }).length,
     highRisk: active.filter((r) => ['High', 'Critical'].includes(r.overallRiskLevel)).length,
     averageHealthScore: active.length
-      ? Math.round(active.reduce((s, r) => s + computeProcessHealthScore(r.metrics), 0) / active.length)
+      ? Math.round(active.reduce((s, r) => s + (r.processHealthScore || computeProcessHealthScore(r.metrics)), 0) / active.length)
       : 0,
   };
 }
