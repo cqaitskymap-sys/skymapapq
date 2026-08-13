@@ -5,44 +5,24 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-
-function blurActiveElement() {
-  const active = document.activeElement;
-  if (active instanceof HTMLElement) active.blur();
-}
-
-/** Portaled Select/Menu/Popover content lives outside the dialog DOM; ignore those events. */
-function isPortaledOverlayTarget(target: EventTarget | null) {
-  if (!(target instanceof Element)) return false;
-  return Boolean(
-    target.closest('[data-radix-select-content]') ||
-      target.closest('[data-radix-popper-content-wrapper]') ||
-      target.closest('[data-radix-menu-content]') ||
-      target.closest('[role="listbox"]')
-  );
-}
+import {
+  blurActiveElement,
+  isPortaledOverlayTarget,
+  useDeferredOverlayOpen,
+} from '@/components/ui/overlay-a11y';
 
 const Dialog = ({
   open,
   onOpenChange,
   ...props
 }: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root>) => {
-  const wasOpen = React.useRef(open);
-
-  // Controlled closes (setOpen(false)) skip onOpenChange — blur before paint when possible.
-  React.useLayoutEffect(() => {
-    if (wasOpen.current && open === false) blurActiveElement();
-    wasOpen.current = open;
-  }, [open]);
+  const overlay = useDeferredOverlayOpen(open, onOpenChange);
 
   return (
     <DialogPrimitive.Root
-      open={open}
       {...props}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen) blurActiveElement();
-        onOpenChange?.(nextOpen);
-      }}
+      open={overlay.open}
+      onOpenChange={overlay.onOpenChange}
     />
   );
 };

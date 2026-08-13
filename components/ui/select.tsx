@@ -5,8 +5,15 @@ import * as SelectPrimitive from '@radix-ui/react-select';
 import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { blurActiveElement } from '@/components/ui/overlay-a11y';
 
-const Select = SelectPrimitive.Root;
+/** Non-modal so hideOthers does not aria-hide a parent Sheet/Dialog that still holds the trigger. */
+const Select = ({
+  modal = false,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Root>) => (
+  <SelectPrimitive.Root modal={modal} {...props} />
+);
 
 const SelectGroup = SelectPrimitive.Group;
 
@@ -70,7 +77,7 @@ SelectScrollDownButton.displayName =
 const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
->(({ className, children, position = 'popper', ...props }, ref) => (
+>(({ className, children, position = 'popper', onCloseAutoFocus, ...props }, ref) => (
   <SelectPrimitive.Portal>
     <SelectPrimitive.Content
       ref={ref}
@@ -82,6 +89,13 @@ const SelectContent = React.forwardRef<
       )}
       position={position}
       {...props}
+      onCloseAutoFocus={(event) => {
+        if (document.querySelector('[role="dialog"][data-state="closed"]')) {
+          event.preventDefault();
+          blurActiveElement();
+        }
+        onCloseAutoFocus?.(event);
+      }}
     >
       <SelectScrollUpButton />
       <SelectPrimitive.Viewport
