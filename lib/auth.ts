@@ -101,68 +101,73 @@ export function isAuthNetworkError(error: unknown): boolean {
   return (error as { code?: string })?.code === 'auth/network-request-failed';
 }
 
-export async function signIn(email: string, password: string): Promise<User> {
+export async function signIn(email: string, password: string): Promise<{ user: User; profile: Profile }> {
   try {
     const auth = requireAuth();
     const result = await signInWithEmailAndPassword(auth, email, password);
-    if (result.user) {
-      const db = requireDb();
-      const profileRef = doc(db, PROFILES_COLLECTION, result.user.uid);
-      const profileSnap = await getDoc(profileRef);
-      const loginEmail = result.user.email || email;
-      if (!profileSnap.exists()) {
-        const role = resolveLoginRole();
-        const profile: Profile = {
-          id: result.user.uid,
-          email: loginEmail,
-          full_name: result.user.displayName || loginEmail.split('@')[0] || 'User',
-          role,
-          department: '',
-          employee_id: '',
-          phone: '',
-          avatar_url: '',
-          is_active: false,
-          last_login: nowIso(),
-          created_at: nowIso(),
-          updated_at: nowIso(),
-        };
-        // Client rules only allow self-create as pending viewer; user master writes go via Cloud Functions.
-        await setDoc(profileRef, {
-          ...profile,
-          requested_role: 'viewer',
-          access_status: 'pending',
-        });
-      } else {
-        // Self-update may only touch last_login / updated_at (+ contact fields). Role changes are admin-only.
-        await updateDoc(profileRef, {
-          last_login: nowIso(),
-          updated_at: nowIso(),
-        }).catch(() => undefined);
-      }
+    const db = requireDb();
+    const profileRef = doc(db, PROFILES_COLLECTION, result.user.uid);
+    const profileSnap = await getDoc(profileRef);
+    const loginEmail = result.user.email || email;
+    const loginAt = nowIso();
 
-      const profile = await getUserProfile(result.user.uid);
-      const accessStatus = (profile as (Profile & { access_status?: string }) | null)?.access_status;
-      const blockedStatuses = ['pending', 'disabled', 'locked', 'retired', 'rejected'];
-      if (!profile?.is_active || blockedStatuses.includes(accessStatus || '')) {
-        await firebaseSignOut(auth);
-        throw new Error('This account is inactive or awaiting administrator approval.');
-      }
-      await writeAuditTrail({
-        collectionName: PROFILES_COLLECTION,
-        documentId: result.user.uid,
-        action: 'LOGIN',
-        oldValue: null,
-        newValue: { email },
-        userId: result.user.uid,
-        userName: profile?.full_name || email,
-        moduleName: 'Auth',
-      });
-      const session = await recordLoginSuccess({ email: loginEmail });
+    let profile: Profile & { access_status?: string; requested_role?: string };
+    if (!profileSnap.exists()) {
+      const role = resolveLoginRole();
+      profile = {
+        id: result.user.uid,
+        email: loginEmail,
+        full_name: result.user.displayName || loginEmail.split('@')[0] || 'User',
+        role,
+        department: '',
+        employee_id: '',
+        phone: '',
+        avatar_url: '',
+        is_active: false,
+        last_login: loginAt,
+        created_at: loginAt,
+        updated_at: loginAt,
+        requested_role: 'viewer',
+        access_status: 'pending',
+      };
+      // Client rules only allow self-create as pending viewer; user master writes go via Cloud Functions.
+      await setDoc(profileRef, profile);
+    } else {
+      profile = profileSnap.data() as Profile & { access_status?: string };
+    }
+
+    const accessStatus = profile.access_status;
+    const blockedStatuses = ['pending', 'disabled', 'locked', 'retired', 'rejected'];
+    if (!profile.is_active || blockedStatuses.includes(accessStatus || '')) {
+      await firebaseSignOut(auth);
+      throw new Error('This account is inactive or awaiting administrator approval.');
+    }
+
+    // Audit, session log, and last_login must not block the login spinner.
+    // Cloud Functions (us-central1) often take several seconds from India / cold start.
+    void updateDoc(profileRef, {
+      last_login: loginAt,
+      updated_at: loginAt,
+    }).catch(() => undefined);
+
+    void writeAuditTrail({
+      collectionName: PROFILES_COLLECTION,
+      documentId: result.user.uid,
+      action: 'LOGIN',
+      oldValue: null,
+      newValue: { email },
+      userId: result.user.uid,
+      userName: profile.full_name || email,
+      moduleName: 'Auth',
+    }).catch(() => undefined);
+
+    void recordLoginSuccess({ email: loginEmail }).then((session) => {
       if (session?.id && typeof sessionStorage !== 'undefined') {
         sessionStorage.setItem('skymap-session-id', session.id);
       }
-    }
-    return result.user;
+    }).catch(() => undefined);
+
+    return { user: result.user, profile };
   } catch (error) {
     console.error('signIn failed:', error);
     const message = (error as Error)?.message || 'Login failed';
@@ -170,7 +175,7 @@ export async function signIn(email: string, password: string): Promise<User> {
     const isCredentialFailure = /password|credential|user-not-found|invalid|wrong/i.test(message)
       || (error as { code?: string })?.code?.startsWith('auth/');
     if (isCredentialFailure && !/inactive|awaiting administrator/i.test(message)) {
-      await recordLoginFailure(email, message).catch(() => undefined);
+      void recordLoginFailure(email, message).catch(() => undefined);
     }
     throw error;
   }

@@ -114,11 +114,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const signedInUser = await firebaseSignIn(email, password);
+      const { user: signedInUser, profile: signedInProfile } = await firebaseSignIn(email, password);
       await syncAuthSessionCookie(signedInUser);
-      const data = await fetchProfile(signedInUser.uid);
       setUser(signedInUser);
-      setProfile(data);
+      setProfile(signedInProfile);
       return { error: null };
     } catch (error) {
       if (error instanceof FirebaseNotConfiguredError || (error as Error)?.name === 'FirebaseNotConfiguredError') {
