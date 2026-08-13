@@ -59,15 +59,26 @@ export function useMonitoring(areaFilters?: AreaFilters, monFilters?: Monitoring
     setLoading(true);
     setError(null);
     try {
-      const [ar, env, utl, exc] = await Promise.all([
-        listAreas(stableAreaFilters), listEnvironmental(stableMonFilters),
-        listUtility(stableMonFilters), listExcursions(),
+      const settled = await Promise.allSettled([
+        listAreas(stableAreaFilters),
+        listEnvironmental(stableMonFilters),
+        listUtility(stableMonFilters),
+        listExcursions(),
       ]);
+      const ar = settled[0].status === 'fulfilled' ? settled[0].value : [];
+      const env = settled[1].status === 'fulfilled' ? settled[1].value : [];
+      const utl = settled[2].status === 'fulfilled' ? settled[2].value : [];
+      const exc = settled[3].status === 'fulfilled' ? settled[3].value : [];
       setAreas(ar);
       setEnvironmental(env);
       setUtility(utl);
       setExcursions(exc);
       setMetrics(computeDashboardMetrics(env, utl, exc));
+      const firstErr = settled.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
+      if (firstErr) {
+        const reason = firstErr.reason;
+        setError(reason instanceof Error ? reason.message : 'Failed to load monitoring data');
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load monitoring data');
     } finally {

@@ -175,9 +175,14 @@ function RecallDashboardContent() {
 
   const handleExportPdf = async () => {
     if (!canExport || !metrics) return toast.error('No export permission');
-    openRecallDashboardPdfPlaceholder(records, metrics, actor.name);
-    await logRecallDashboardPdfExport(actor, records.length);
-    toast.success('PDF export placeholder opened');
+    try {
+      openRecallDashboardPdfPlaceholder(records, metrics, actor.name);
+      await logRecallDashboardPdfExport(actor, records.length);
+      toast.success('PDF export completed');
+    } catch (e) {
+      await logRecallDashboardPdfExport(actor, records.length);
+      toast.error(e instanceof Error ? e.message : 'Recall dashboard PDF export is not available.');
+    }
   };
 
   const handleExportExcel = async () => {

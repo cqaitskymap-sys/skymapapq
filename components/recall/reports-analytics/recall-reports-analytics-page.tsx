@@ -35,7 +35,6 @@ import {
   logRecallReportsModuleViewed,
   previewRecallReport,
 } from '@/lib/recall-reports-service';
-import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 import { EmptyState } from '@/components/admin/dashboard/empty-state';
@@ -274,25 +273,18 @@ export function RecallReportsAnalyticsPage({ defaultTab = 'generator' }: { defau
       is_deleted: false,
     } as RecallReportRecord;
 
-    const rows = analytics?.previewRows ?? [];
-    downloadCsv(
-      `${report.report_number.replace(/\//g, '-')}.${type === 'Excel' ? 'csv' : 'csv'}`,
-      RECALL_PREVIEW_COLUMNS.map((c) => c.header),
-      rows.map((r) => RECALL_PREVIEW_COLUMNS.map((c) => String(r[c.key as keyof RecallReportPreviewRow] ?? ''))),
-    );
-
-    await exportRecallReport(report, type, actor);
-    if (savedReport) await logRecallReportDownloaded(actor, savedReport.id, savedReport.report_number);
-
-    if (type === 'PDF') {
-      setShowPdf(true);
-      await logRecallReportPrinted(actor, report.id, report.report_number);
-      setTimeout(() => printPage(), 300);
-      toast.success('PDF export — print dialog opened');
-    } else {
-      toast.success(`${type} export placeholder downloaded (audit logged)`);
+    try {
+      await exportRecallReport(report, type, actor);
+      if (savedReport) await logRecallReportDownloaded(actor, savedReport.id, savedReport.report_number);
+      if (type === 'PDF') {
+        setShowPdf(true);
+        await logRecallReportPrinted(actor, report.id, report.report_number);
+      }
+      toast.success(`${type} export requested via backend`);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Recall report export is not available.');
     }
-    await load();
   };
 
   const historyColumns = useMemo(() => [
@@ -307,7 +299,7 @@ export function RecallReportsAnalyticsPage({ defaultTab = 'generator' }: { defau
       key: 'actions',
       header: '',
       render: (r: RecallReportRecord) => canExport ? (
-        <Button variant="ghost" size="sm" onClick={() => void logRecallReportDownloaded(actor, r.id, r.report_number).then(() => toast.success('Download placeholder logged'))}>
+        <Button variant="ghost" size="sm" onClick={() => void logRecallReportDownloaded(actor, r.id, r.report_number).then(() => toast.success('Download request logged'))}>
           <Download className="h-4 w-4" />
         </Button>
       ) : null,

@@ -110,20 +110,20 @@ export async function fetchCapaDashboardData(
     ? filterCapaByRole(allRecords, actor.role, actor.id, actor.department)
     : allRecords;
   const filtered = applyCapaDashboardFilters(scoped, filters);
-  const metrics = computeExtendedCapaDashboardMetrics(scoped);
+  const metrics = computeExtendedCapaDashboardMetrics(filtered);
 
   let activity: CapaActivityEntry[] = [];
   try {
     const auditActivity = await fetchCapaAuditActivity();
-    activity = auditActivity.length ? auditActivity : buildCapaActivityTimeline(scoped);
+    activity = auditActivity.length ? auditActivity : buildCapaActivityTimeline(filtered);
   } catch {
-    activity = buildCapaActivityTimeline(scoped);
+    activity = buildCapaActivityTimeline(filtered);
   }
 
   return {
     records: filtered,
     metrics,
-    charts: computeCapaChartData(scoped),
+    charts: computeCapaChartData(filtered),
     activity,
   };
 }
@@ -141,7 +141,7 @@ export async function logCapaDashboardFilterApplied(actor: CapaDashboardActor, f
 }
 
 export async function logCapaDashboardPdfExport(actor: CapaDashboardActor, count: number) {
-  await audit(actor, 'PDF export clicked', `Dashboard PDF placeholder (${count} records)`);
+  await audit(actor, 'PDF export blocked', `Backend PDF export is not configured (${count} records)`);
 }
 
 export async function logCapaDashboardExcelExport(actor: CapaDashboardActor, count: number) {
@@ -158,42 +158,9 @@ export function exportCapaDashboardCsvDownload(records: CapaRecord[], filename =
 }
 
 export function openCapaDashboardPdfPlaceholder(records: CapaRecord[], generatedBy: string): void {
-  const rows = records.slice(0, 50).map((r, i) => `
-    <tr>
-      <td>${i + 1}</td>
-      <td>${r.capa_number}</td>
-      <td>${r.capa_source}</td>
-      <td>${r.department}</td>
-      <td>${r.capa_status}</td>
-      <td>${r.priority}</td>
-      <td>${r.target_completion_date || '—'}</td>
-    </tr>
-  `).join('');
-
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>CAPA Dashboard</title>
-<style>
-body{font-family:Arial,sans-serif;margin:24px;font-size:11px;color:#1e293b}
-.header{border:2px solid #1e40af;padding:16px;text-align:center;margin-bottom:16px}
-h1{color:#1e40af;margin:0} table{width:100%;border-collapse:collapse}
-th,td{border:1px solid #cbd5e1;padding:6px;text-align:left} th{background:#f1f5f9}
-</style></head><body>
-<div class="header">
-  <strong>SKYMAP PHARMACEUTICALS PVT. LTD.</strong>
-  <h1>CAPA Dashboard Report</h1>
-  <p>Generated: ${new Date().toLocaleString()} | By: ${generatedBy}</p>
-  <p>Total records: ${records.length} | Page 1 of 1</p>
-</div>
-<table>
-<thead><tr><th>#</th><th>CAPA No</th><th>Source</th><th>Department</th><th>Status</th><th>Priority</th><th>Due Date</th></tr></thead>
-<tbody>${rows}</tbody>
-</table>
-<button onclick="window.print()">Print / Save PDF</button>
-</body></html>`;
-
-  const win = window.open('', '_blank');
-  if (!win) return;
-  win.document.write(html);
-  win.document.close();
+  void records;
+  void generatedBy;
+  throw new Error('CAPA dashboard PDF export backend is not configured.');
 }
 
 export { computeCapaChartData, computeExtendedCapaDashboardMetrics };

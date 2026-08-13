@@ -3,12 +3,9 @@
  * Server-side audit for dashboard view/export + optional aggregate snapshot.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type Firestore, type DocumentData } from 'firebase-admin/firestore';
+import { type Firestore, type DocumentData } from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -29,8 +26,7 @@ function assertViewer(actor: DocumentData | undefined, _role: string) {
 
 async function resolveActor(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const snap = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = snap.data();
   return {
@@ -111,7 +107,7 @@ async function countCollection(firestore: Firestore, name: string, max = 500): P
 }
 
 /** Lightweight server snapshot counts for executive health (optional enrichment). */
-export const getAdminCpvDashboardSnapshot = onCall({ timeoutSeconds: 60, memory: '512MiB' }, async (request) => {
+export const getAdminCpvDashboardSnapshot = onCall({ timeoutSeconds: 60, memory: '512MiB', cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertViewer(actor, actorRole);
   const now = new Date().toISOString();
@@ -161,7 +157,7 @@ export const getAdminCpvDashboardSnapshot = onCall({ timeoutSeconds: 60, memory:
   return snapshot;
 });
 
-export const logAdminCpvDashboardAudit = onCall(async (request) => {
+async function handleCpvDashboardAudit(request: { auth?: { uid: string } | null; data: unknown }) {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertViewer(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -181,4 +177,10 @@ export const logAdminCpvDashboardAudit = onCall(async (request) => {
     now,
   });
   return { success: true };
-});
+}
+
+/** Legacy name — Cloud Run IAM on this endpoint is private (v2 callable updates do not re-grant public invoke). */
+export const logAdminCpvDashboardAudit = onCall({ cors: true }, handleCpvDashboardAudit);
+
+/** New callable so first-time deploy can grant public invoke (required for browser CORS preflight). */
+export const recordAdminCpvDashboardAudit = onCall({ cors: true }, handleCpvDashboardAudit);

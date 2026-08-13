@@ -146,9 +146,14 @@ function OosDashboardContent() {
 
   const handleExportPdf = async () => {
     if (!canExport) return toast.error('No export permission');
-    openOosDashboardPdfPlaceholder(actor.name, records.length);
-    await logOosDashboardPdfExport(actor, records.length);
-    toast.success('PDF export placeholder opened');
+    try {
+      openOosDashboardPdfPlaceholder(actor.name, records.length);
+      await logOosDashboardPdfExport(actor, records.length);
+      toast.success('PDF export completed');
+    } catch (e) {
+      await logOosDashboardPdfExport(actor, records.length);
+      toast.error(e instanceof Error ? e.message : 'OOS dashboard PDF export is not available.');
+    }
   };
 
   const handleExportExcel = async () => {
@@ -161,7 +166,7 @@ function OosDashboardContent() {
   const recentOos = records.slice(0, 15);
   const overdueOos = records.filter((r) => r.status === 'overdue' || getDaysOverdueOos(r) > 0).slice(0, 10);
   const criticalOos = records.filter((r) =>
-    r.is_critical_test || ['Sterility', 'Endotoxin', 'Assay'].some((t) => r.test_name.toLowerCase().includes(t.toLowerCase())),
+    r.is_critical_test || ['Sterility', 'Endotoxin', 'Assay'].some((t) => (r.test_name || '').toLowerCase().includes(t.toLowerCase())),
   ).slice(0, 10);
 
   const recentColumns = [

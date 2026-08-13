@@ -11,7 +11,7 @@ export default function NotFound() {
           The page you are looking for does not exist or has been moved.
         </p>
         <Button asChild className="bg-blue-600 hover:bg-blue-700">
-          <Link href="/dashboard">Return to Dashboard</Link>
+          <Link href="/launcher">Return to Launcher</Link>
         </Button>
       </div>
     </div>

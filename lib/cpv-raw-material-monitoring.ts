@@ -63,8 +63,8 @@ export const rawMaterialMonitoringFormSchema = z.object({
   coaNumber: z.string().trim().default(''),
   materialLotNumber: z.string().trim().default(''),
   supplierBatchNumber: z.string().trim().default(''),
-  mfgDate: requiredText,
-  expDate: requiredText,
+  mfgDate: z.string().trim().default(''),
+  expDate: z.string().trim().default(''),
   retestDate: z.string().trim().default(''),
   shelfLifeMonths: z.string().trim().default(''),
   receivedQuantity: z.coerce.number().min(0).default(0),
@@ -80,7 +80,7 @@ export const rawMaterialMonitoringFormSchema = z.object({
   site: z.string().trim().default(''),
   department: z.string().trim().default('Warehouse'),
   shift: z.string().trim().default(''),
-  qcStatus: z.enum(RM_QC_STATUSES),
+  qcStatus: z.enum(RM_QC_STATUSES).default('Under Test'),
   qaStatus: z.string().trim().default(''),
   releaseStatus: z.string().trim().default(''),
   samplingStatus: z.string().trim().default(''),
@@ -99,6 +99,7 @@ export const rawMaterialMonitoringFormSchema = z.object({
   version: z.string().trim().default('1.0'),
   changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
 }).refine((d) => {
+  if (!d.mfgDate || !d.expDate) return true;
   const mfg = parseComparableDate(d.mfgDate);
   const exp = parseComparableDate(d.expDate);
   return !!mfg && !!exp && exp > mfg;
@@ -106,7 +107,7 @@ export const rawMaterialMonitoringFormSchema = z.object({
   message: 'Used quantity cannot exceed standard quantity',
   path: ['usedQuantity'],
 }).refine((d) => {
-  if (!d.testParameter || d.lowerLimit == null || d.upperLimit == null) return true;
+  if (d.lowerLimit == null || d.upperLimit == null) return true;
   return d.lowerLimit < d.upperLimit;
 }, { message: 'Upper limit must be greater than lower limit', path: ['upperLimit'] });
 

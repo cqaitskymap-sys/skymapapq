@@ -12,7 +12,7 @@ import {
   SITE_TYPES, COMPANY_TYPES, INDUSTRIES, DATE_FORMATS, TIME_FORMATS, CURRENCY_OPTIONS, TIMEZONE_OPTIONS,
   DOSAGE_FORMS, ROUTE_OPTIONS, MARKET_OPTIONS, PRODUCT_STATUSES,
   PRODUCT_LIFECYCLE_STATUSES, PRODUCT_CATEGORIES, PACK_TYPES, CONTAINER_CLOSURE_TYPES,
-  INGREDIENT_TYPES, PACKING_MATERIAL_TYPES, PRODUCT_ATTACHMENT_TYPES,
+  INGREDIENT_TYPES, PRODUCT_ATTACHMENT_TYPES,
   BATCH_STATUSES, RELEASE_STATUSES, BATCH_SIZE_UNITS, QC_STATUSES, QA_STATUSES,
   PARAMETER_CATEGORIES, PARAMETER_GROUPS, PARAMETER_MODULE_OPTIONS,
   PARAMETER_DATA_TYPES, PARAMETER_CALCULATION_TYPES,
@@ -40,58 +40,83 @@ const baseFields = {
   status: z.enum(RECORD_STATUSES).default('Active'),
 };
 
-const phoneSchema = z.string()
-  .regex(/^$|^\+?[\d\s\-()]{10,15}$/, 'Enter a valid phone number (10–15 digits)')
-  .default('');
+const emptyNull = (value: unknown) => (value == null ? '' : value);
+
+const phoneSchema = z.preprocess(
+  emptyNull,
+  z.string()
+    .trim()
+    .regex(/^$|^\+?[\d\s\-()]{10,15}$/, 'Enter a valid phone number (10–15 digits)')
+    .default(''),
+);
+
+const optionalText = (max: number) => z.preprocess(
+  emptyNull,
+  z.string().trim().max(max).default(''),
+);
 
 export const adminUserSchema = z.object({
   ...baseFields,
   userId: z.string().optional(),
-  employeeId: z.string().trim().min(1, 'Employee ID is required').max(80),
-  employeeCode: z.string().trim().max(80).default(''),
-  firstName: z.string().trim().max(100).default(''),
-  middleName: z.string().trim().max(100).default(''),
-  lastName: z.string().trim().max(100).default(''),
-  fullName: z.string().trim().min(1, 'Full name is required').max(200),
-  email: z.string().trim().min(1, 'Email is required').email('Valid email required').max(320),
+  employeeId: z.preprocess(emptyNull, z.string().trim().min(1, 'Employee ID is required').max(80)),
+  employeeCode: optionalText(80),
+  firstName: optionalText(100),
+  middleName: optionalText(100),
+  lastName: optionalText(100),
+  fullName: z.preprocess(emptyNull, z.string().trim().min(1, 'Full name is required').max(200)),
+  email: z.preprocess(emptyNull, z.string().trim().min(1, 'Email is required').email('Valid email required').max(320)),
   mobileNumber: phoneSchema,
   alternateMobile: phoneSchema,
-  username: z.string()
-    .trim()
-    .max(80)
-    .regex(/^$|^[a-zA-Z0-9._-]+$/, 'Username may contain letters, numbers, dots, underscores, and hyphens')
-    .default(''),
-  department: z.string().trim().min(1, 'Department is required').max(160),
-  designation: z.string().trim().max(160).default(''),
-  role: z.string().trim().min(1, 'Role is required').max(80),
-  reportingManager: z.string().trim().max(200).default(''),
-  managerId: z.string().trim().max(128).default(''),
-  businessUnit: z.string().trim().max(160).default(''),
-  siteId: z.string().trim().max(128).default(''),
-  siteName: z.string().trim().max(200).default(''),
-  location: z.string().trim().max(240).default(''),
-  shift: z.string().trim().max(80).default(''),
-  employmentType: z.enum(['Permanent', 'Contract', 'Temporary', 'Consultant', 'Vendor', 'Intern']).default('Permanent'),
-  gender: z.enum(['', 'Female', 'Male', 'Non-binary', 'Prefer not to say']).default(''),
-  dateOfBirth: z.string().default(''),
-  userStatus: z.enum(USER_STATUSES).or(z.literal('Pending Approval')).default('Active'),
-  statusBeforeLock: z.enum(['Active', 'Inactive', 'Suspended', 'Pending Approval']).optional(),
-  accountLocked: z.boolean().default(false),
-  profilePhoto: z.string()
-    .url('Profile picture must be a valid URL')
-    .refine((value) => value.startsWith('https://'), 'Profile picture URL must use HTTPS')
-    .or(z.literal(''))
-    .default(''),
-  joiningDate: z.string().default(''),
-  remarks: z.string().trim().max(2000).default(''),
-  passwordResetRequired: z.boolean().default(false),
-  twoFactorEnabled: z.boolean().default(false),
-  lastLogin: z.string().nullable().default(null),
-  emailVerified: z.boolean().default(false),
+  username: z.preprocess(
+    emptyNull,
+    z.string()
+      .trim()
+      .max(80)
+      .regex(/^$|^[a-zA-Z0-9._-]+$/, 'Username may contain letters, numbers, dots, underscores, and hyphens')
+      .default(''),
+  ),
+  department: z.preprocess(emptyNull, z.string().trim().min(1, 'Department is required').max(160)),
+  designation: optionalText(160),
+  role: z.preprocess(emptyNull, z.string().trim().min(1, 'Role is required').max(80)),
+  reportingManager: optionalText(200),
+  managerId: optionalText(128),
+  businessUnit: optionalText(160),
+  siteId: optionalText(128),
+  siteName: optionalText(200),
+  location: optionalText(240),
+  shift: optionalText(80),
+  employmentType: z.preprocess(
+    (value) => (value == null || value === '' ? 'Permanent' : value),
+    z.enum(['Permanent', 'Contract', 'Temporary', 'Consultant', 'Vendor', 'Intern']).default('Permanent'),
+  ),
+  gender: z.preprocess(
+    (value) => (value == null ? '' : value),
+    z.enum(['', 'Female', 'Male', 'Non-binary', 'Prefer not to say']).default(''),
+  ),
+  dateOfBirth: optionalText(40),
+  userStatus: z.preprocess(
+    (value) => (value == null || value === '' ? 'Active' : value),
+    z.enum(USER_STATUSES).or(z.literal('Pending Approval')).default('Active'),
+  ),
+  statusBeforeLock: z.enum(['Active', 'Inactive', 'Suspended', 'Pending Approval']).nullish(),
+  accountLocked: z.preprocess((value) => Boolean(value), z.boolean().default(false)),
+  passwordResetRequired: z.preprocess((value) => Boolean(value), z.boolean().default(false)),
+  twoFactorEnabled: z.preprocess((value) => Boolean(value), z.boolean().default(false)),
+  profilePhoto: optionalText(2048),
+  joiningDate: optionalText(40),
+  remarks: optionalText(2000),
+  lastLogin: z.preprocess(
+    (value) => (value == null || value === '' ? null : typeof value === 'string' ? value : null),
+    z.string().nullable().default(null),
+  ),
+  emailVerified: z.boolean().nullish().transform((value) => Boolean(value)),
   authUid: z.string().optional(),
-  isDeleted: z.boolean().optional(),
+  isDeleted: z.boolean().nullish(),
 }).refine(
-  (data) => !data.dateOfBirth || data.dateOfBirth < new Date().toISOString().slice(0, 10),
+  (data) => {
+    const date = String(data.dateOfBirth || '').slice(0, 10);
+    return !date || date < new Date().toISOString().slice(0, 10);
+  },
   { message: 'Date of birth must be in the past', path: ['dateOfBirth'] },
 ).refine(
   (data) => !data.managerId || data.managerId !== data.id && data.managerId !== data.authUid,
@@ -407,7 +432,9 @@ export const productCompositionRowSchema = z.object({
 export const productPackingRowSchema = z.object({
   id: z.string().optional(),
   packingMaterial: z.string().min(1, 'Packing material required'),
-  materialType: z.enum(PACKING_MATERIAL_TYPES),
+  materialType: z
+    .enum(['Primary Packing', 'Secondary Packing', 'Tertiary Packing'] as const)
+    .default('Primary Packing'),
   packSize: z.string().default(''),
   quantity: z.coerce.number().min(0, 'Quantity must be numeric').default(0),
   unit: z.string().default(''),
@@ -457,7 +484,7 @@ export const adminProductSchema = z.object({
   barcode: z.string().default(''),
   qrCode: z.string().default(''),
   productStatus: z.enum(PRODUCT_STATUSES).default('Active'),
-  description: z.string().max(4000).default(''),
+  description: z.string().max(2000).default(''),
   remarks: z.string().default(''),
   composition: z.string().default(''),
   packingStyle: z.string().default(''),
@@ -469,7 +496,7 @@ export const productFormSchema = z.object({
   productCode: z.string().min(1, 'Product code is required'),
   productName: z.string().min(1, 'Product name is required'),
   genericName: z.string().min(1, 'Generic name is required'),
-  brandName: z.string().default(''),
+  brandName: z.string().max(500).default(''),
   productFamily: z.string().default(''),
   category: z.enum(PRODUCT_CATEGORIES).or(z.literal('')).default(''),
   strength: z.string().min(1, 'Strength is required'),
@@ -503,11 +530,11 @@ export const productFormSchema = z.object({
   barcode: z.string().default(''),
   qrCode: z.string().default(''),
   productStatus: z.enum(PRODUCT_STATUSES).default('Active'),
-  description: z.string().max(4000).default(''),
+  description: z.string().max(2000).default(''),
   remarks: z.string().default(''),
   compositions: z.array(productCompositionRowSchema).default([]),
   packingDetails: z.array(productPackingRowSchema).default([]),
-  changeReason: z.string().trim().min(5, 'Change reason is required (min 5 characters)').max(500),
+  changeReason: z.string().trim().max(500).default(''),
 }).refine(
   (data) => data.compositions.some((c) => c.ingredientType === 'API'),
   { message: 'At least one API ingredient is required', path: ['compositions'] },

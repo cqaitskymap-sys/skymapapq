@@ -4,12 +4,9 @@
  * Hardens the existing Annual CPV Review module (collection: cpv_reviews).
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
+import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -135,8 +132,7 @@ function assertApprove(actor: DocumentData | undefined, role: string) {
 
 async function resolveActor(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const snap = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = snap.data();
   return {

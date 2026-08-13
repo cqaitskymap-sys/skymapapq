@@ -5,7 +5,7 @@ export const EQUIPMENT_COLLECTIONS = {
   breakdown: 'breakdown_records',
   statusHistory: 'equipment_status_history',
   attachments: 'equipment_attachments',
-  auditLogs: 'audit_logs',
+  auditLogs: 'audit_trail',
   notifications: 'notifications',
 } as const;
 
@@ -15,6 +15,12 @@ export const EQUIPMENT_TYPES = [
 ] as const;
 
 export const EQUIPMENT_STATUSES = ['Active', 'Inactive', 'Blocked', 'Under Maintenance', 'Retired'] as const;
+
+export const EQUIPMENT_QUALIFICATION_STATUSES = [
+  'Qualified', 'Not Qualified',
+] as const;
+
+export const EQUIPMENT_MANUFACTURING_LINES = ['A1', 'A2', 'LV', 'DPI', '3 Piece'] as const;
 
 export const CALIBRATION_STATUSES = ['Calibrated', 'Due', 'Overdue', 'Failed', 'Not Required'] as const;
 
@@ -41,6 +47,9 @@ export interface EquipmentRecord {
   id: string;
   equipment_id: string;
   equipment_name: string;
+  qualification_status: string;
+  manufacturing_line: string;
+  /** Legacy / extended fields retained for calibration, PM, and older records */
   equipment_type: string;
   department: string;
   area_room_no: string;
@@ -60,6 +69,7 @@ export interface EquipmentRecord {
   pm_status: string;
   validation_id: string | null;
   remarks: string;
+  is_deleted?: boolean;
   created_by: string;
   created_by_name: string;
   updated_by: string;
@@ -187,8 +197,12 @@ export interface EquipmentDashboardMetrics {
   availabilityPercent: number;
 }
 
-export function isEquipmentUsable(eq: Pick<EquipmentRecord, 'equipment_status' | 'calibration_status'>): boolean {
-  return eq.equipment_status === 'Active' && eq.calibration_status !== 'Failed' && eq.calibration_status !== 'Overdue';
+export function isEquipmentUsable(eq: Pick<EquipmentRecord, 'equipment_status' | 'calibration_status' | 'pm_status' | 'qualification_status' | 'calibration_required' | 'pm_required' | 'is_deleted'>): boolean {
+  if (eq.is_deleted || eq.equipment_status !== 'Active') return false;
+  if (eq.qualification_status !== 'Qualified' && eq.qualification_status !== 'Not Required') return false;
+  if (eq.calibration_required && (eq.calibration_status === 'Failed' || eq.calibration_status === 'Overdue')) return false;
+  if (eq.pm_required && (eq.pm_status === 'Failed' || eq.pm_status === 'Overdue')) return false;
+  return true;
 }
 
 export function isEquipmentReadOnly(role: string): boolean {
@@ -196,7 +210,10 @@ export function isEquipmentReadOnly(role: string): boolean {
 }
 
 export function canManageEquipment(role: string): boolean {
-  return ['super_admin', 'admin', 'head_qa', 'qa_manager', 'engineering', 'maintenance'].includes(role);
+  return [
+    'super_admin', 'admin', 'head_qa', 'qa_manager',
+    'engineering', 'engineering_manager', 'engineering_executive', 'maintenance',
+  ].includes(role);
 }
 
 export function canApproveEquipment(role: string): boolean {

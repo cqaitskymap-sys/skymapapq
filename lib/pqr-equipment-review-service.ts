@@ -189,6 +189,13 @@ function deriveQualification(
   if (eq.qualification_required === false || eq.qualificationRequired === false) {
     return { status: 'Not Required', iq: 'N/A', oq: 'N/A', pq: 'N/A' };
   }
+  const masterStatus = str(eq.qualification_status || eq.qualificationStatus);
+  if (masterStatus === 'Not Required') {
+    return { status: 'Not Required', iq: 'N/A', oq: 'N/A', pq: 'N/A' };
+  }
+  if (masterStatus === 'Qualified') {
+    return { status: 'Qualified', iq: 'Approved', oq: 'Approved', pq: 'Approved' };
+  }
   const eqId = str(eq.equipment_id || eq.equipmentId || eq.id);
   const docId = str(eq.id);
   const related = [...validations, ...qualifications].filter((v) =>
@@ -196,7 +203,12 @@ function deriveQualification(
     || str(v.equipment_doc_id || v.equipmentDocId) === docId,
   );
   if (!related.length) {
-    return { status: 'Qualification Due', iq: 'Pending', oq: 'Pending', pq: 'Pending' };
+    return {
+      status: masterStatus === 'Not Qualified' ? 'Not Qualified' : 'Qualification Due',
+      iq: 'Pending',
+      oq: 'Pending',
+      pq: 'Pending',
+    };
   }
   const iq = related.find((v) => str(v.validationType || v.type).toUpperCase().includes('IQ'));
   const oq = related.find((v) => str(v.validationType || v.type).toUpperCase().includes('OQ'));
@@ -208,7 +220,7 @@ function deriveQualification(
   const isAnyDone = (s: string) => s.toLowerCase().includes('approved') || s.toLowerCase().includes('complete');
   const allApproved = [iqStatus, oqStatus, pqStatus].every(isDone);
   const anyApproved = [iqStatus, oqStatus, pqStatus].some(isAnyDone);
-  let status = 'Not Qualified';
+  let status = masterStatus || 'Not Qualified';
   if (allApproved) status = 'Qualified';
   else if (anyApproved) status = 'Partially Qualified';
   else if (related.some((v) => str(v.status).toLowerCase().includes('due'))) status = 'Qualification Due';
@@ -390,6 +402,8 @@ function mapToEquipmentReviewRecord(
     pqrNumber: pqr.pqrNumber,
     product: pqr.productName,
     productCode: pqr.productCode,
+    batchNumber: meta.batchesUsed[0] || '',
+    manufacturingLine: str(eq.manufacturing_line || eq.manufacturingLine || eq.line),
     equipmentId: eqId || docId,
     equipmentCode: eqId || docId,
     equipmentName: eqName,
@@ -602,11 +616,14 @@ function formToRecordFields(
   data: EquipmentReviewFormData,
 ): Omit<PqrEquipmentReviewRecord, 'id' | 'equipmentReviewId' | 'createdAt' | 'createdBy' | 'createdByName' | 'isDeleted'> {
   const computed = computeEquipmentCompliance(data);
+  const batchNumber = data.batchNumber.trim();
   return {
     pqrId: pqr.id,
     pqrNumber: pqr.pqrNumber,
-    product: data.product,
-    productCode: data.productCode,
+    product: data.product.trim(),
+    productCode: data.productCode || pqr.productCode,
+    batchNumber,
+    manufacturingLine: data.manufacturingLine.trim(),
     equipmentId: data.equipmentId.trim(),
     equipmentCode: (data.equipmentCode || data.equipmentId).trim(),
     equipmentName: data.equipmentName.trim(),
@@ -638,8 +655,8 @@ function formToRecordFields(
     complianceReasons: computed.complianceReasons,
     riskLevel: computed.riskLevel,
     remarks: data.remarks,
-    batchesUsed: [],
-    batchCount: 0,
+    batchesUsed: batchNumber ? [batchNumber] : [],
+    batchCount: batchNumber ? 1 : 0,
     usageCount: 0,
     criticality: '',
     equipmentStatus: '',
@@ -705,14 +722,21 @@ export async function updateEquipmentReviewRecord(
     const existingSnap = await getDoc(doc(getFirebaseFirestore(), PQR_EQUIPMENT_REVIEW_COLLECTIONS.equipmentReview, id));
     const oldValue = existingSnap.exists() ? existingSnap.data() : null;
     const computed = computeEquipmentCompliance(data);
+    const batchNumber = data.batchNumber.trim();
     await updateDoc(doc(getFirebaseFirestore(), PQR_EQUIPMENT_REVIEW_COLLECTIONS.equipmentReview, id), {
       ...data,
+      product: data.product.trim(),
+      productCode: data.productCode || pqr.productCode,
+      batchNumber,
+      manufacturingLine: data.manufacturingLine.trim(),
       equipmentCode: (data.equipmentCode || data.equipmentId).trim(),
       installationDate: toDateStr(data.installationDate),
       lastCalibrationDate: toDateStr(data.lastCalibrationDate),
       nextCalibrationDate: toDateStr(data.nextCalibrationDate),
       lastPmDate: toDateStr(data.lastPmDate),
       nextPmDate: toDateStr(data.nextPmDate),
+      batchesUsed: batchNumber ? [batchNumber] : [],
+      batchCount: batchNumber ? 1 : 0,
       complianceStatus: computed.complianceStatus,
       complianceReasons: computed.complianceReasons,
       riskLevel: computed.riskLevel,
@@ -810,7 +834,7 @@ export async function saveEquipmentSectionToPqr(
 
 export function exportEquipmentReviewCsv(records: PqrEquipmentReviewRecord[], pqrNumber?: string) {
   const headers = [
-    'Sr. No.', 'PQR Number', 'Product', 'Product Code',
+    'Sr. No.', 'PQR Number', 'Product', 'Product Code', 'Batch Number', 'Manufacturing Line',
     'Equipment ID', 'Equipment Code', 'Equipment Name', 'Category', 'Type',
     'Department', 'Area', 'Model', 'Serial No.', 'Manufacturer', 'Installation Date',
     'Criticality', 'Equipment Status',
@@ -828,6 +852,8 @@ export function exportEquipmentReviewCsv(records: PqrEquipmentReviewRecord[], pq
     r.pqrNumber || pqrNumber || '',
     r.product,
     r.productCode,
+    r.batchNumber || '',
+    r.manufacturingLine || '',
     r.equipmentId,
     r.equipmentCode,
     r.equipmentName,

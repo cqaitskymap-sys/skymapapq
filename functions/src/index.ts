@@ -6,18 +6,22 @@
  *
  * Alternative: call POST /api/dms/effective-date/activate from Cloud Scheduler directly.
  */
+import { setGlobalOptions } from 'firebase-functions/v2/options';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
-import { getFirestore, type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
+import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
+import { getAdminAuth, getAdminFirestore, initializeAdmin } from './admin-app';
+
+// Keep Gen2 footprint bounded so large function sets fit Cloud Run quotas.
+setGlobalOptions({
+  region: 'us-central1',
+  maxInstances: 20,
+});
+
 
 function requiredString(value: unknown, field: string, maxLength = 200): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -228,8 +232,7 @@ function userNotification(
 export const createAdminUser = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
 
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -306,7 +309,7 @@ export const createAdminUser = onCall(async (request) => {
 
   let createdUid: string | undefined;
   try {
-    const authUser = await getAuth().createUser({
+    const authUser = await getAdminAuth().createUser({
       email,
       password,
       displayName: fullName,
@@ -314,7 +317,7 @@ export const createAdminUser = onCall(async (request) => {
       photoURL: profilePhoto || undefined,
     });
     createdUid = authUser.uid;
-    await getAuth().setCustomUserClaims(authUser.uid, {
+    await getAdminAuth().setCustomUserClaims(authUser.uid, {
       role,
       active: userStatus === 'Active' && !accountLocked,
     });
@@ -431,7 +434,7 @@ export const createAdminUser = onCall(async (request) => {
     return { id: userRef.id, ...userRecord };
   } catch (error) {
     if (createdUid) {
-      await getAuth().deleteUser(createdUid).catch((rollbackError) => {
+      await getAdminAuth().deleteUser(createdUid).catch((rollbackError) => {
         logger.error('Failed to roll back partially created user', { createdUid, rollbackError });
       });
     }
@@ -447,9 +450,8 @@ export const createAdminUser = onCall(async (request) => {
 
 export const updateAdminUser = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-
-  const firestore = getFirestore();
+  
+  const firestore = getAdminFirestore();
   const actorSnap = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnap.data();
   if (!actorSnap.exists || actor?.is_active !== true || !['super_admin', 'admin'].includes(actor?.role)) {
@@ -615,7 +617,7 @@ export const updateAdminUser = onCall(async (request) => {
   ) {
     throw new HttpsError('failed-precondition', 'You cannot change your own access or account status');
   }
-  const authUserBefore = await getAuth().getUser(authUid);
+  const authUserBefore = await getAdminAuth().getUser(authUid);
   const previousDisabled = authUserBefore.disabled;
   const requestedNextStatus = String(updates.userStatus ?? target.userStatus ?? target.status ?? 'Inactive');
   const nextLocked = Boolean(updates.accountLocked ?? target.accountLocked) || requestedNextStatus === 'Locked';
@@ -629,7 +631,7 @@ export const updateAdminUser = onCall(async (request) => {
   const nextEmail = typeof updates.email === 'string' ? updates.email.trim().toLowerCase() : previousEmail;
 
   try {
-    await getAuth().updateUser(authUid, {
+    await getAdminAuth().updateUser(authUid, {
       email: nextEmail || undefined,
       disabled: nextDisabled,
       displayName: typeof updates.fullName === 'string' ? updates.fullName.trim() : undefined,
@@ -637,7 +639,7 @@ export const updateAdminUser = onCall(async (request) => {
     });
     const accessClaimsChanged = typeof updates.role === 'string' || nextDisabled !== previousDisabled;
     if (accessClaimsChanged) {
-      await getAuth().setCustomUserClaims(authUid, {
+      await getAdminAuth().setCustomUserClaims(authUid, {
         ...authUserBefore.customClaims,
         role: updates.role ?? target.role ?? 'viewer',
         active: !nextDisabled,
@@ -749,19 +751,19 @@ export const updateAdminUser = onCall(async (request) => {
     }
     await batch.commit();
     if (accessClaimsChanged) {
-      await getAuth().revokeRefreshTokens(authUid)
+      await getAdminAuth().revokeRefreshTokens(authUid)
         .catch((revokeError) => logger.error('Failed to revoke changed user sessions', revokeError));
     }
     return { id: userId, ...target, ...updates, email: nextEmail, updatedAt: now };
   } catch (error) {
-    await getAuth().updateUser(authUid, {
+    await getAdminAuth().updateUser(authUid, {
       email: previousEmail || undefined,
       disabled: previousDisabled,
       displayName: authUserBefore.displayName || undefined,
       photoURL: authUserBefore.photoURL || null,
     }).then(async () => {
       if (typeof updates.role === 'string' || nextDisabled !== previousDisabled) {
-        await getAuth().setCustomUserClaims(authUid, authUserBefore.customClaims || {});
+        await getAdminAuth().setCustomUserClaims(authUid, authUserBefore.customClaims || {});
       }
     }).catch((rollbackError) => logger.error('Failed to roll back Auth user update', rollbackError));
     if (error instanceof HttpsError) throw error;
@@ -779,9 +781,8 @@ export const updateAdminUser = onCall(async (request) => {
 
 export const updateOwnUserProfile = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-
-  const firestore = getFirestore();
+  
+  const firestore = getAdminFirestore();
   const profileRef = firestore.collection('profiles').doc(request.auth.uid);
   const profileSnapshot = await profileRef.get();
   const profile = profileSnapshot.data();
@@ -801,10 +802,10 @@ export const updateOwnUserProfile = onCall(async (request) => {
     ? usersByAuthUid.docs[0].ref
     : fallbackUser?.exists ? fallbackUserRef : null;
 
-  const authBefore = await getAuth().getUser(request.auth.uid);
+  const authBefore = await getAdminAuth().getUser(request.auth.uid);
   const now = new Date().toISOString();
   try {
-    await getAuth().updateUser(request.auth.uid, { displayName: fullName });
+    await getAdminAuth().updateUser(request.auth.uid, { displayName: fullName });
     const batch = firestore.batch();
     batch.update(profileRef, { full_name: fullName, phone, updated_at: now });
     if (userRef) {
@@ -833,7 +834,7 @@ export const updateOwnUserProfile = onCall(async (request) => {
     await batch.commit();
     return { fullName, phone, updatedAt: now };
   } catch (error) {
-    await getAuth().updateUser(request.auth.uid, {
+    await getAdminAuth().updateUser(request.auth.uid, {
       displayName: authBefore.displayName || undefined,
     }).catch((rollbackError) => logger.error('Failed to roll back profile display name', rollbackError));
     if (error instanceof HttpsError) throw error;
@@ -848,9 +849,8 @@ export const recordOwnPasswordChange = onCall(async (request) => {
   if (!authenticatedAt || Date.now() - authenticatedAt > 5 * 60_000) {
     throw new HttpsError('failed-precondition', 'Recent authentication is required');
   }
-  initializeAdmin();
-
-  const firestore = getFirestore();
+  
+  const firestore = getAdminFirestore();
   const profile = await firestore.collection('profiles').doc(request.auth.uid).get();
   if (!profile.exists || profile.data()?.is_active !== true) {
     throw new HttpsError('permission-denied', 'An active account is required');
@@ -897,9 +897,9 @@ export const syncOwnEmailVerification = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
   initializeAdmin();
 
-  const authUser = await getAuth().getUser(request.auth.uid);
+  const authUser = await getAdminAuth().getUser(request.auth.uid);
   if (!authUser.emailVerified) return { verified: false };
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const profileRef = firestore.collection('profiles').doc(request.auth.uid);
   const profile = await profileRef.get();
   if (!profile.exists || profile.data()?.is_active !== true) {
@@ -948,7 +948,7 @@ export const auditPendingUserRegistration = onDocumentCreated('profiles/{userId}
   const profile = event.data?.data();
   if (!profile || profile.is_active !== false || profile.access_status !== 'pending') return;
 
-  await getFirestore().collection('audit_trail').add({
+  await getAdminFirestore().collection('audit_trail').add({
     collectionName: 'profiles',
     documentId: event.params.userId,
     action: 'REGISTER',
@@ -1373,8 +1373,7 @@ async function countAssignedUsers(firestore: Firestore, roleId: string) {
  */
 export const createAdminRole = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -1488,8 +1487,7 @@ export const createAdminRole = onCall(async (request) => {
 
 export const updateAdminRole = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -1615,8 +1613,7 @@ export const updateAdminRole = onCall(async (request) => {
 
 export const setAdminRoleStatus = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -1671,8 +1668,7 @@ export const setAdminRoleStatus = onCall(async (request) => {
 
 export const softDeleteAdminRole = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -1740,8 +1736,7 @@ export const softDeleteAdminRole = onCall(async (request) => {
 
 export const restoreAdminRole = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -1804,8 +1799,7 @@ export const restoreAdminRole = onCall(async (request) => {
 
 export const cloneAdminRole = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -1915,8 +1909,7 @@ export const cloneAdminRole = onCall(async (request) => {
 
 export const bulkUpdateAdminRoles = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -2155,8 +2148,7 @@ async function cascadeDepartmentRename(
 
 export const createAdminDepartment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -2283,8 +2275,7 @@ export const createAdminDepartment = onCall(async (request) => {
 
 export const updateAdminDepartment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -2473,8 +2464,7 @@ export const updateAdminDepartment = onCall(async (request) => {
 
 export const setAdminDepartmentStatus = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -2519,8 +2509,7 @@ export const setAdminDepartmentStatus = onCall(async (request) => {
 
 export const softDeleteAdminDepartment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -2594,8 +2583,7 @@ export const softDeleteAdminDepartment = onCall(async (request) => {
 
 export const restoreAdminDepartment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -2630,8 +2618,7 @@ export const restoreAdminDepartment = onCall(async (request) => {
 
 export const bulkUpdateAdminDepartments = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -2676,8 +2663,7 @@ export const bulkUpdateAdminDepartments = onCall(async (request) => {
 
 export const linkUsersToAdminDepartment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -2733,8 +2719,7 @@ export const linkUsersToAdminDepartment = onCall(async (request) => {
 
 export const logAdminDepartmentExport = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -3006,6 +2991,7 @@ export {
 export {
   getAdminCpvDashboardSnapshot,
   logAdminCpvDashboardAudit,
+  recordAdminCpvDashboardAudit,
 } from './cpv-dashboard-admin';
 
 export {

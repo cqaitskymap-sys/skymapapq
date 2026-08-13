@@ -77,16 +77,17 @@ export function EquipmentDetailPdf({ equipment, calibrations, pmRecords, breakdo
     <div className="max-w-4xl mx-auto bg-white text-black p-8 space-y-6 print:p-4" id="equipment-detail-report">
       <header className="border-b pb-4">
         <h1 className="text-xl font-bold">Equipment Dossier — {equipment.equipment_id}</h1>
-        <p className="text-sm text-gray-600">{equipment.equipment_name} | {equipment.equipment_type}</p>
+        <p className="text-sm text-gray-600">{equipment.equipment_name} | {equipment.manufacturing_line || '—'}</p>
       </header>
       <section>
         <h2 className="font-semibold mb-2">Master Data</h2>
         <table className="w-full text-sm border-collapse">
           <tbody>{[
-            ['Equipment ID', equipment.equipment_id], ['Name', equipment.equipment_name], ['Type', equipment.equipment_type],
-            ['Department', equipment.department], ['Area/Room', equipment.area_room_no], ['Make/Model', `${equipment.make} / ${equipment.model}`],
-            ['Serial No', equipment.serial_no], ['Capacity', equipment.capacity], ['Installation', equipment.installation_date || '—'],
-            ['Status', equipment.equipment_status], ['Calibration', equipment.calibration_status], ['PM', equipment.pm_status],
+            ['Equipment ID', equipment.equipment_id],
+            ['Name', equipment.equipment_name],
+            ['Qualification Status', equipment.qualification_status || '—'],
+            ['Manufacturing Line', equipment.manufacturing_line || '—'],
+            ['Status', equipment.equipment_status],
           ].map(([k, v]) => (
             <tr key={k} className="border-b"><td className="py-1 pr-4 font-medium w-40">{k}</td><td>{v}</td></tr>
           ))}</tbody>

@@ -6,7 +6,6 @@ import {
 import { ADMIN_COLLECTIONS } from '@/lib/admin/constants';
 import type { PermissionMatrix } from '@/lib/admin/schemas';
 import {
-  getDefaultRolePermissionMatrix,
   normalizeRole,
   type AppModule,
   type PermissionAction,
@@ -106,7 +105,7 @@ export function mergePermissionMatrices(
 
 export async function getRolePermissions(roleId: string): Promise<PermissionMatrixData> {
   if (!isFirebaseConfigured()) {
-    return getDefaultRolePermissionMatrix(roleId).permissions;
+    return emptyPermissionMatrix();
   }
   try {
     const snap = await getDocs(query(
@@ -121,7 +120,7 @@ export async function getRolePermissions(roleId: string): Promise<PermissionMatr
   } catch (e) {
     console.error('getRolePermissions failed:', e);
   }
-  return getDefaultRolePermissionMatrix(roleId).permissions;
+  return emptyPermissionMatrix();
 }
 
 export async function getUserPermissionRecord(userId: string): Promise<UserPermissionRecord | null> {

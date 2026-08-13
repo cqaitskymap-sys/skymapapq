@@ -49,14 +49,12 @@ export function CompositionTable({ rows, onChange, readOnly }: CompositionTableP
               <TableHead>Qty</TableHead>
               <TableHead>Unit</TableHead>
               <TableHead>Function</TableHead>
-              <TableHead>Spec No</TableHead>
-              <TableHead>STP No</TableHead>
               {!readOnly && <TableHead />}
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.length === 0 ? (
-              <TableRow><TableCell colSpan={9} className="text-center text-sm text-muted-foreground">No ingredients</TableCell></TableRow>
+              <TableRow><TableCell colSpan={readOnly ? 6 : 7} className="text-center text-sm text-muted-foreground">No ingredients</TableCell></TableRow>
             ) : (
               rows.map((row, i) => (
                 <TableRow key={row.id || i}>
@@ -68,11 +66,12 @@ export function CompositionTable({ rows, onChange, readOnly }: CompositionTableP
                     </Select>
                   </TableCell>
                   <TableCell><Input value={row.grade} disabled={readOnly} onChange={(e) => update(i, { grade: e.target.value })} className="h-8" /></TableCell>
-                  <TableCell><Input type="number" value={row.quantity} disabled={readOnly} onChange={(e) => update(i, { quantity: Number(e.target.value) })} className="h-8 w-20" /></TableCell>
-                  <TableCell><Input value={row.unit} disabled={readOnly} onChange={(e) => update(i, { unit: e.target.value })} className="h-8 w-16" /></TableCell>
+                  <TableCell><Input type="number" min={0.0001} step="any" value={Number.isFinite(row.quantity) && row.quantity > 0 ? row.quantity : ''} disabled={readOnly} onChange={(e) => {
+                    const raw = e.target.value;
+                    update(i, { quantity: raw === '' ? (Number.NaN as unknown as number) : Number(raw) });
+                  }} className="h-8 w-24" /></TableCell>
+                  <TableCell><Input value={row.unit} disabled={readOnly} onChange={(e) => update(i, { unit: e.target.value })} className="h-8 w-20" /></TableCell>
                   <TableCell><Input value={row.functionPurpose} disabled={readOnly} onChange={(e) => update(i, { functionPurpose: e.target.value })} className="h-8" /></TableCell>
-                  <TableCell><Input value={row.specificationNo} disabled={readOnly} onChange={(e) => update(i, { specificationNo: e.target.value })} className="h-8" /></TableCell>
-                  <TableCell><Input value={row.stpNo} disabled={readOnly} onChange={(e) => update(i, { stpNo: e.target.value })} className="h-8" /></TableCell>
                   {!readOnly && (
                     <TableCell>
                       <Button type="button" variant="ghost" size="icon" onClick={() => remove(i)}><Trash2 className="h-4 w-4 text-red-500" /></Button>

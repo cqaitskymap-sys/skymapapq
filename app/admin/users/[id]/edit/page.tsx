@@ -47,21 +47,26 @@ function EditUserContent({ id }: { id: string }) {
 
   const onSubmit = async (data: AdminUser, options?: UserFormSubmitOptions) => {
     setSubmitting(true);
-    const result = await updateSystemUser(existing.id!, data, existing, {
-      userId: user?.uid || 'system',
-      userName: profile?.full_name || profile?.email || 'Admin',
-      role,
-    }, 'EDIT_USER', {
-      modulePermissions: options?.modulePermissions,
-      presetId: options?.presetId,
-    }, options?.changeReason);
-    setSubmitting(false);
-    if (result.error) {
-      toast.error(result.error);
-      return;
+    try {
+      const result = await updateSystemUser(existing.id!, data, existing, {
+        userId: user?.uid || 'system',
+        userName: profile?.full_name || profile?.email || 'Admin',
+        role,
+      }, 'EDIT_USER', {
+        modulePermissions: options?.modulePermissions,
+        presetId: options?.presetId,
+      }, options?.changeReason);
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+      toast.success('User updated');
+      router.push(`/admin/users/${id}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to update user');
+    } finally {
+      setSubmitting(false);
     }
-    toast.success('User updated');
-    router.push(`/admin/users/${id}`);
   };
 
   return (

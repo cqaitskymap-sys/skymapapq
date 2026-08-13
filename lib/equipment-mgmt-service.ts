@@ -1,6 +1,6 @@
 import {
   addDoc, collection, doc, getDoc, getDocs, limit, orderBy, query, updateDoc, where,
-  type QueryConstraint,
+  type DocumentData, type QueryConstraint, type UpdateData,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getFirebaseFirestore, getFirebaseStorage } from '@/lib/firebase';
@@ -70,30 +70,39 @@ async function logStatusChange(equipmentDocId: string, equipmentId: string, oldS
 // ─── Equipment Master ────────────────────────────────────────────────────────
 
 export async function createEquipment(input: EquipmentCreateInput, actor: EquipmentActor): Promise<EquipmentRecord> {
-  const equipmentId = await genNumber('EQP', EQUIPMENT_COLLECTIONS.master, 'equipment_id');
+  const equipmentId = input.equipment_id.trim();
+  const all = await listEquipment({});
+  if (all.some((e) => e.equipment_id.toLowerCase() === equipmentId.toLowerCase())) {
+    throw new Error(`Equipment ID "${equipmentId}" already exists`);
+  }
+
   const timestamp = now();
+  const qualificationRequired = input.qualification_status !== 'Not Required';
   const record: Omit<EquipmentRecord, 'id'> = {
     equipment_id: equipmentId,
-    equipment_name: input.equipment_name,
-    equipment_type: input.equipment_type,
-    department: input.department,
-    area_room_no: input.area_room_no,
-    make: input.make,
-    model: input.model,
-    serial_no: input.serial_no,
-    capacity: input.capacity,
-    installation_date: input.installation_date || null,
-    calibration_required: input.calibration_required,
-    pm_required: input.pm_required,
-    qualification_required: input.qualification_required,
-    cleaning_required: input.cleaning_required,
-    equipment_status: input.equipment_status,
-    calibration_due_date: input.calibration_due_date || null,
-    calibration_status: input.calibration_required ? 'Due' : 'Not Required',
-    pm_due_date: input.pm_due_date || null,
-    pm_status: input.pm_required ? 'Due' : 'Not Required',
-    validation_id: input.validation_id || null,
-    remarks: input.remarks,
+    equipment_name: input.equipment_name.trim(),
+    qualification_status: input.qualification_status,
+    manufacturing_line: input.manufacturing_line.trim(),
+    equipment_type: 'Manufacturing Equipment',
+    department: 'Production',
+    area_room_no: '',
+    make: '',
+    model: '',
+    serial_no: '',
+    capacity: '',
+    installation_date: null,
+    calibration_required: false,
+    pm_required: false,
+    qualification_required: qualificationRequired,
+    cleaning_required: false,
+    equipment_status: 'Active',
+    calibration_due_date: null,
+    calibration_status: 'Not Required',
+    pm_due_date: null,
+    pm_status: 'Not Required',
+    validation_id: null,
+    remarks: '',
+    is_deleted: false,
     created_by: actor.id,
     created_by_name: actor.name,
     updated_by: actor.id,
@@ -109,7 +118,14 @@ export async function createEquipment(input: EquipmentCreateInput, actor: Equipm
 export async function getEquipmentById(id: string): Promise<EquipmentRecord | null> {
   const snap = await getDoc(doc(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.master, id));
   if (!snap.exists()) return null;
-  return { id: snap.id, ...snap.data() } as EquipmentRecord;
+  const data = snap.data();
+  if (data.is_deleted) return null;
+  return {
+    id: snap.id,
+    ...data,
+    qualification_status: data.qualification_status || '',
+    manufacturing_line: data.manufacturing_line || '',
+  } as EquipmentRecord;
 }
 
 export async function listEquipment(filters?: EquipmentFilters): Promise<EquipmentRecord[]> {
@@ -121,30 +137,86 @@ export async function listEquipment(filters?: EquipmentFilters): Promise<Equipme
   let records: EquipmentRecord[];
   try {
     const snap = await getDocs(query(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.master), ...constraints));
-    records = snap.docs.map((d) => ({ id: d.id, ...d.data() } as EquipmentRecord));
+    records = snap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ...data,
+        qualification_status: data.qualification_status || '',
+        manufacturing_line: data.manufacturing_line || '',
+      } as EquipmentRecord;
+    });
   } catch {
     const snap = await getDocs(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.master));
-    records = snap.docs.map((d) => ({ id: d.id, ...d.data() } as EquipmentRecord));
+    records = snap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ...data,
+        qualification_status: data.qualification_status || '',
+        manufacturing_line: data.manufacturing_line || '',
+      } as EquipmentRecord;
+    });
   }
 
+  records = records.filter((r) => !r.is_deleted);
   if (filters?.calibration_status) records = records.filter((r) => r.calibration_status === filters.calibration_status);
   if (filters?.search) {
     const q = filters.search.toLowerCase();
     records = records.filter((r) =>
-      r.equipment_id.toLowerCase().includes(q) || r.equipment_name.toLowerCase().includes(q) ||
-      r.serial_no.toLowerCase().includes(q),
+      r.equipment_id.toLowerCase().includes(q)
+      || r.equipment_name.toLowerCase().includes(q)
+      || (r.manufacturing_line || '').toLowerCase().includes(q)
+      || (r.serial_no || '').toLowerCase().includes(q),
     );
   }
   return records;
 }
 
+export async function deleteEquipment(
+  id: string,
+  actor: EquipmentActor,
+  reason: string,
+): Promise<void> {
+  const existing = await getEquipmentById(id);
+  if (!existing) throw new Error('Equipment not found');
+  if (!reason.trim()) throw new Error('Delete reason is required');
+
+  const updates: UpdateData<DocumentData> = {
+    is_deleted: true,
+    updated_by: actor.id,
+    updated_by_name: actor.name,
+    updated_at: now(),
+  };
+  await updateDoc(doc(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.master, id), updates);
+  await auditLog(actor, 'DELETE', id, existing, { is_deleted: true }, reason.trim());
+}
+
 export async function updateEquipment(id: string, input: Partial<EquipmentCreateInput>, actor: EquipmentActor): Promise<EquipmentRecord> {
   const existing = await getEquipmentById(id);
   if (!existing) throw new Error('Equipment not found');
-  const updates = { ...input, updated_by: actor.id, updated_by_name: actor.name, updated_at: now() };
-  if (input.equipment_status && input.equipment_status !== existing.equipment_status) {
-    await logStatusChange(id, existing.equipment_id, existing.equipment_status, input.equipment_status, 'Manual update', actor);
+
+  const nextId = input.equipment_id?.trim();
+  if (nextId && nextId.toLowerCase() !== existing.equipment_id.toLowerCase()) {
+    const all = await listEquipment({});
+    if (all.some((e) => e.id !== id && e.equipment_id.toLowerCase() === nextId.toLowerCase())) {
+      throw new Error(`Equipment ID "${nextId}" already exists`);
+    }
   }
+
+  const updates: UpdateData<DocumentData> = {
+    updated_by: actor.id,
+    updated_by_name: actor.name,
+    updated_at: now(),
+  };
+  if (input.equipment_name !== undefined) updates.equipment_name = input.equipment_name.trim();
+  if (nextId !== undefined) updates.equipment_id = nextId;
+  if (input.qualification_status !== undefined) {
+    updates.qualification_status = input.qualification_status;
+    updates.qualification_required = input.qualification_status !== 'Not Required';
+  }
+  if (input.manufacturing_line !== undefined) updates.manufacturing_line = input.manufacturing_line.trim();
+
   await updateDoc(doc(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.master, id), updates);
   await auditLog(actor, 'EDIT', id, existing, updates);
   return { ...existing, ...updates } as EquipmentRecord;
@@ -154,7 +226,10 @@ export async function blockEquipment(id: string, actor: EquipmentActor, reason: 
   const existing = await getEquipmentById(id);
   if (!existing) throw new Error('Equipment not found');
   await updateDoc(doc(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.master, id), {
-    equipment_status: 'Blocked', updated_at: now(),
+    equipment_status: 'Blocked',
+    updated_by: actor.id,
+    updated_by_name: actor.name,
+    updated_at: now(),
   });
   await logStatusChange(id, existing.equipment_id, existing.equipment_status, 'Blocked', reason, actor);
   await auditLog(actor, 'BLOCKING', id, existing, { equipment_status: 'Blocked' }, reason);
@@ -208,7 +283,18 @@ export async function createCalibration(input: CalibrationInput, actor: Equipmen
     updated_at: now(),
   };
   if (input.calibration_status === 'Failed') {
+    const existing = await getEquipmentById(input.equipment_doc_id);
     eqUpdates.equipment_status = 'Blocked';
+    if (existing && existing.equipment_status !== 'Blocked') {
+      await logStatusChange(
+        input.equipment_doc_id,
+        input.equipment_id,
+        existing.equipment_status,
+        'Blocked',
+        'Calibration failed',
+        actor,
+      );
+    }
     await notify('Calibration Failed', `${input.equipment_name} calibration failed — equipment blocked`, input.equipment_doc_id, ['qa_manager', 'engineering']);
   }
   await updateDoc(doc(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.master, input.equipment_doc_id), eqUpdates);
@@ -222,11 +308,16 @@ export async function listCalibrations(equipmentDocId?: string): Promise<Calibra
     if (equipmentDocId) constraints.unshift(where('equipment_doc_id', '==', equipmentDocId));
     const snap = await getDocs(query(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.calibration), ...constraints));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CalibrationRecord));
-  } catch {
-    const snap = equipmentDocId
-      ? await getDocs(query(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.calibration), where('equipment_doc_id', '==', equipmentDocId)))
-      : await getDocs(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.calibration));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CalibrationRecord));
+  } catch (error) {
+    try {
+      const snap = equipmentDocId
+        ? await getDocs(query(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.calibration), where('equipment_doc_id', '==', equipmentDocId)))
+        : await getDocs(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.calibration));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() } as CalibrationRecord));
+    } catch (fallbackError) {
+      console.error('listCalibrations failed:', fallbackError || error);
+      return [];
+    }
   }
 }
 
@@ -282,11 +373,16 @@ export async function listPmRecords(equipmentDocId?: string): Promise<PmRecord[]
     if (equipmentDocId) constraints.unshift(where('equipment_doc_id', '==', equipmentDocId));
     const snap = await getDocs(query(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.pm), ...constraints));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() } as PmRecord));
-  } catch {
-    const snap = equipmentDocId
-      ? await getDocs(query(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.pm), where('equipment_doc_id', '==', equipmentDocId)))
-      : await getDocs(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.pm));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as PmRecord));
+  } catch (error) {
+    try {
+      const snap = equipmentDocId
+        ? await getDocs(query(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.pm), where('equipment_doc_id', '==', equipmentDocId)))
+        : await getDocs(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.pm));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() } as PmRecord));
+    } catch (fallbackError) {
+      console.error('listPmRecords failed:', fallbackError || error);
+      return [];
+    }
   }
 }
 
@@ -364,8 +460,21 @@ export async function createBreakdown(input: BreakdownInput, actor: EquipmentAct
 
   if (input.impact_on_product_quality) {
     await updateDoc(doc(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.master, input.equipment_doc_id), {
-      equipment_status: 'Under Maintenance', updated_at: now(),
+      equipment_status: 'Under Maintenance',
+      updated_by: actor.id,
+      updated_by_name: actor.name,
+      updated_at: now(),
     });
+    if (eq.equipment_status !== 'Under Maintenance') {
+      await logStatusChange(
+        input.equipment_doc_id,
+        eq.equipment_id,
+        eq.equipment_status,
+        'Under Maintenance',
+        'Breakdown with product quality impact',
+        actor,
+      );
+    }
   }
   await notify('Equipment Breakdown', `${input.equipment_name} breakdown reported`, input.equipment_doc_id, ['qa_manager', 'engineering']);
 
@@ -378,11 +487,16 @@ export async function listBreakdowns(equipmentDocId?: string): Promise<Breakdown
     if (equipmentDocId) constraints.unshift(where('equipment_doc_id', '==', equipmentDocId));
     const snap = await getDocs(query(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.breakdown), ...constraints));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() } as BreakdownRecord));
-  } catch {
-    const snap = equipmentDocId
-      ? await getDocs(query(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.breakdown), where('equipment_doc_id', '==', equipmentDocId)))
-      : await getDocs(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.breakdown));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as BreakdownRecord));
+  } catch (error) {
+    try {
+      const snap = equipmentDocId
+        ? await getDocs(query(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.breakdown), where('equipment_doc_id', '==', equipmentDocId)))
+        : await getDocs(collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.breakdown));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() } as BreakdownRecord));
+    } catch (fallbackError) {
+      console.error('listBreakdowns failed:', fallbackError || error);
+      return [];
+    }
   }
 }
 
@@ -412,11 +526,16 @@ export async function getEquipmentAttachments(equipmentDocId: string): Promise<E
       where('equipment_doc_id', '==', equipmentDocId), orderBy('uploaded_at', 'desc'),
     ));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() } as EquipmentAttachment));
-  } catch {
-    const snap = await getDocs(query(
-      collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.attachments), where('equipment_doc_id', '==', equipmentDocId),
-    ));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() } as EquipmentAttachment));
+  } catch (error) {
+    try {
+      const snap = await getDocs(query(
+        collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.attachments), where('equipment_doc_id', '==', equipmentDocId),
+      ));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() } as EquipmentAttachment));
+    } catch (fallbackError) {
+      console.error('getEquipmentAttachments failed:', fallbackError || error);
+      return [];
+    }
   }
 }
 
@@ -436,12 +555,44 @@ export async function getAuditLogsForEquipment(equipmentDocId: string): Promise<
   try {
     const snap = await getDocs(query(
       collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.auditLogs),
-      where('recordId', '==', equipmentDocId), where('module', '==', 'Equipment'),
-      orderBy('dateTime', 'desc'), limit(100),
+      where('recordId', '==', equipmentDocId),
+      where('moduleName', '==', 'Equipment'),
+      orderBy('timestamp', 'desc'),
+      limit(100),
     ));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    return snap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ...data,
+        action: data.actionType || data.action,
+        user_name: data.userName || data.user_name,
+        timestamp: data.timestamp || data.dateTime || data.created_at,
+      };
+    });
   } catch {
-    return [];
+    try {
+      const snap = await getDocs(query(
+        collection(getFirebaseFirestore(), EQUIPMENT_COLLECTIONS.auditLogs),
+        where('recordId', '==', equipmentDocId),
+        limit(100),
+      ));
+      return snap.docs
+        .map((d) => {
+          const data = d.data() as Record<string, unknown>;
+          return {
+            id: d.id,
+            ...data,
+            action: data.actionType || data.action,
+            user_name: data.userName || data.user_name,
+            timestamp: data.timestamp || data.dateTime || data.created_at,
+          } as Record<string, unknown>;
+        })
+        .filter((row) => String(row.moduleName || row.module || '') === 'Equipment')
+        .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+    } catch {
+      return [];
+    }
   }
 }
 
@@ -454,6 +605,7 @@ export async function syncEquipmentDueDates(): Promise<number> {
 
   for (const d of snap.docs) {
     const data = d.data() as EquipmentRecord;
+    if (data.is_deleted) continue;
     const updates: Partial<EquipmentRecord> = {};
 
     if (data.calibration_required && data.calibration_due_date) {
@@ -561,8 +713,14 @@ export async function listEquipmentForPqr(): Promise<EquipmentRecord[]> {
 export async function exportEquipmentCsv(equipment: EquipmentRecord[]) {
   downloadCsv(
     `equipment-${today()}.csv`,
-    ['Equipment ID', 'Name', 'Type', 'Department', 'Status', 'Calibration', 'PM'],
-    equipment.map((e) => [e.equipment_id, e.equipment_name, e.equipment_type, e.department, e.equipment_status, e.calibration_status, e.pm_status]),
+    ['Equipment ID', 'Name', 'Qualification Status', 'Manufacturing Line', 'Status'],
+    equipment.map((e) => [
+      e.equipment_id,
+      e.equipment_name,
+      e.qualification_status || '',
+      e.manufacturing_line || '',
+      e.equipment_status,
+    ]),
   );
 }
 

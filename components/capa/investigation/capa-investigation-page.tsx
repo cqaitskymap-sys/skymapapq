@@ -233,7 +233,7 @@ export function CapaInvestigationPage({ capaId }: { capaId: string }) {
     setBusy(true);
     try {
       await uploadCapaInvestigationAttachmentPlaceholder(capaId, file.name, actor);
-      toast.success('Attachment placeholder recorded');
+      toast.success('Attachment uploaded');
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Upload failed');

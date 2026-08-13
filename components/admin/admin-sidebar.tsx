@@ -7,7 +7,7 @@ import {
   FlaskConical, Package, SlidersHorizontal, GitBranch, CheckSquare, Hash,
   FileSearch, PenLine, Bell, Database, Settings, PanelLeftClose,
   PanelLeftOpen, ChevronRight, ShieldCheck, LogIn, UserCheck, KeyRound,
-  Mail, Blocks, FileUp, HardDrive, Cloud, Activity, LayoutGrid,
+  Mail, Blocks, FileUp, HardDrive, Cloud, Activity, LayoutGrid, Wrench,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -18,7 +18,7 @@ import {
   canViewApprovalMatrix, canViewAuditTrail, canViewLoginActivity, canViewBackup, canViewBatches,
   canViewCompanySites, canViewDepartments, canViewDesignations,
   canViewDocumentNumbering, canViewEsignSettings, canViewNotificationSettings,
-  canViewParameters, canViewProducts, canViewRoles, canViewSystemSettings,
+  canViewParameters, canViewProducts, canViewEquipmentMaster, canViewRoles, canViewSystemSettings,
   canViewModuleConfiguration, canViewMasterDataImportExport, canViewUsers, canViewWorkflows, canViewAccessReview,
 } from '@/lib/permissions';
 
@@ -26,7 +26,7 @@ const ICON_MAP: Record<string, React.ElementType> = {
   LayoutDashboard, Users, Shield, Building2, BadgeCheck, Factory,
   FlaskConical, Package, SlidersHorizontal, GitBranch, CheckSquare, Hash,
   FileSearch, PenLine, Bell, Database, Settings, LogIn, UserCheck, KeyRound,
-  Mail, Blocks, FileUp, HardDrive, Cloud, Activity,
+  Mail, Blocks, FileUp, HardDrive, Cloud, Activity, Wrench,
 };
 
 interface AdminSidebarProps {
@@ -60,6 +60,9 @@ export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
     if (href === '/admin/products') {
       return pathname.startsWith('/admin/products') || pathname.startsWith('/dashboard/admin/products');
     }
+    if (href === '/admin/equipment') {
+      return pathname.startsWith('/admin/equipment') || pathname.startsWith('/dashboard/admin/equipment');
+    }
     if (href === '/admin/batches') {
       return pathname.startsWith('/admin/batches') || pathname.startsWith('/dashboard/admin/batches');
     }
@@ -90,6 +93,7 @@ export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
     ['/admin/designations', canViewDesignations],
     ['/admin/company-site', canViewCompanySites],
     ['/admin/products', canViewProducts],
+    ['/admin/equipment', canViewEquipmentMaster],
     ['/admin/batches', canViewBatches],
     ['/admin/parameters', canViewParameters],
     ['/admin/workflows', canViewWorkflows],

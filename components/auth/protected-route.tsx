@@ -67,7 +67,7 @@ export function ProtectedRoute({ children, module, requireEdit = false }: Protec
     );
   }
 
-  if (!profile.is_active || profile.access_status === 'pending') {
+  if (!profile.is_active || ['pending', 'disabled', 'locked', 'retired', 'rejected'].includes(profile.access_status || '')) {
     return (
       <Card className="mx-auto mt-12 max-w-lg border-amber-200">
         <CardContent className="space-y-4 p-8 text-center">
@@ -98,7 +98,7 @@ export function ProtectedRoute({ children, module, requireEdit = false }: Protec
             Your role does not have permission to access this module.
           </p>
           <Button asChild variant="outline">
-            <Link href="/dashboard">Return to Dashboard</Link>
+            <Link href="/launcher">Return to Launcher</Link>
           </Button>
         </CardContent>
       </Card>
@@ -112,7 +112,7 @@ export function ProtectedRoute({ children, module, requireEdit = false }: Protec
           <ShieldX className="mx-auto h-12 w-12 text-amber-500" />
           <h2 className="text-xl font-bold">Read-Only Access</h2>
           <p className="text-sm text-muted-foreground">You can view records but cannot modify them.</p>
-          <Button asChild variant="outline"><Link href="/dashboard">Return to Dashboard</Link></Button>
+          <Button asChild variant="outline"><Link href="/launcher">Return to Launcher</Link></Button>
         </CardContent>
       </Card>
     );

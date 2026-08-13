@@ -2,14 +2,11 @@
  * Parameter Master — privileged Cloud Functions.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import {
-  getFirestore, type Firestore, type DocumentData, type WriteBatch, FieldValue,
-} from 'firebase-admin/firestore';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
+import { type Firestore, type DocumentData, type WriteBatch, FieldValue,
+} from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
+
 
 function requiredString(value: unknown, field: string, maxLength = 200): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -386,8 +383,7 @@ async function countLinkedParameterReferences(
 
 export const createAdminParameter = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertParameterEditor(actor, String(actor?.role || ''));
@@ -437,8 +433,7 @@ export const createAdminParameter = onCall(async (request) => {
 
 export const updateAdminParameter = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertParameterEditor(actor, String(actor?.role || ''));
@@ -536,8 +531,7 @@ export const updateAdminParameter = onCall(async (request) => {
 
 export const setAdminParameterStatus = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertParameterAdmin(actor, String(actor?.role || ''));
@@ -585,8 +579,7 @@ export const setAdminParameterStatus = onCall(async (request) => {
 
 export const archiveAdminParameter = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertParameterAdmin(actor, String(actor?.role || ''));
@@ -633,8 +626,7 @@ export const archiveAdminParameter = onCall(async (request) => {
 
 export const softDeleteAdminParameter = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertParameterAdmin(actor, String(actor?.role || ''));
@@ -682,8 +674,7 @@ export const softDeleteAdminParameter = onCall(async (request) => {
 
 export const restoreAdminParameter = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertParameterEditor(actor, String(actor?.role || ''));
@@ -722,8 +713,7 @@ export const restoreAdminParameter = onCall(async (request) => {
 
 export const bulkUpdateAdminParameters = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertParameterAdmin(actor, String(actor?.role || ''));
@@ -773,8 +763,7 @@ export const bulkUpdateAdminParameters = onCall(async (request) => {
 
 export const bulkSoftDeleteAdminParameters = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertParameterAdmin(actor, String(actor?.role || ''));
@@ -837,8 +826,7 @@ export const bulkSoftDeleteAdminParameters = onCall(async (request) => {
 
 export const importAdminParameters = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertParameterAdmin(actor, String(actor?.role || ''));
@@ -902,8 +890,7 @@ export const importAdminParameters = onCall(async (request) => {
 
 export const logAdminParameterExport = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertParameterEditor(actor, String(actor?.role || ''));
@@ -928,8 +915,7 @@ export const logAdminParameterExport = onCall(async (request) => {
 
 export const seedAdminDefaultParameters = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertParameterAdmin(actor, String(actor?.role || ''));

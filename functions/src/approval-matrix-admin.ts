@@ -2,14 +2,11 @@
  * Approval Matrix — privileged Cloud Functions.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import {
-  getFirestore, type Firestore, type DocumentData, type WriteBatch,
-} from 'firebase-admin/firestore';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
+import { type Firestore, type DocumentData, type WriteBatch,
+} from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
+
 
 function requiredString(value: unknown, field: string, maxLength = 200): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -306,8 +303,7 @@ async function countLinkedUsage(firestore: Firestore, matrixCode: string, matrix
 
 async function resolveActor(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnap = await firestore.collection('users').doc(request.auth.uid).get();
   const actor = actorSnap.data();
   const actorRole = String(actor?.role || '');

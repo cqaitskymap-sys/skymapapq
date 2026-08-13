@@ -19,13 +19,13 @@ import {
   YIELD_MONITORING_COLLECTION,
   YIELD_LEGACY_COLLECTIONS,
   YIELD_STAGES,
+  DEFAULT_YIELD_LIMITS,
   buildYieldMonitoringId,
   calculateLossQuantity,
   calculateYieldPercentage,
   calculateNetYieldPercentage,
   calculateVariancePercentage,
   evaluateYieldStatus,
-  defaultLimitsForStage,
   type YieldMonitoringFormData,
   type YieldMonitoringRecord,
 } from '@/lib/cpv-yield-monitoring';
@@ -258,6 +258,28 @@ export async function fetchYieldStageParameters(stage?: string): Promise<Paramet
   }
 }
 
+export async function fetchYieldStageLimits(stage: string): Promise<{
+  lowerLimit: number;
+  upperLimit: number;
+  targetYield: number;
+} | null> {
+  const params = await fetchYieldStageParameters(stage);
+  const candidate = params.find((p) => {
+    const n = normalizeParameter(p);
+    return n.status === 'Active';
+  });
+  if (candidate) {
+    const normalized = normalizeParameter(candidate);
+    const lower = Number(normalized.lowerLimit || normalized.lsl);
+    const upper = Number(normalized.upperLimit || normalized.usl);
+    const target = Number(normalized.targetValue || normalized.target);
+    if (Number.isFinite(lower) && Number.isFinite(upper) && Number.isFinite(target)) {
+      return { lowerLimit: lower, upperLimit: upper, targetYield: target };
+    }
+  }
+  return DEFAULT_YIELD_LIMITS[stage] ?? null;
+}
+
 export async function createYieldRecord(
   data: YieldMonitoringFormData,
   _actor: YieldActor,
@@ -463,10 +485,6 @@ export function yieldStageTrendData(records: YieldMonitoringRecord[], stage: str
       lower: r.lowerLimit,
       upper: r.upperLimit,
     }));
-}
-
-export function stageDefaults(stage: string) {
-  return defaultLimitsForStage(stage);
 }
 
 export const YIELD_STAGE_OPTIONS = YIELD_STAGES;

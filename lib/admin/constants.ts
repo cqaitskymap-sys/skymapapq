@@ -745,7 +745,7 @@ export const LOGO_ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'imag
 
 export const DOSAGE_FORMS = [
   'Injection', 'Tablet', 'Capsule', 'Syrup', 'Suspension', 'Ointment',
-  'Cream', 'Gel', 'Drops', 'Powder', 'Other',
+  'Cream', 'Gel', 'Drops', 'Eye Drop', 'Nasal Drop', 'Powder', 'Dry Powder', 'Other',
 ] as const;
 
 export const ROUTE_OPTIONS = ['IV', 'IM', 'Oral', 'Topical', 'Ophthalmic', 'Nasal', 'Other'] as const;
@@ -781,7 +781,7 @@ export const INGREDIENT_TYPES = [
 ] as const;
 
 export const PACKING_MATERIAL_TYPES = [
-  'Primary Packing', 'Secondary Packing', 'Tertiary Packing',
+  'Primary Packing',
 ] as const;
 
 export const PRODUCT_ATTACHMENT_TYPES = ['specification', 'stp', 'other'] as const;
@@ -852,6 +852,7 @@ export const ADMIN_NAV_ITEMS = [
   { label: 'Designation Master', href: '/admin/designations', icon: 'BadgeCheck' },
   { label: 'Company / Site Master', href: '/admin/company-site', icon: 'Factory' },
   { label: 'Product Master', href: '/admin/products', icon: 'FlaskConical' },
+  { label: 'Equipment Master', href: '/admin/equipment', icon: 'Wrench' },
   { label: 'Batch Master', href: '/admin/batches', icon: 'Package' },
   { label: 'Parameter Master', href: '/admin/parameters', icon: 'SlidersHorizontal' },
   { label: 'Workflow Configuration', href: '/admin/workflows', icon: 'GitBranch' },
@@ -902,6 +903,7 @@ export const MASTER_DATA_IMPORT_EXPORT_TYPES = [
   { code: 'designations', label: 'Designation Master', collection: 'designations', uniqueKey: 'designationCode', required: ['designationCode', 'designationName'] },
   { code: 'company_sites', label: 'Company / Site Master', collection: 'company_sites', uniqueKey: 'siteCode', required: ['siteCode', 'siteName'] },
   { code: 'products', label: 'Product Master', collection: 'products', uniqueKey: 'productCode', required: ['productCode', 'productName'] },
+  { code: 'equipment_master', label: 'Equipment Master', collection: 'equipment_master', uniqueKey: 'equipment_id', required: ['equipment_name', 'equipment_id', 'qualification_status', 'manufacturing_line'] },
   { code: 'batches', label: 'Batch Master', collection: 'batches', uniqueKey: 'batchNumber', required: ['batchNumber'] },
   { code: 'parameters', label: 'Parameter Master', collection: 'parameters', uniqueKey: 'parameterCode', required: ['parameterCode', 'parameterName'] },
   { code: 'workflows', label: 'Workflow Configuration', collection: 'workflows', uniqueKey: 'workflowCode', required: ['workflowCode', 'workflowName'] },

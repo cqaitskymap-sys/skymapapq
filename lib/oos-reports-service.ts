@@ -122,7 +122,9 @@ export async function getOosReportById(id: string): Promise<OosReportRecord | nu
       const all = await fetchOosReportRecords();
       return all.find((r) => r.id === id) ?? null;
     }
-    return { id: snap.id, ...snap.data() } as OosReportRecord;
+    const record = { id: snap.id, ...snap.data() } as OosReportRecord;
+    if (record.is_deleted) return null;
+    return record;
   } catch {
     const all = await fetchOosReportRecords();
     return all.find((r) => r.id === id) ?? null;
@@ -183,28 +185,12 @@ export async function exportOosReport(
   exportType: 'PDF' | 'Excel' | 'CSV',
   actor: OosReportActor,
 ): Promise<{ fileUrl: string; error?: string }> {
-  const placeholderUrl = `/api/exports/oos-reports/${report.id}/${exportType.toLowerCase()}`;
-  const fileName = `${report.report_number.replace(/\//g, '-')}.${exportType === 'Excel' ? 'xlsx' : exportType === 'PDF' ? 'pdf' : 'csv'}`;
-  if (isFirebaseConfigured()) {
-    try {
-      await updateDoc(doc(getFirebaseFirestore(), OOS_COLLECTIONS.reports, report.id), {
-        export_type: exportType,
-        file_url: placeholderUrl,
-        file_name: fileName,
-        report_status: 'Exported',
-        updated_at: nowIso(),
-      });
-    } catch (e) {
-      console.error('exportOosReport update', e);
-    }
-  }
-  const action = exportType === 'PDF' ? 'exported PDF' : exportType === 'Excel' ? 'exported Excel' : 'exported CSV';
-  await audit(actor, action, report.id, `${report.report_number} — ${exportType} placeholder`, undefined, { fileName, placeholderUrl });
-  return { fileUrl: placeholderUrl };
+  await audit(actor, `${exportType} export blocked`, report.id, `${report.report_number} — backend export is not configured`);
+  throw new Error('OOS report export backend is not configured.');
 }
 
 export async function logOosReportDownloaded(actor: OosReportActor, reportId: string, reportNumber: string) {
-  await audit(actor, 'downloaded', reportId, `Download placeholder — ${reportNumber}`);
+  await audit(actor, 'download blocked', reportId, `Backend export download unavailable — ${reportNumber}`);
 }
 
 export async function fetchOosReportProductOptions(): Promise<string[]> {

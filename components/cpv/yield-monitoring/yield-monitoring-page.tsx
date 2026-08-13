@@ -10,14 +10,15 @@ import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
 import {
   summarizeYieldRecords, buildYieldChartSeries, YIELD_STAGES, YIELD_STATUSES, yieldMonitoringFormSchema,
-  defaultLimitsForStage,
+  DEFAULT_YIELD_LIMITS,
   type YieldMonitoringFormData, type YieldMonitoringRecord,
 } from '@/lib/cpv-yield-monitoring';
 import {
   fetchYieldRecords, fetchYieldBatchesForProduct,
   createYieldRecord, updateYieldRecord, approveYieldRecord, reviewYieldRecord,
-  bulkCreateYieldRecords, logYieldExport, yieldStageTrendData, stageDefaults, softDeleteYieldRecord,
+  bulkCreateYieldRecords, logYieldExport, yieldStageTrendData, softDeleteYieldRecord,
   buildYieldComputedFields,
+  fetchYieldStageLimits,
 } from '@/lib/cpv-yield-monitoring-service';
 import { fetchActiveCpvProductsForBatch as fetchProducts } from '@/lib/cpv-batch-registration-service';
 import type { CpvProductRecord } from '@/lib/cpv-product-master';
@@ -121,6 +122,7 @@ export function YieldMonitoringPage() {
   const [bulkReason, setBulkReason] = useState('Bulk yield entry');
   const [bulkRows, setBulkRows] = useState<Array<{
     stage: string; theoretical: string; actual: string; remarks: string;
+    lowerLimit: number; upperLimit: number; targetYield: number;
   }>>([]);
 
   const actor = { id: user?.uid || 'system', name: profile?.full_name || 'System', role: role || '' };
@@ -177,15 +179,20 @@ export function YieldMonitoringPage() {
   };
 
   const formComputed = useMemo(() => {
-    if (!form.theoreticalQuantity || !form.actualQuantity || form.lowerLimit === undefined || form.upperLimit === undefined || !form.targetYield) {
+    const theoretical = Number(form.theoreticalQuantity) || Number(form.batchSize) || 0;
+    const actual = Number(form.actualQuantity) || 0;
+    const lower = form.lowerLimit;
+    const upper = form.upperLimit;
+    const target = form.targetYield;
+    if (!theoretical || !actual || lower === undefined || upper === undefined || target === undefined) {
       return null;
     }
     return buildYieldComputedFields({
-      theoreticalQuantity: Number(form.theoreticalQuantity),
-      actualQuantity: Number(form.actualQuantity),
-      lowerLimit: Number(form.lowerLimit),
-      upperLimit: Number(form.upperLimit),
-      targetYield: Number(form.targetYield),
+      theoreticalQuantity: theoretical,
+      actualQuantity: actual,
+      lowerLimit: Number(lower),
+      upperLimit: Number(upper),
+      targetYield: Number(target),
       alertLimitLow: form.alertLimitLow,
       alertLimitHigh: form.alertLimitHigh,
       actionLimitLow: form.actionLimitLow,
@@ -203,17 +210,25 @@ export function YieldMonitoringPage() {
 
   const onBatchChange = (batchNumber: string) => {
     const batch = formBatches.find((b) => b.batchNumber === batchNumber);
+    const batchSizeNum = batch?.batchSize != null ? Number(batch.batchSize) : undefined;
     setForm((f) => ({
       ...f,
       batchNumber,
       manufacturingDate: batch?.manufacturingDate || f.manufacturingDate,
       batchSize: batch?.batchSize != null ? String(batch.batchSize) : f.batchSize,
       batchSizeUnit: batch?.batchSizeUnit ? String(batch.batchSizeUnit) : f.batchSizeUnit,
+      theoreticalQuantity: Number.isFinite(batchSizeNum) && (batchSizeNum as number) > 0
+        ? (batchSizeNum as number)
+        : f.theoreticalQuantity,
     }));
   };
 
-  const onStageChange = (stage: YieldMonitoringFormData['yieldStage']) => {
-    const limits = defaultLimitsForStage(stage);
+  const onStageChange = async (stage: YieldMonitoringFormData['yieldStage']) => {
+    const limits = (await fetchYieldStageLimits(stage)) || DEFAULT_YIELD_LIMITS[stage];
+    if (!limits) {
+      toast.error('Yield limits are not available for this stage.');
+      return;
+    }
     setForm((f) => ({
       ...f,
       yieldStage: stage,
@@ -225,22 +240,23 @@ export function YieldMonitoringPage() {
 
   const openCreate = () => {
     setEditing(null);
-    const limits = defaultLimitsForStage(YIELD_STAGES[0]);
     setForm({
       ...defaultFormFields(),
       yieldStage: YIELD_STAGES[0],
-      lowerLimit: limits.lowerLimit,
-      upperLimit: limits.upperLimit,
-      targetYield: limits.targetYield,
       recordedBy: profile?.full_name || '',
     });
+    void onStageChange(YIELD_STAGES[0]);
     const preselected = products.find((p) => p.productCode === productQuery || p.productName === productQuery);
     if (preselected) void onFormProductChange(preselected.id);
     setFormOpen(true);
   };
 
   const parseFormData = (): YieldMonitoringFormData | null => {
-    const parsed = yieldMonitoringFormSchema.safeParse(form);
+    const theoretical = Number(form.theoreticalQuantity) || Number(form.batchSize) || 0;
+    const parsed = yieldMonitoringFormSchema.safeParse({
+      ...form,
+      theoreticalQuantity: theoretical > 0 ? theoretical : form.theoreticalQuantity,
+    });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message || 'Validation failed');
       return null;
@@ -302,9 +318,16 @@ export function YieldMonitoringPage() {
     if (!products[0]) return;
     setBulkProductId(products[0].id);
     setFormBatches(await fetchYieldBatchesForProduct(products[0].productName));
-    setBulkRows(YIELD_STAGES.map((stage) => ({
-      stage, theoretical: '', actual: '', remarks: '',
-    })));
+    const configuredRows = (await Promise.all(YIELD_STAGES.map(async (stage) => {
+      const limits = (await fetchYieldStageLimits(stage)) || DEFAULT_YIELD_LIMITS[stage];
+      if (!limits) return null;
+      return { stage, theoretical: '', actual: '', remarks: '', ...limits };
+    }))).filter((row): row is NonNullable<typeof row> => Boolean(row));
+    if (!configuredRows.length) {
+      toast.error('No yield stage limits are available.');
+      return;
+    }
+    setBulkRows(configuredRows);
     setBulkOpen(true);
   };
 
@@ -314,7 +337,6 @@ export function YieldMonitoringPage() {
     if (!p || !batch) { toast.error('Select product and batch'); return; }
     if (bulkReason.trim().length < 5) { toast.error('Bulk change reason must be at least 5 characters'); return; }
     const rows: YieldMonitoringFormData[] = bulkRows.filter((r) => r.theoretical && r.actual).map((row) => {
-      const limits = stageDefaults(row.stage);
       return {
         ...defaultFormFields(),
         cpvProductId: bulkProductId,
@@ -331,9 +353,9 @@ export function YieldMonitoringPage() {
         reworkQuantity: 0,
         scrapQuantity: 0,
         wasteQuantity: 0,
-        lowerLimit: limits.lowerLimit,
-        upperLimit: limits.upperLimit,
-        targetYield: limits.targetYield,
+        lowerLimit: row.lowerLimit,
+        upperLimit: row.upperLimit,
+        targetYield: row.targetYield,
         unit: 'units',
         recordedBy: profile?.full_name || '',
         reviewedBy: '',
@@ -565,44 +587,15 @@ export function YieldMonitoringPage() {
               </Select>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div><Label>Theoretical Qty *</Label><Input className="mt-1" type="number" value={form.theoreticalQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, theoreticalQuantity: Number(e.target.value) }))} /></div>
-              <div><Label>Actual *</Label><Input className="mt-1" type="number" value={form.actualQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, actualQuantity: Number(e.target.value) }))} /></div>
+              <div><Label>QTY *</Label><Input className="mt-1" type="number" value={form.actualQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, actualQuantity: Number(e.target.value) }))} /></div>
               <div><Label>Lower Limit % *</Label><Input className="mt-1" type="number" value={form.lowerLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, lowerLimit: Number(e.target.value) }))} /></div>
               <div><Label>Upper Limit % *</Label><Input className="mt-1" type="number" value={form.upperLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, upperLimit: Number(e.target.value) }))} /></div>
-              <div><Label>Target Yield % *</Label><Input className="mt-1" type="number" value={form.targetYield ?? ''} onChange={(e) => setForm((f) => ({ ...f, targetYield: Number(e.target.value) }))} /></div>
-              <div><Label>Recorded By *</Label><Input className="mt-1" value={form.recordedBy || ''} onChange={(e) => setForm((f) => ({ ...f, recordedBy: e.target.value }))} /></div>
-              <div><Label>Scrap Qty</Label><Input className="mt-1" type="number" min="0" value={form.scrapQuantity ?? 0} onChange={(e) => setForm((f) => ({ ...f, scrapQuantity: Number(e.target.value) }))} /></div>
-              <div><Label>Waste Qty</Label><Input className="mt-1" type="number" min="0" value={form.wasteQuantity ?? 0} onChange={(e) => setForm((f) => ({ ...f, wasteQuantity: Number(e.target.value) }))} /></div>
-              <div><Label>Released Qty</Label><Input className="mt-1" type="number" min="0" value={form.releasedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, releasedQuantity: e.target.value ? Number(e.target.value) : undefined }))} /></div>
-              <div><Label>Material Consumed</Label><Input className="mt-1" type="number" min="0" value={form.materialConsumed ?? ''} onChange={(e) => setForm((f) => ({ ...f, materialConsumed: e.target.value ? Number(e.target.value) : undefined }))} /></div>
-              <div><Label>Material Variance</Label><Input className="mt-1" type="number" value={form.materialVariance ?? ''} onChange={(e) => setForm((f) => ({ ...f, materialVariance: e.target.value ? Number(e.target.value) : undefined }))} /></div>
-              <div><Label>Product Version</Label><Input className="mt-1" value={form.productVersion || ''} onChange={(e) => setForm((f) => ({ ...f, productVersion: e.target.value }))} /></div>
-              <div><Label>Manufacturing Order</Label><Input className="mt-1" value={form.manufacturingOrder || ''} onChange={(e) => setForm((f) => ({ ...f, manufacturingOrder: e.target.value }))} /></div>
-              <div><Label>Work Order</Label><Input className="mt-1" value={form.workOrder || ''} onChange={(e) => setForm((f) => ({ ...f, workOrder: e.target.value }))} /></div>
-              <div><Label>Campaign</Label><Input className="mt-1" value={form.campaign || ''} onChange={(e) => setForm((f) => ({ ...f, campaign: e.target.value }))} /></div>
-              <div><Label>Department</Label><Input className="mt-1" value={form.department || ''} onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))} /></div>
-              <div><Label>Site</Label><Input className="mt-1" value={form.site || ''} onChange={(e) => setForm((f) => ({ ...f, site: e.target.value }))} /></div>
-              <div><Label>Production Line</Label><Input className="mt-1" value={form.productionLine || ''} onChange={(e) => setForm((f) => ({ ...f, productionLine: e.target.value }))} /></div>
-              <div><Label>Equipment ID</Label><Input className="mt-1" value={form.equipmentId || ''} onChange={(e) => setForm((f) => ({ ...f, equipmentId: e.target.value }))} /></div>
-              <div><Label>Equipment Name</Label><Input className="mt-1" value={form.equipmentName || ''} onChange={(e) => setForm((f) => ({ ...f, equipmentName: e.target.value }))} /></div>
-              <div><Label>Operator</Label><Input className="mt-1" value={form.operator || ''} onChange={(e) => setForm((f) => ({ ...f, operator: e.target.value }))} /></div>
-              <div><Label>Supervisor</Label><Input className="mt-1" value={form.supervisor || ''} onChange={(e) => setForm((f) => ({ ...f, supervisor: e.target.value }))} /></div>
-              <div><Label>Shift</Label><Input className="mt-1" value={form.shift || ''} onChange={(e) => setForm((f) => ({ ...f, shift: e.target.value }))} /></div>
-              <div><Label>Process Step</Label><Input className="mt-1" value={form.processStep || ''} onChange={(e) => setForm((f) => ({ ...f, processStep: e.target.value }))} /></div>
-              <div><Label>Spec Number</Label><Input className="mt-1" value={form.specificationNumber || ''} onChange={(e) => setForm((f) => ({ ...f, specificationNumber: e.target.value }))} /></div>
-              <div><Label>Version</Label><Input className="mt-1" value={form.version || '1.0'} onChange={(e) => setForm((f) => ({ ...f, version: e.target.value }))} /></div>
-              <div><Label>Calculation Version</Label><Input className="mt-1" value={form.calculationVersion || '1.0'} onChange={(e) => setForm((f) => ({ ...f, calculationVersion: e.target.value }))} /></div>
-              <div><Label>Effective Date</Label><Input className="mt-1" type="date" value={form.effectiveDate || ''} onChange={(e) => setForm((f) => ({ ...f, effectiveDate: e.target.value }))} /></div>
-            </div>
-            {formComputed && (
-              <div className="rounded-md border bg-slate-50 p-3 text-sm grid grid-cols-2 gap-2">
-                <div>Loss: {formComputed.lossQuantity}</div>
-                <div>Yield: {formComputed.yieldPercentage}%</div>
-                <div>Variance: {formComputed.variancePercentage}%</div>
-                <div>Status: <StatusBadge status={formComputed.status} /></div>
+              <div>
+                <Label>Observe Yield % *</Label>
+                <Input className="mt-1" readOnly value={formComputed ? formComputed.yieldPercentage : ''} placeholder="Auto-calculated" />
               </div>
-            )}
-            <div><Label>Description</Label><Textarea className="mt-1" value={form.description || ''} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></div>
+              <div className="sm:col-span-2"><Label>Recorded By *</Label><Input className="mt-1" value={form.recordedBy || ''} onChange={(e) => setForm((f) => ({ ...f, recordedBy: e.target.value }))} /></div>
+            </div>
             <div><Label>Remarks</Label><Textarea className="mt-1" value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} /></div>
             <div><Label>Change Reason *</Label><Textarea className="mt-1" value={form.changeReason || ''} onChange={(e) => setForm((f) => ({ ...f, changeReason: e.target.value }))} placeholder="Minimum 5 characters (ALCOA+)" /></div>
             <div className="flex justify-end gap-2 pt-2">
@@ -638,20 +631,19 @@ export function YieldMonitoringPage() {
             </TableRow></TableHeader>
             <TableBody>
               {bulkRows.map((row, i) => {
-                const limits = stageDefaults(row.stage);
                 const computed = row.theoretical && row.actual
                   ? buildYieldComputedFields({
                     theoreticalQuantity: Number(row.theoretical),
                     actualQuantity: Number(row.actual),
-                    lowerLimit: limits.lowerLimit,
-                    upperLimit: limits.upperLimit,
-                    targetYield: limits.targetYield,
+                    lowerLimit: row.lowerLimit,
+                    upperLimit: row.upperLimit,
+                    targetYield: row.targetYield,
                   })
                   : null;
                 return (
                   <TableRow key={row.stage}>
                     <TableCell>{row.stage}</TableCell>
-                    <TableCell className="text-xs">{limits.lowerLimit}–{limits.upperLimit}%</TableCell>
+                    <TableCell className="text-xs">{row.lowerLimit}–{row.upperLimit}%</TableCell>
                     <TableCell><Input value={row.theoretical} onChange={(e) => setBulkRows((rows) => rows.map((r, j) => j === i ? { ...r, theoretical: e.target.value } : r))} /></TableCell>
                     <TableCell><Input value={row.actual} onChange={(e) => setBulkRows((rows) => rows.map((r, j) => j === i ? { ...r, actual: e.target.value } : r))} /></TableCell>
                     <TableCell>

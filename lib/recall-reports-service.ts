@@ -192,24 +192,8 @@ export async function exportRecallReport(
   exportType: 'PDF' | 'Excel' | 'CSV',
   actor: RecallReportActor,
 ): Promise<{ fileUrl: string; error?: string }> {
-  const placeholderUrl = `/api/exports/recall-reports/${report.id}/${exportType.toLowerCase()}`;
-  const fileName = `${report.report_number.replace(/\//g, '-')}.${exportType === 'Excel' ? 'xlsx' : exportType === 'PDF' ? 'pdf' : 'csv'}`;
-  if (isFirebaseConfigured() && report.id !== 'preview') {
-    try {
-      await updateDoc(doc(getFirebaseFirestore(), RECALL_COLLECTIONS.reports, report.id), {
-        export_type: exportType,
-        file_url: placeholderUrl,
-        file_name: fileName,
-        report_status: 'Exported',
-        updated_at: nowIso(),
-      });
-    } catch (e) {
-      console.error('exportRecallReport update', e);
-    }
-  }
-  const actionMap = { PDF: 'PDF exported', Excel: 'Excel exported', CSV: 'CSV exported' } as const;
-  await audit(actor, actionMap[exportType], report.id, `${report.report_number} — ${exportType} placeholder`, { fileName, placeholderUrl });
-  return { fileUrl: placeholderUrl };
+  await audit(actor, `${exportType} export blocked`, report.id, `${report.report_number} — backend export is not configured`);
+  throw new Error('Recall report export backend is not configured.');
 }
 
 export async function logRecallReportPrinted(actor: RecallReportActor, reportId: string, reportNumber: string) {
@@ -217,7 +201,7 @@ export async function logRecallReportPrinted(actor: RecallReportActor, reportId:
 }
 
 export async function logRecallReportDownloaded(actor: RecallReportActor, reportId: string, reportNumber: string) {
-  await audit(actor, 'report exported', reportId, `Download placeholder — ${reportNumber}`);
+  await audit(actor, 'report download blocked', reportId, `Backend export download unavailable — ${reportNumber}`);
 }
 
 export async function logRecallReportsModuleViewed(actor: RecallReportActor) {

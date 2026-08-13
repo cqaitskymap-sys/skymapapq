@@ -39,34 +39,48 @@ export function EquipmentDetailView({ equipment, onRefresh }: { equipment: Equip
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [cal, pm, bd, att, hist, logs] = await Promise.all([
-      listCalibrations(equipment.id), listPmRecords(equipment.id), listBreakdowns(equipment.id),
-      getEquipmentAttachments(equipment.id), getStatusHistory(equipment.id), getAuditLogsForEquipment(equipment.id),
-    ]);
-    setCalibrations(cal);
-    setPmRecords(pm);
-    setBreakdowns(bd);
-    setAttachments(att);
-    setStatusHistory(hist);
-    setAuditLogs(logs);
-    setLoading(false);
+    try {
+      const [cal, pm, bd, att, hist, logs] = await Promise.all([
+        listCalibrations(equipment.id), listPmRecords(equipment.id), listBreakdowns(equipment.id),
+        getEquipmentAttachments(equipment.id), getStatusHistory(equipment.id), getAuditLogsForEquipment(equipment.id),
+      ]);
+      setCalibrations(cal);
+      setPmRecords(pm);
+      setBreakdowns(bd);
+      setAttachments(att);
+      setStatusHistory(hist);
+      setAuditLogs(logs);
+    } catch (err) {
+      console.error('Equipment detail load failed:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to load equipment details');
+    } finally {
+      setLoading(false);
+    }
   }, [equipment.id]);
 
   useEffect(() => { void load(); }, [load]);
 
   const handleUpdate = async (d: EquipmentCreateInput) => {
-    await updateEquipment(equipment.id, d, actor);
-    toast.success('Equipment updated');
-    setEditing(false);
-    onRefresh();
+    try {
+      await updateEquipment(equipment.id, d, actor);
+      toast.success('Equipment updated');
+      setEditing(false);
+      onRefresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Update failed');
+    }
   };
 
   const handleBlock = async () => {
     const reason = prompt('Reason for blocking equipment:');
     if (!reason) return;
-    await blockEquipment(equipment.id, actor, reason);
-    toast.success('Equipment blocked');
-    onRefresh();
+    try {
+      await blockEquipment(equipment.id, actor, reason);
+      toast.success('Equipment blocked');
+      onRefresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Block failed');
+    }
   };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -81,11 +95,13 @@ export function EquipmentDetailView({ equipment, onRefresh }: { equipment: Equip
   };
 
   const info = [
-    ['Equipment ID', equipment.equipment_id], ['Type', equipment.equipment_type], ['Department', equipment.department],
-    ['Area / Room', equipment.area_room_no || '—'], ['Make', equipment.make || '—'], ['Model', equipment.model || '—'],
-    ['Serial No', equipment.serial_no || '—'], ['Capacity', equipment.capacity || '—'],
-    ['Installation', equipment.installation_date || '—'], ['Cal Due', equipment.calibration_due_date || '—'],
-    ['PM Due', equipment.pm_due_date || '—'], ['Usable', isEquipmentUsable(equipment) ? 'Yes' : 'No'],
+    ['Equipment ID', equipment.equipment_id],
+    ['Qualification Status', equipment.qualification_status || '—'],
+    ['Manufacturing Line', equipment.manufacturing_line || '—'],
+    ['Status', equipment.equipment_status],
+    ['Cal Due', equipment.calibration_due_date || '—'],
+    ['PM Due', equipment.pm_due_date || '—'],
+    ['Usable', isEquipmentUsable(equipment) ? 'Yes' : 'No'],
   ];
 
   if (loading) return <LoadingSpinner />;
@@ -97,9 +113,8 @@ export function EquipmentDetailView({ equipment, onRefresh }: { equipment: Equip
           <p className="text-sm text-muted-foreground font-mono">{equipment.equipment_id}</p>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{equipment.equipment_name}</h1>
           <div className="flex flex-wrap gap-2 mt-2">
+            <EquipmentStatusBadge status={equipment.qualification_status || '—'} />
             <EquipmentStatusBadge status={equipment.equipment_status} />
-            <EquipmentStatusBadge status={equipment.calibration_status} />
-            <EquipmentStatusBadge status={equipment.pm_status} />
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -115,7 +130,16 @@ export function EquipmentDetailView({ equipment, onRefresh }: { equipment: Equip
 
       {editing ? (
         <Card><CardHeader><CardTitle>Edit Equipment</CardTitle></CardHeader>
-          <CardContent><EquipmentForm defaultValues={equipment} onSubmit={handleUpdate} onCancel={() => setEditing(false)} submitLabel="Update" /></CardContent></Card>
+          <CardContent><EquipmentForm defaultValues={{
+            equipment_name: equipment.equipment_name,
+            equipment_id: equipment.equipment_id,
+            qualification_status: (['Qualified', 'Not Qualified'].includes(equipment.qualification_status)
+              ? equipment.qualification_status
+              : 'Not Qualified') as EquipmentCreateInput['qualification_status'],
+            manufacturing_line: ['A1', 'A2', 'LV', 'DPI', '3 Piece'].includes(equipment.manufacturing_line)
+              ? equipment.manufacturing_line
+              : 'A1',
+          }} onSubmit={handleUpdate} onCancel={() => setEditing(false)} submitLabel="Update" /></CardContent></Card>
       ) : (
         <Tabs defaultValue="overview">
           <TabsList className="flex flex-wrap h-auto gap-1">
@@ -189,7 +213,7 @@ export function EquipmentDetailView({ equipment, onRefresh }: { equipment: Equip
                         <TableCell className="font-mono text-sm">{b.breakdown_no}</TableCell><TableCell>{b.breakdown_date}</TableCell>
                         <TableCell className="max-w-[200px] truncate">{b.problem_description}</TableCell>
                         <TableCell>{b.downtime_hours}h</TableCell><TableCell>{b.status}</TableCell>
-                        <TableCell>{b.linked_deviation_number ? <Link href={`/dashboard/deviations`} className="text-blue-600 text-sm">{b.linked_deviation_number}</Link> : '—'}</TableCell>
+                        <TableCell>{b.linked_deviation_number ? <Link href={b.linked_deviation_id ? `/qms/deviation/${b.linked_deviation_id}` : '/qms/deviation'} className="text-blue-600 text-sm">{b.linked_deviation_number}</Link> : '—'}</TableCell>
                       </TableRow>
                     ))}
                 </TableBody></Table>
@@ -197,20 +221,24 @@ export function EquipmentDetailView({ equipment, onRefresh }: { equipment: Equip
           </TabsContent>
 
           <TabsContent value="qualification" className="mt-4">
-            <Card><CardContent className="pt-6">
-              {equipment.qualification_required ? (
-                equipment.validation_id ? (
-                  <Link href={`/qms/validation/${equipment.validation_id}`} className="inline-flex items-center gap-2 text-blue-600">
-                    <ExternalLink className="h-4 w-4" />View Validation Record
-                  </Link>
-                ) : (
-                  <div className="space-y-2">
-                    <p className="text-muted-foreground">Qualification required but not linked.</p>
-                    <Link href="/qms/validation"><Button variant="outline">Go to Validation Module</Button></Link>
-                  </div>
-                )
-              ) : (
+            <Card><CardContent className="pt-6 space-y-3">
+              <div>
+                <p className="text-xs text-muted-foreground">Qualification Status</p>
+                <p className="font-medium">{equipment.qualification_status || '—'}</p>
+              </div>
+              {!equipment.qualification_required || equipment.qualification_status === 'Not Required' ? (
                 <p className="text-muted-foreground">Qualification not required for this equipment.</p>
+              ) : equipment.validation_id ? (
+                <Link href={`/qms/validation/${equipment.validation_id}`} className="inline-flex items-center gap-2 text-blue-600">
+                  <ExternalLink className="h-4 w-4" />View Validation Record
+                </Link>
+              ) : equipment.qualification_status === 'Qualified' ? (
+                <p className="text-muted-foreground">Marked as Qualified. Link a validation record when available.</p>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-muted-foreground">Qualification required but not linked.</p>
+                  <Link href="/qms/validation"><Button variant="outline">Go to Validation Module</Button></Link>
+                </div>
               )}
             </CardContent></Card>
           </TabsContent>
@@ -263,10 +291,10 @@ export function EquipmentDetailView({ equipment, onRefresh }: { equipment: Equip
                 </TableRow></TableHeader><TableBody>
                   {auditLogs.length === 0 ? <TableRow><TableCell colSpan={3} className="text-center py-6 text-muted-foreground">No audit entries</TableCell></TableRow>
                     : auditLogs.map((l, i) => (
-                      <TableRow key={i}>
-                        <TableCell>{String(l.action || l.event_type || '—')}</TableCell>
-                        <TableCell>{String(l.user_name || l.actor_name || '—')}</TableCell>
-                        <TableCell>{String(l.timestamp || l.created_at || '—').slice(0, 19)}</TableCell>
+                      <TableRow key={String(l.id || i)}>
+                        <TableCell>{String(l.action || l.actionType || l.event_type || '—')}</TableCell>
+                        <TableCell>{String(l.user_name || l.userName || l.actor_name || '—')}</TableCell>
+                        <TableCell>{String(l.timestamp || l.dateTime || l.created_at || '—').slice(0, 19)}</TableCell>
                       </TableRow>
                     ))}
                 </TableBody></Table>

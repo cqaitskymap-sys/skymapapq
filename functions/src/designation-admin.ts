@@ -3,12 +3,10 @@
  * Authorization and writes are enforced server-side.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
+import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
+
 
 function requiredString(value: unknown, field: string, maxLength = 200): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -284,8 +282,7 @@ function parseDesignationPayload(input: Record<string, unknown>, existing?: Docu
 
 export const createAdminDesignation = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -369,8 +366,7 @@ export const createAdminDesignation = onCall(async (request) => {
 
 export const updateAdminDesignation = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -513,8 +509,7 @@ export const updateAdminDesignation = onCall(async (request) => {
 
 export const setAdminDesignationStatus = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -559,8 +554,7 @@ export const setAdminDesignationStatus = onCall(async (request) => {
 
 export const softDeleteAdminDesignation = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -627,8 +621,7 @@ export const softDeleteAdminDesignation = onCall(async (request) => {
 
 export const restoreAdminDesignation = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -663,8 +656,7 @@ export const restoreAdminDesignation = onCall(async (request) => {
 
 export const bulkUpdateAdminDesignations = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -709,8 +701,7 @@ export const bulkUpdateAdminDesignations = onCall(async (request) => {
 
 export const importAdminDesignations = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -781,8 +772,7 @@ export const importAdminDesignations = onCall(async (request) => {
 
 export const logAdminDesignationExport = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));

@@ -35,7 +35,6 @@ import {
   previewCapaReport,
   scheduleCapaReport,
 } from '@/lib/capa-reports-service';
-import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 import { EmptyState } from '@/components/admin/dashboard/empty-state';
@@ -239,7 +238,7 @@ export function CapaReportsAnalyticsPage() {
     setScheduling(false);
     if (err) toast.error(err);
     else {
-      toast.success('Report scheduled (placeholder)');
+      toast.success('Report scheduled');
       await load();
     }
     void id;
@@ -282,25 +281,18 @@ export function CapaReportsAnalyticsPage() {
       is_deleted: false,
     } as CapaReportRecord;
 
-    const rows = analytics?.previewRows ?? [];
-    downloadCsv(
-      `${report.report_number.replace(/\//g, '-')}.${type === 'Excel' ? 'csv' : 'csv'}`,
-      CAPA_PREVIEW_COLUMNS.map((c) => c.header),
-      rows.map((r) => CAPA_PREVIEW_COLUMNS.map((c) => String(r[c.key as keyof CapaReportPreviewRow] ?? ''))),
-    );
-
-    await exportCapaReport(report, type, actor);
-    if (savedReport) await logCapaReportDownloaded(actor, savedReport.id, savedReport.report_number);
-
-    if (type === 'PDF') {
-      setShowPdf(true);
-      await logCapaReportPrinted(actor, report.id, report.report_number);
-      setTimeout(() => printPage(), 300);
-      toast.success('PDF export — print dialog opened');
-    } else {
-      toast.success(`${type} export placeholder downloaded (audit logged)`);
+    try {
+      await exportCapaReport(report, type, actor);
+      if (savedReport) await logCapaReportDownloaded(actor, savedReport.id, savedReport.report_number);
+      if (type === 'PDF') {
+        setShowPdf(true);
+        await logCapaReportPrinted(actor, report.id, report.report_number);
+      }
+      toast.success(`${type} export requested via backend`);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'CAPA report export is not available.');
     }
-    await load();
   };
 
   const historyColumns = useMemo(() => [
@@ -315,7 +307,7 @@ export function CapaReportsAnalyticsPage() {
       key: 'actions',
       header: '',
       render: (r: CapaReportRecord) => canExport ? (
-        <Button variant="ghost" size="sm" onClick={() => void logCapaReportDownloaded(actor, r.id, r.report_number).then(() => toast.success('Download placeholder logged'))}>
+        <Button variant="ghost" size="sm" onClick={() => void logCapaReportDownloaded(actor, r.id, r.report_number).then(() => toast.success('Download request logged'))}>
           <Download className="h-4 w-4" />
         </Button>
       ) : null,

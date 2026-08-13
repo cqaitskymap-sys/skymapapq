@@ -169,7 +169,11 @@ function CreateOosInner() {
       }
 
       const dept = form.getValues('department') || 'QC';
-      setPreviewNumber(await generateOosNumberForDepartment(dept));
+      const preview = await generateOosNumberForDepartment(dept);
+      setPreviewNumber(preview);
+      if (!preview) {
+        setError('OOS numbering is not available from backend configuration.');
+      }
       const productName = form.getValues('product_name');
       if (productName) setBatches(await fetchOosBatches(productName));
     } catch {
@@ -188,7 +192,10 @@ function CreateOosInner() {
   useEffect(() => {
     const dept = watched.department;
     if (!dept) return;
-    void generateOosNumberForDepartment(dept).then(setPreviewNumber);
+    void generateOosNumberForDepartment(dept).then((preview) => {
+      setPreviewNumber(preview);
+      if (!preview) setError('OOS numbering is not available from backend configuration.');
+    });
   }, [watched.department]);
 
   useEffect(() => {
@@ -260,15 +267,19 @@ function CreateOosInner() {
   };
 
   const handleAttachment = async (fileName: string) => {
-    if (!draftId) {
-      const record = await saveOosDraft(form.getValues(), actor);
-      setDraftId(record.id);
-      const att = await uploadOosCreateAttachmentPlaceholder(record.id, fileName, actor);
+    try {
+      if (!draftId) {
+        const record = await saveOosDraft(form.getValues(), actor);
+        setDraftId(record.id);
+        const att = await uploadOosCreateAttachmentPlaceholder(record.id, fileName, actor);
+        setAttachments((prev) => [...prev, att]);
+        return;
+      }
+      const att = await uploadOosCreateAttachmentPlaceholder(draftId, fileName, actor);
       setAttachments((prev) => [...prev, att]);
-      return;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Attachment upload failed');
     }
-    const att = await uploadOosCreateAttachmentPlaceholder(draftId, fileName, actor);
-    setAttachments((prev) => [...prev, att]);
   };
 
   return (
@@ -319,7 +330,7 @@ function CreateOosInner() {
                     <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                       <div className="md:col-span-2 lg:col-span-3 rounded-md border bg-blue-50/50 px-4 py-3 text-sm">
                         <span className="text-muted-foreground">OOS Number (auto): </span>
-                        <span className="font-mono font-semibold text-blue-700">{previewNumber || 'Generating...'}</span>
+                        <span className="font-mono font-semibold text-blue-700">{previewNumber || 'Not available from backend'}</span>
                       </div>
                       <FormField control={form.control} name="oos_date" render={({ field }) => (
                         <FormItem><FormLabel>OOS Date *</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>

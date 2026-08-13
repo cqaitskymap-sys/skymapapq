@@ -751,6 +751,66 @@ export const DEFAULT_ANNUAL_TEMPLATE: Omit<AnnualReviewTemplate, 'id' | 'created
   status: 'Active',
 };
 
+/** In-memory defaults so the configuration UI works before Firestore is seeded. */
+export function buildDefaultCpvConfigurationBundle(): CpvConfigurationBundle {
+  return {
+    general: { id: 'general_settings', ...DEFAULT_GENERAL_SETTINGS },
+    global: { id: 'global_org_settings', ...DEFAULT_GLOBAL_ORG_SETTINGS },
+    products: [],
+    cppParameters: [],
+    cqaParameters: [],
+    limitRules: DEFAULT_LIMIT_RULES.map((rule, index) => ({ id: `default-limit-${index + 1}`, ...rule })),
+    reviewFrequency: [],
+    alertRules: [],
+    capability: { id: 'process_capability_settings', ...DEFAULT_CAPABILITY_SETTINGS },
+    spc: { id: 'spc_settings', ...DEFAULT_SPC_SETTINGS },
+    risk: { id: 'risk_scoring_settings', ...DEFAULT_RISK_SETTINGS },
+    ai: { id: 'ai_settings', ...DEFAULT_AI_SETTINGS },
+    notification: { id: 'notification_settings', ...DEFAULT_NOTIFICATION_SETTINGS },
+    annualTemplates: [{ id: 'default-annual-template', ...DEFAULT_ANNUAL_TEMPLATE }],
+    workflows: [],
+    dataSourceMappings: DEFAULT_DATA_SOURCE_MAPPINGS.map((row, index) => ({
+      id: `default-datasource-${index + 1}`,
+      ...row,
+    })),
+    dashboard: { id: 'dashboard_settings', ...DEFAULT_DASHBOARD_SETTINGS },
+    exportSettings: { id: 'export_report_settings', ...DEFAULT_EXPORT_SETTINGS },
+    security: { id: 'security_settings', ...DEFAULT_SECURITY_SETTINGS },
+    backup: { id: 'backup_settings', ...DEFAULT_BACKUP_SETTINGS },
+    featureFlags: { id: 'feature_flags', ...DEFAULT_FEATURE_FLAGS },
+  };
+}
+
+/** Fill any missing singleton/list sections from defaults without overwriting stored values. */
+export function withConfigurationDefaults(bundle: CpvConfigurationBundle): CpvConfigurationBundle {
+  const defaults = buildDefaultCpvConfigurationBundle();
+  return {
+    general: bundle.general ?? defaults.general,
+    global: bundle.global ?? defaults.global,
+    products: bundle.products,
+    cppParameters: bundle.cppParameters,
+    cqaParameters: bundle.cqaParameters,
+    limitRules: bundle.limitRules.length ? bundle.limitRules : defaults.limitRules,
+    reviewFrequency: bundle.reviewFrequency,
+    alertRules: bundle.alertRules,
+    capability: bundle.capability ?? defaults.capability,
+    spc: bundle.spc ?? defaults.spc,
+    risk: bundle.risk ?? defaults.risk,
+    ai: bundle.ai ?? defaults.ai,
+    notification: bundle.notification ?? defaults.notification,
+    annualTemplates: bundle.annualTemplates.length ? bundle.annualTemplates : defaults.annualTemplates,
+    workflows: bundle.workflows,
+    dataSourceMappings: bundle.dataSourceMappings.length
+      ? bundle.dataSourceMappings
+      : defaults.dataSourceMappings,
+    dashboard: bundle.dashboard ?? defaults.dashboard,
+    exportSettings: bundle.exportSettings ?? defaults.exportSettings,
+    security: bundle.security ?? defaults.security,
+    backup: bundle.backup ?? defaults.backup,
+    featureFlags: bundle.featureFlags ?? defaults.featureFlags,
+  };
+}
+
 export function summarizeConfiguration(bundle: CpvConfigurationBundle) {
   const listCounts = [
     bundle.products.length,

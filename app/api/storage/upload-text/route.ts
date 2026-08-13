@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getFirebaseStorageBucket, normalizeFirebaseEnvValue } from '@/lib/firebase-config';
+import { getFirebaseStorageBucket } from '@/lib/firebase-config';
+import { verifyFirebaseBearerToken } from '@/lib/api-auth';
 
 const ALLOWED_PATH = /^[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9._-]+$/;
 const ALLOWED_MODULES = new Set(['cpv-reports', 'cpv-reviews']);
@@ -16,21 +17,6 @@ function storageBucketCandidates(): string[] {
     candidates.push(`${bucket.replace(/\.appspot\.com$/, '')}.firebasestorage.app`);
   }
   return Array.from(new Set(candidates));
-}
-
-async function verifyIdToken(idToken: string): Promise<boolean> {
-  const apiKey = normalizeFirebaseEnvValue(process.env.NEXT_PUBLIC_FIREBASE_API_KEY);
-  if (!apiKey) return false;
-
-  const res = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idToken }),
-    },
-  );
-  return res.ok;
 }
 
 async function uploadWithResumableProtocol(
@@ -91,9 +77,9 @@ export async function POST(request: Request) {
   }
   const idToken = authHeader.slice(7);
 
-  if (!(await verifyIdToken(idToken))) {
+  if (!(await verifyFirebaseBearerToken(request))) {
     return NextResponse.json(
-      { error: 'Invalid or expired session. Sign in again.' },
+      { error: 'Invalid, inactive, or expired session. Sign in again.' },
       { status: 401 },
     );
   }

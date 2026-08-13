@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useForm } from 'react-hook-form';
+import { Plus, Trash2 } from 'lucide-react';
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from '@/components/ui/sheet';
@@ -16,29 +17,26 @@ import {
 } from '@/components/ui/select';
 import {
   cpvBatchFormSchema,
-  CPV_BATCH_STATUSES,
-  CPV_RELEASE_STATUSES,
   isBatchFieldLocked,
   toMonthYearValue,
   type CpvBatchFormData,
   type CpvBatchRecord,
 } from '@/lib/cpv-batch-registration';
-import { BATCH_SIZE_UNITS } from '@/lib/admin/constants';
 import { cpvProductToBatchAutofill } from '@/lib/cpv-batch-registration-service';
 import type { CpvProductRecord } from '@/lib/cpv-product-master';
-import { CPV_REVIEW_FREQUENCIES } from '@/lib/cpv-product-master';
 
-/** Statuses editable in the form — critical GMP statuses use e-sign actions. */
-const FORM_SAFE_STATUSES = CPV_BATCH_STATUSES.filter(
-  (s) => !['Released', 'Rejected', 'Hold', 'Closed', 'Archived'].includes(s),
-);
-
-function statusOptionsFor(current?: string) {
-  if (current && !FORM_SAFE_STATUSES.includes(current as typeof FORM_SAFE_STATUSES[number])) {
-    return [current, ...FORM_SAFE_STATUSES] as string[];
-  }
-  return [...FORM_SAFE_STATUSES];
+function splitBprNumbers(value: string): string[] {
+  const parts = value
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts : [''];
 }
+
+function joinBprNumbers(values: string[]): string {
+  return values.map((s) => s.trim()).filter(Boolean).join(', ');
+}
+
 interface CpvBatchFormSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -57,6 +55,7 @@ export function CpvBatchFormSheet({
   submitting,
 }: CpvBatchFormSheetProps) {
   const locked = editing ? isBatchFieldLocked(editing.batchStatus) : false;
+  const [bprRows, setBprRows] = useState<string[]>(['']);
 
   const form = useForm<CpvBatchFormData>({
     resolver: zodResolver(cpvBatchFormSchema),
@@ -113,11 +112,10 @@ export function CpvBatchFormSheet({
     },
   });
 
-  const batchStatus = form.watch('batchStatus');
-
   useEffect(() => {
     if (!open) return;
     if (editing) {
+      setBprRows(splitBprNumbers(editing.bprNumber || ''));
       form.reset({
         cpvProductId: editing.cpvProductId,
         batchNumber: editing.batchNumber,
@@ -167,18 +165,26 @@ export function CpvBatchFormSheet({
         statusChangeReason: editing.statusChangeReason,
         description: editing.description || '',
         remarks: editing.remarks,
-        changeReason: '',
+        changeReason: 'Update CPV Batch',
       });
     } else {
+      setBprRows(['']);
       form.reset({
         ...form.getValues(),
-        changeReason: '',
+        bprNumber: '',
+        changeReason: 'Register CPV Batch',
         batchStatus: 'Planned',
         releaseStatus: 'Pending',
         manufacturingDate: new Date().toISOString().slice(0, 7),
       });
     }
   }, [open, editing, form]);
+
+  const updateBprRows = (next: string[]) => {
+    const rows = next.length > 0 ? next : [''];
+    setBprRows(rows);
+    form.setValue('bprNumber', joinBprNumbers(rows), { shouldDirty: true });
+  };
 
   const handleProductSelect = (productId: string) => {
     const product = cpvProducts.find((p) => p.id === productId);
@@ -188,14 +194,21 @@ export function CpvBatchFormSheet({
     Object.entries(fill).forEach(([key, val]) => {
       if (val !== undefined) form.setValue(key as keyof CpvBatchFormData, val as never);
     });
+    if (typeof fill.bprNumber === 'string') {
+      setBprRows(splitBprNumbers(fill.bprNumber));
+    }
   };
 
   const submit = form.handleSubmit(async (values) => {
-    await onSubmit(values);
+    await onSubmit({
+      ...values,
+      bprNumber: joinBprNumbers(bprRows),
+      changeReason: values.changeReason?.trim() || (editing ? 'Update CPV Batch' : 'Register CPV Batch'),
+    });
   });
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
       <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{editing ? 'Edit CPV Batch' : 'Register CPV Batch'}</SheetTitle>
@@ -243,26 +256,11 @@ export function CpvBatchFormSheet({
               <FormField control={form.control} name="batchNumber" render={({ field }) => (
                 <FormItem><FormLabel>Batch Number *</FormLabel><FormControl><Input {...field} readOnly={locked} /></FormControl><FormMessage /></FormItem>
               )} />
-              <FormField control={form.control} name="batchCode" render={({ field }) => (
-                <FormItem><FormLabel>Batch Code</FormLabel><FormControl><Input {...field} placeholder="Defaults to CPV-BATCH-…" readOnly={locked} /></FormControl></FormItem>
-              )} />
               <FormField control={form.control} name="batchSize" render={({ field }) => (
-                <FormItem><FormLabel>Batch Size *</FormLabel><FormControl><Input type="number" {...field} readOnly={locked} onChange={(e) => field.onChange(Number(e.target.value))} /></FormControl><FormMessage /></FormItem>
-              )} />
-              <FormField control={form.control} name="batchSizeUnit" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Unit of Measure</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange} disabled={locked}>
-                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                    <SelectContent>{BATCH_SIZE_UNITS.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}</SelectContent>
-                  </Select>
-                </FormItem>
-              )} />
-              <FormField control={form.control} name="targetBatchSize" render={({ field }) => (
-                <FormItem><FormLabel>Target Batch Size</FormLabel><FormControl><Input {...field} readOnly={locked} /></FormControl></FormItem>
+                <FormItem><FormLabel>Standard Batch Size *</FormLabel><FormControl><Input type="number" {...field} readOnly={locked} onChange={(e) => field.onChange(Number(e.target.value))} /></FormControl><FormMessage /></FormItem>
               )} />
               <FormField control={form.control} name="actualBatchSize" render={({ field }) => (
-                <FormItem><FormLabel>Actual Batch Size</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>Actual Batch Size</FormLabel><FormControl><Input type="number" {...field} readOnly={locked} onChange={(e) => field.onChange(e.target.value)} /></FormControl><FormMessage /></FormItem>
               )} />
               <FormField control={form.control} name="manufacturingDate" render={({ field }) => (
                 <FormItem>
@@ -278,9 +276,6 @@ export function CpvBatchFormSheet({
                   <FormMessage />
                 </FormItem>
               )} />
-              <FormField control={form.control} name="manufacturingEndDate" render={({ field }) => (
-                <FormItem><FormLabel>Mfg End</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
-              )} />
               <FormField control={form.control} name="expiryDate" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Expiry Date *</FormLabel>
@@ -295,128 +290,74 @@ export function CpvBatchFormSheet({
                   <FormMessage />
                 </FormItem>
               )} />
-              <FormField control={form.control} name="retestDate" render={({ field }) => (
-                <FormItem><FormLabel>Retest Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="shelfLifeMonths" render={({ field }) => (
-                <FormItem><FormLabel>Shelf Life (months)</FormLabel><FormControl><Input {...field} placeholder="e.g. 24" /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="packagingStartDate" render={({ field }) => (
-                <FormItem><FormLabel>Packaging Start</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="packagingEndDate" render={({ field }) => (
-                <FormItem><FormLabel>Packaging End</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
-              )} />
               <FormField control={form.control} name="manufacturingSite" render={({ field }) => (
                 <FormItem><FormLabel>Manufacturing Site *</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-              )} />
-              <FormField control={form.control} name="plant" render={({ field }) => (
-                <FormItem><FormLabel>Plant</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="manufacturingLine" render={({ field }) => (
                 <FormItem><FormLabel>Production Line</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
-              <FormField control={form.control} name="department" render={({ field }) => (
-                <FormItem><FormLabel>Department</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="shift" render={({ field }) => (
-                <FormItem><FormLabel>Shift</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="campaign" render={({ field }) => (
-                <FormItem><FormLabel>Campaign</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="manufacturingOrderNumber" render={({ field }) => (
-                <FormItem><FormLabel>Manufacturing Order</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="workOrderNumber" render={({ field }) => (
-                <FormItem><FormLabel>Work Order</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
               <FormField control={form.control} name="mfrNumber" render={({ field }) => (
-                <FormItem><FormLabel>MFR / Recipe</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>MFR</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="bmrNumber" render={({ field }) => (
-                <FormItem><FormLabel>BMR / MBR</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>BMR</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
-              <FormField control={form.control} name="bprNumber" render={({ field }) => (
-                <FormItem><FormLabel>BPR Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="semiFinishedBatchNumber" render={({ field }) => (
-                <FormItem><FormLabel>Semi Finished Batch</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              <FormField control={form.control} name="bprNumber" render={() => (
+                <FormItem className="sm:col-span-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <FormLabel>BPR Number</FormLabel>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={locked}
+                      onClick={() => updateBprRows([...bprRows, ''])}
+                    >
+                      <Plus className="mr-1 h-3.5 w-3.5" />
+                      Add BPR
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {bprRows.map((row, index) => (
+                      <div key={`bpr-${index}`} className="flex gap-2">
+                        <FormControl>
+                          <Input
+                            value={row}
+                            placeholder={`BPR Number ${index + 1}`}
+                            readOnly={locked}
+                            onChange={(e) => {
+                              const next = [...bprRows];
+                              next[index] = e.target.value;
+                              updateBprRows(next);
+                            }}
+                          />
+                        </FormControl>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          disabled={locked || bprRows.length <= 1}
+                          onClick={() => updateBprRows(bprRows.filter((_, i) => i !== index))}
+                          aria-label={`Remove BPR ${index + 1}`}
+                        >
+                          <Trash2 className="h-4 w-4 text-red-500" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <FormMessage />
+                </FormItem>
               )} />
               <FormField control={form.control} name="finishedProductBatchNumber" render={({ field }) => (
                 <FormItem><FormLabel>Finished Product Batch</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
-              <FormField control={form.control} name="packingBatchNumber" render={({ field }) => (
-                <FormItem><FormLabel>Packing Batch</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="goldenBatchNumber" render={({ field }) => (
-                <FormItem><FormLabel>Golden Batch</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="manufacturedFor" render={({ field }) => (
-                <FormItem><FormLabel>Manufactured For</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
               <FormField control={form.control} name="customerName" render={({ field }) => (
                 <FormItem><FormLabel>Customer Name</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
-              <FormField control={form.control} name="cpvReviewPeriod" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>CPV Review Period</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                    <SelectContent>{CPV_REVIEW_FREQUENCIES.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
-                  </Select>
-                </FormItem>
-              )} />
-              <FormField control={form.control} name="batchStatus" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Batch Status *</FormLabel>
-                  <Select
-                    value={field.value}
-                    onValueChange={field.onChange}
-                    disabled={locked || !FORM_SAFE_STATUSES.includes(field.value as typeof FORM_SAFE_STATUSES[number])}
-                  >
-                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                    <SelectContent>
-                      {statusOptionsFor(field.value).map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </FormItem>
-              )} />
-              <FormField control={form.control} name="releaseStatus" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Release Status</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange} disabled>
-                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                    <SelectContent>{CPV_RELEASE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-                  </Select>
-                </FormItem>
-              )} />
             </div>
-
-            {(batchStatus === 'Rejected' || batchStatus === 'Hold') && (
-              <FormField control={form.control} name="statusChangeReason" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{batchStatus === 'Rejected' ? 'Rejection Reason *' : 'Hold Reason *'}</FormLabel>
-                  <FormControl><Textarea rows={2} {...field} /></FormControl>
-                  <FormMessage />
-                </FormItem>
-              )} />
-            )}
-
-            <FormField control={form.control} name="description" render={({ field }) => (
-              <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-            )} />
 
             <FormField control={form.control} name="remarks" render={({ field }) => (
               <FormItem><FormLabel>Remarks</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-            )} />
-
-            <FormField control={form.control} name="changeReason" render={({ field }) => (
-              <FormItem>
-                <FormLabel>Change Reason * (ALCOA+ / Part 11)</FormLabel>
-                <FormControl><Textarea rows={2} placeholder="Describe why this create/update is being performed" {...field} /></FormControl>
-                <FormMessage />
-              </FormItem>
             )} />
 
             <div className="flex justify-end gap-2">

@@ -1,16 +1,27 @@
 /**
  * Creates the default Super Admin in Firebase Auth + Firestore profile.
- * Run once: node scripts/setup-default-admin.mjs
+ * Run once: npm run setup:admin
+ *
+ * Requires:
+ *   DEFAULT_ADMIN_PASSWORD  (required — no default)
+ *   DEFAULT_ADMIN_EMAIL     (optional, default admin@apq-skymap.com)
+ *   Service account for privileged writes:
+ *     GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccount.json
+ *     or place serviceAccountKey.json in the project root
+ *
+ * Client ID tokens cannot elevate role/is_active under firestore.rules.
  */
 import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
+const require = createRequire(import.meta.url);
 
 const DEFAULT_EMAIL = process.env.DEFAULT_ADMIN_EMAIL || 'admin@apq-skymap.com';
-const DEFAULT_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'Admin@123456';
+const DEFAULT_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || '';
 const DEFAULT_NAME = 'Super Admin';
 
 function loadEnv() {
@@ -30,118 +41,138 @@ function loadEnv() {
   return vars;
 }
 
-async function authRequest(apiKey, endpoint, body) {
-  const res = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:${endpoint}?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    },
-  );
-  const data = await res.json();
-  if (!res.ok) {
-    const err = new Error(data.error?.message || res.statusText);
-    err.code = data.error?.message;
-    throw err;
+function resolveServiceAccountPath() {
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    return process.env.GOOGLE_APPLICATION_CREDENTIALS;
   }
-  return data;
+  const candidates = [
+    resolve(root, 'serviceAccountKey.json'),
+    resolve(root, 'service-account.json'),
+    resolve(root, 'firebase-service-account.json'),
+  ];
+  return candidates.find((path) => existsSync(path)) || null;
 }
 
-async function ensureAuthUser(apiKey) {
+async function loadFirebaseAdmin(projectId) {
+  const adminPath = resolve(root, 'functions/node_modules/firebase-admin');
+  if (!existsSync(adminPath)) {
+    throw new Error(
+      'firebase-admin not found. Run: npm --prefix functions install',
+    );
+  }
+  const admin = require(adminPath);
+  if (admin.apps.length) return admin;
+
+  const saPath = resolveServiceAccountPath();
+  if (saPath) {
+    const credential = admin.credential.cert(JSON.parse(readFileSync(saPath, 'utf8')));
+    admin.initializeApp({ credential, projectId });
+  } else {
+    try {
+      admin.initializeApp({ credential: admin.credential.applicationDefault(), projectId });
+    } catch {
+      throw new Error(
+        'No service account found. Set GOOGLE_APPLICATION_CREDENTIALS or add serviceAccountKey.json to the project root. '
+        + 'Client tokens cannot create super_admin under current Firestore rules.',
+      );
+    }
+  }
+  return admin;
+}
+
+async function ensureAuthAndProfile(admin) {
+  const auth = admin.auth();
+  const db = admin.firestore();
+  let user;
   try {
-    const data = await authRequest(apiKey, 'signUp', {
+    user = await auth.getUserByEmail(DEFAULT_EMAIL);
+    console.log('Firebase Auth user already exists:', DEFAULT_EMAIL);
+  } catch (error) {
+    if (error.code !== 'auth/user-not-found') throw error;
+    user = await auth.createUser({
       email: DEFAULT_EMAIL,
       password: DEFAULT_PASSWORD,
-      returnSecureToken: true,
+      displayName: DEFAULT_NAME,
+      emailVerified: true,
+      disabled: false,
     });
     console.log('Created Firebase Auth user:', DEFAULT_EMAIL);
-    return { uid: data.localId, idToken: data.idToken };
-  } catch (error) {
-    if (error.code === 'EMAIL_EXISTS') {
-      const data = await authRequest(apiKey, 'signInWithPassword', {
-        email: DEFAULT_EMAIL,
-        password: DEFAULT_PASSWORD,
-        returnSecureToken: true,
-      });
-      console.log('Firebase Auth user already exists:', DEFAULT_EMAIL);
-      return { uid: data.localId, idToken: data.idToken };
-    }
-    throw error;
   }
-}
 
-async function ensureProfile(projectId, uid, idToken) {
+  await auth.setCustomUserClaims(user.uid, { role: 'super_admin', active: true });
+
   const now = new Date().toISOString();
-  const docPath = `projects/${projectId}/databases/(default)/documents/profiles/${uid}`;
-  const url = `https://firestore.googleapis.com/v1/${docPath}`;
+  const profileRef = db.collection('profiles').doc(user.uid);
+  const userRef = db.collection('users').doc(user.uid);
+  await profileRef.set({
+    id: user.uid,
+    email: DEFAULT_EMAIL,
+    full_name: DEFAULT_NAME,
+    role: 'super_admin',
+    department: 'QA',
+    employee_id: 'EMP001',
+    phone: '',
+    avatar_url: '',
+    is_active: true,
+    access_status: 'approved',
+    last_login: null,
+    created_at: now,
+    updated_at: now,
+  }, { merge: true });
 
-  const fields = {
-    id: { stringValue: uid },
-    email: { stringValue: DEFAULT_EMAIL },
-    full_name: { stringValue: DEFAULT_NAME },
-    role: { stringValue: 'super_admin' },
-    department: { stringValue: 'QA' },
-    employee_id: { stringValue: 'EMP001' },
-    phone: { stringValue: '' },
-    avatar_url: { stringValue: '' },
-    is_active: { booleanValue: true },
-    last_login: { nullValue: null },
-    created_at: { stringValue: now },
-    updated_at: { stringValue: now },
-  };
+  await userRef.set({
+    authUid: user.uid,
+    email: DEFAULT_EMAIL,
+    fullName: DEFAULT_NAME,
+    role: 'super_admin',
+    employeeId: 'EMP001',
+    department: 'QA',
+    userStatus: 'Active',
+    status: 'Active',
+    accountLocked: false,
+    isDeleted: false,
+    createdAt: now,
+    updatedAt: now,
+  }, { merge: true });
 
-  const patchRes = await fetch(`${url}?updateMask.fieldPaths=role&updateMask.fieldPaths=full_name&updateMask.fieldPaths=updated_at&updateMask.fieldPaths=is_active`, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${idToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ fields }),
-  });
-
-  if (patchRes.status === 404) {
-    const createRes = await fetch(url, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${idToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ fields }),
-    });
-    if (!createRes.ok) {
-      const err = await createRes.text();
-      throw new Error(`Firestore profile create failed: ${err}`);
-    }
-    console.log('Created Firestore profile with role: super_admin');
-    return;
-  }
-
-  if (!patchRes.ok) {
-    const err = await patchRes.text();
-    throw new Error(`Firestore profile update failed: ${err}`);
-  }
-  console.log('Updated Firestore profile to role: super_admin');
+  console.log('Upserted Firestore profile + user master with role: super_admin');
+  return user.uid;
 }
 
 async function main() {
+  if (!DEFAULT_PASSWORD) {
+    console.error('DEFAULT_ADMIN_PASSWORD is required. Example:');
+    console.error('  $env:DEFAULT_ADMIN_PASSWORD="YourStrongPass!1"; npm run setup:admin');
+    process.exit(1);
+  }
+  if (
+    DEFAULT_PASSWORD.length < 12
+    || !/[A-Z]/.test(DEFAULT_PASSWORD)
+    || !/[a-z]/.test(DEFAULT_PASSWORD)
+    || !/\d/.test(DEFAULT_PASSWORD)
+    || !/[^A-Za-z0-9]/.test(DEFAULT_PASSWORD)
+  ) {
+    console.error(
+      'DEFAULT_ADMIN_PASSWORD must be at least 12 characters and include upper, lower, number, and special characters.',
+    );
+    process.exit(1);
+  }
+
   const env = loadEnv();
-  const apiKey = env.NEXT_PUBLIC_FIREBASE_API_KEY;
   const projectId = env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
-  if (!apiKey || !projectId) {
-    console.error('NEXT_PUBLIC_FIREBASE_API_KEY and NEXT_PUBLIC_FIREBASE_PROJECT_ID are required in .env.local');
+  if (!projectId) {
+    console.error('NEXT_PUBLIC_FIREBASE_PROJECT_ID is required in .env.local');
     process.exit(1);
   }
 
   console.log('Setting up default admin...');
   console.log('  Email   :', DEFAULT_EMAIL);
-  console.log('  Password:', DEFAULT_PASSWORD);
   console.log('  Project :', projectId);
 
-  const { uid, idToken } = await ensureAuthUser(apiKey);
-  await ensureProfile(projectId, uid, idToken);
+  const admin = await loadFirebaseAdmin(projectId);
+  await ensureAuthAndProfile(admin);
 
-  console.log('\nDone. Login with the credentials above for full Super Admin access.');
+  console.log('\nDone. Login with DEFAULT_ADMIN_EMAIL / DEFAULT_ADMIN_PASSWORD for Super Admin access.');
 }
 
 main().catch((err) => {

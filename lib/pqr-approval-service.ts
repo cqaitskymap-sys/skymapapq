@@ -14,7 +14,6 @@ import { buildApprovalReadiness, buildSectionCompletion } from '@/lib/pqr-summar
 import {
   PQR_APPROVAL_COLLECTIONS,
   PQR_APPROVAL_MODULE,
-  DEFAULT_PQR_WORKFLOW_STEPS,
   canSubmitPqrApproval,
   canActOnApproval,
   canReopenApprovedPqr,
@@ -250,7 +249,7 @@ async function cancelRemainingSteps(
 
 /**
  * Resolve workflow steps from active approval matrix via buildApprovalFlow.
- * Falls back to DEFAULT_PQR_WORKFLOW_STEPS when matrix/flow is empty.
+ * Returns an empty list when matrix/flow is not configured.
  * `pqr` kept for future product-specific matrix selection.
  */
 export async function resolveWorkflowSteps(pqr: PqrOption): Promise<PqrWorkflowStepDef[]> {
@@ -289,7 +288,7 @@ export async function resolveWorkflowSteps(pqr: PqrOption): Promise<PqrWorkflowS
   } catch (e) {
     console.error('resolveWorkflowSteps matrix failed', e);
   }
-  return DEFAULT_PQR_WORKFLOW_STEPS;
+  return [];
 }
 
 const REQUIRED_SECTION_GROUPS: Array<{ keys: string[]; consolidateKey: string; label: string }> = [
@@ -551,6 +550,9 @@ export async function submitPqrForApproval(
     }
 
     const steps = await resolveWorkflowSteps(pqr);
+    if (!steps.length) {
+      return { error: 'No active approval workflow is configured for PQR. Configure approval matrix first.' };
+    }
     const batch = writeBatch(getFirebaseFirestore());
     let created = 0;
     steps.forEach((step, i) => {

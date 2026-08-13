@@ -5,21 +5,6 @@ import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
 import {
   CPV_CONFIG_COLLECTIONS,
-  DEFAULT_AI_SETTINGS,
-  DEFAULT_ANNUAL_TEMPLATE,
-  DEFAULT_BACKUP_SETTINGS,
-  DEFAULT_CAPABILITY_SETTINGS,
-  DEFAULT_DASHBOARD_SETTINGS,
-  DEFAULT_DATA_SOURCE_MAPPINGS,
-  DEFAULT_EXPORT_SETTINGS,
-  DEFAULT_FEATURE_FLAGS,
-  DEFAULT_GENERAL_SETTINGS,
-  DEFAULT_GLOBAL_ORG_SETTINGS,
-  DEFAULT_LIMIT_RULES,
-  DEFAULT_NOTIFICATION_SETTINGS,
-  DEFAULT_RISK_SETTINGS,
-  DEFAULT_SECURITY_SETTINGS,
-  DEFAULT_SPC_SETTINGS,
   type AiSettings,
   type AlertRuleConfig,
   type AnnualReviewTemplate,
@@ -43,6 +28,7 @@ import {
   type SpcSettings,
   type WorkflowMapping,
   validateConfiguration,
+  withConfigurationDefaults,
 } from '@/lib/cpv-configuration-records';
 
 export type CpvConfigActor = { id: string; name: string; role?: string };
@@ -134,34 +120,8 @@ function emptyBundle(): CpvConfigurationBundle {
   };
 }
 
-function defaultBundle(): CpvConfigurationBundle {
-  return {
-    general: { ...DEFAULT_GENERAL_SETTINGS, id: 'default' },
-    global: { ...DEFAULT_GLOBAL_ORG_SETTINGS, id: 'default' },
-    products: [],
-    cppParameters: [],
-    cqaParameters: [],
-    limitRules: DEFAULT_LIMIT_RULES as LimitRule[],
-    reviewFrequency: [],
-    alertRules: [],
-    capability: { ...DEFAULT_CAPABILITY_SETTINGS, id: 'default' },
-    spc: { ...DEFAULT_SPC_SETTINGS, id: 'default' },
-    risk: { ...DEFAULT_RISK_SETTINGS, id: 'default' },
-    ai: { ...DEFAULT_AI_SETTINGS, id: 'default' },
-    notification: { ...DEFAULT_NOTIFICATION_SETTINGS, id: 'default' },
-    annualTemplates: [{ ...DEFAULT_ANNUAL_TEMPLATE, id: 'default' }],
-    workflows: [],
-    dataSourceMappings: DEFAULT_DATA_SOURCE_MAPPINGS as DataSourceMapping[],
-    dashboard: { ...DEFAULT_DASHBOARD_SETTINGS, id: 'default' },
-    exportSettings: { ...DEFAULT_EXPORT_SETTINGS, id: 'default' },
-    security: { ...DEFAULT_SECURITY_SETTINGS, id: 'default' },
-    backup: { ...DEFAULT_BACKUP_SETTINGS, id: 'default' },
-    featureFlags: { ...DEFAULT_FEATURE_FLAGS, id: 'default' },
-  };
-}
-
 export async function fetchCpvConfiguration(): Promise<CpvConfigurationBundle> {
-  if (!isFirebaseConfigured()) return defaultBundle();
+  if (!isFirebaseConfigured()) return withConfigurationDefaults(emptyBundle());
 
   try {
     const [
@@ -197,32 +157,32 @@ export async function fetchCpvConfiguration(): Promise<CpvConfigurationBundle> {
       getSingleton<FeatureFlags>(SINGLETON_DOCS.featureFlags),
     ]);
 
-    return {
-      general: general || ({ ...DEFAULT_GENERAL_SETTINGS, id: 'default' } as GeneralSettings),
-      global: global || ({ ...DEFAULT_GLOBAL_ORG_SETTINGS, id: 'default' } as GlobalOrgSettings),
+    return withConfigurationDefaults({
+      general,
+      global,
       products,
       cppParameters,
       cqaParameters,
-      limitRules: limitRules.length ? limitRules : (DEFAULT_LIMIT_RULES as LimitRule[]),
+      limitRules,
       reviewFrequency,
       alertRules,
-      capability: capability || ({ ...DEFAULT_CAPABILITY_SETTINGS, id: 'default' } as CapabilitySettings),
-      spc: spc || ({ ...DEFAULT_SPC_SETTINGS, id: 'default' } as SpcSettings),
-      risk: risk || ({ ...DEFAULT_RISK_SETTINGS, id: 'default' } as RiskScoringSettings),
-      ai: ai || ({ ...DEFAULT_AI_SETTINGS, id: 'default' } as AiSettings),
-      notification: notification || ({ ...DEFAULT_NOTIFICATION_SETTINGS, id: 'default' } as NotificationSettings),
-      annualTemplates: annualTemplates.length ? annualTemplates : [{ ...DEFAULT_ANNUAL_TEMPLATE, id: 'default' }],
+      capability,
+      spc,
+      risk,
+      ai,
+      notification,
+      annualTemplates,
       workflows,
-      dataSourceMappings: dataSourceMappings.length ? dataSourceMappings : (DEFAULT_DATA_SOURCE_MAPPINGS as DataSourceMapping[]),
-      dashboard: dashboard || ({ ...DEFAULT_DASHBOARD_SETTINGS, id: 'default' } as DashboardSettings),
-      exportSettings: exportSettings || ({ ...DEFAULT_EXPORT_SETTINGS, id: 'default' } as ExportReportSettings),
-      security: security || ({ ...DEFAULT_SECURITY_SETTINGS, id: 'default' } as SecuritySettings),
-      backup: backup || ({ ...DEFAULT_BACKUP_SETTINGS, id: 'default' } as BackupSettings),
-      featureFlags: featureFlags || ({ ...DEFAULT_FEATURE_FLAGS, id: 'default' } as FeatureFlags),
-    };
+      dataSourceMappings,
+      dashboard,
+      exportSettings,
+      security,
+      backup,
+      featureFlags,
+    });
   } catch (e) {
     console.error('fetchCpvConfiguration failed', e);
-    return emptyBundle();
+    return withConfigurationDefaults(emptyBundle());
   }
 }
 
@@ -492,7 +452,7 @@ export async function logConfigurationExport(_actor: CpvConfigActor, count = 0) 
 export function isProductCpvRequired(bundle: CpvConfigurationBundle, productName: string): boolean {
   const product = bundle.products.find((p) => p.product === productName && p.status === 'Active');
   if (product) return product.cpvRequired;
-  return bundle.general?.cpvEnabled !== false;
+  return bundle.general?.cpvEnabled === true;
 }
 
 export async function fetchAlertRulesFromConfig(): Promise<AlertRuleConfig[]> {

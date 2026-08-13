@@ -109,6 +109,7 @@ export async function validateBatchForProduct(batchNumber: string, productName: 
 export async function generateDeviationNumberForDepartment(department: string): Promise<string> {
   const dept = departmentCode(department);
   const year = new Date().getFullYear();
+  if (!isFirebaseConfigured()) return '';
   try {
     const result = await generateDocumentNumber('Deviation', 'GMP Deviation', {
       departmentCode: dept,
@@ -137,7 +138,7 @@ export async function generateDeviationNumberForDepartment(department: string): 
   } catch (e) {
     console.error('generateDeviationNumberForDepartment', e);
   }
-  return `${prefix}0001`;
+  return '';
 }
 
 async function linkBatchData(batchNumber: string, productName?: string): Promise<{

@@ -3,14 +3,10 @@
  * Immutable session/security event logging for 21 CFR Part 11 / ISO 27001.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import {
-  getFirestore, type Firestore, type DocumentData,
+import { type Firestore, type DocumentData,
 } from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -71,8 +67,7 @@ function assertAdmin(actor: DocumentData | undefined, role: string) {
 
 async function resolveActor(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const snap = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = snap.data();
   return {
@@ -396,8 +391,7 @@ export const recordAdminLoginSuccess = onCall({ cors: true }, async (request) =>
  * Record failed login (may be unauthenticated).
  */
 export const recordAdminLoginFailure = onCall({ cors: true }, async (request) => {
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const data = (request.data || {}) as Record<string, unknown>;
   const email = requiredString(data.email, 'Email', 320).toLowerCase();
   const failureReason = optionalString(data.failureReason, 'failureReason', 500)

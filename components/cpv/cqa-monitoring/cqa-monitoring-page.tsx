@@ -323,10 +323,6 @@ export function CqaMonitoringPage() {
       toast.error('Complete required fields');
       return;
     }
-    if (!form.changeReason || form.changeReason.trim().length < 5) {
-      toast.error('Change reason must be at least 5 characters');
-      return;
-    }
     const qaOverride = Boolean(editing?.isLocked && editing.reviewStatus === 'Approved' && canQaOverride);
     if (qaOverride) {
       setOverrideEsign(true);
@@ -334,7 +330,12 @@ export function CqaMonitoringPage() {
       return;
     }
     setSubmitting(true);
-    const data = form as CqaResultFormData;
+    const data = {
+      ...form,
+      changeReason: form.changeReason?.trim() || (editing ? 'CQA result update' : 'Initial CQA result entry'),
+      testDate: form.testDate || new Date().toISOString(),
+      analyst: form.analyst || profile?.full_name || '',
+    } as CqaResultFormData;
     if (editing) {
       const { error: err } = await updateCqaResult(editing.id, data, actor, editing, false);
       if (err) toast.error(err);
@@ -747,28 +748,18 @@ export function CqaMonitoringPage() {
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div><Label>Parameter Category</Label><Input className="mt-1" value={form.parameterCategory || ''} readOnly placeholder="—" /></div>
-              <div><Label>Responsibility</Label><Input className="mt-1" value={form.responsibility || ''} readOnly placeholder="IPQA / QA / QC" /></div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
               <div><Label>Spec No</Label><Input className="mt-1" value={form.specificationNumber || ''} onChange={(e) => setForm((f) => ({ ...f, specificationNumber: e.target.value }))} /></div>
               <div><Label>STP No</Label><Input className="mt-1" value={form.stpNumber || ''} onChange={(e) => setForm((f) => ({ ...f, stpNumber: e.target.value }))} /></div>
             </div>
-            {form.specificationText && (
-              <div><Label>Specification Limit</Label><Input className="mt-1" value={form.specificationText} readOnly /></div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Target Value</Label><Input className="mt-1" type="number" value={form.targetValue ?? ''} readOnly /></div>
-              <div><Label>Criticality</Label>
-                <Select value={form.criticality || 'Major'} onValueChange={(v) => setForm((f) => ({ ...f, criticality: v as CqaResultFormData['criticality'] }))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Critical">Critical</SelectItem>
-                    <SelectItem value="Major">Major</SelectItem>
-                    <SelectItem value="Minor">Minor</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+            <div><Label>Criticality</Label>
+              <Select value={form.criticality || 'Major'} onValueChange={(v) => setForm((f) => ({ ...f, criticality: v as CqaResultFormData['criticality'] }))}>
+                <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Critical">Critical</SelectItem>
+                  <SelectItem value="Major">Major</SelectItem>
+                  <SelectItem value="Minor">Minor</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div><Label>LSL</Label><Input className="mt-1" type="number" value={form.lowerLimit ?? ''} readOnly /></div>
@@ -793,27 +784,8 @@ export function CqaMonitoringPage() {
               )}
               <div><Label>Unit</Label><Input className="mt-1" value={form.unit || ''} readOnly /></div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Result Type</Label><Input className="mt-1" value={form.resultType || 'Numeric'} readOnly /></div>
-              <div><Label>Test Date *</Label><Input className="mt-1" type="datetime-local" value={form.testDate?.slice(0, 16) || ''} onChange={(e) => setForm((f) => ({ ...f, testDate: e.target.value }))} /></div>
-            </div>
-            <div><Label>Analyst *</Label><Input className="mt-1" value={form.analyst || ''} onChange={(e) => setForm((f) => ({ ...f, analyst: e.target.value }))} /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Equipment</Label><Input className="mt-1" value={form.equipmentName || ''} onChange={(e) => setForm((f) => ({ ...f, equipmentName: e.target.value }))} /></div>
-              <div><Label>Site</Label><Input className="mt-1" value={form.site || ''} onChange={(e) => setForm((f) => ({ ...f, site: e.target.value }))} /></div>
-              <div><Label>Department</Label><Input className="mt-1" value={form.department || ''} onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))} /></div>
-              <div><Label>Shift</Label><Input className="mt-1" value={form.shift || ''} onChange={(e) => setForm((f) => ({ ...f, shift: e.target.value }))} /></div>
-            </div>
+            <div><Label>Result Type</Label><Input className="mt-1" value={form.resultType || 'Numeric'} readOnly /></div>
             <div><Label>Remarks</Label><Textarea className="mt-1" value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} /></div>
-            <div>
-              <Label>Change Reason * (ALCOA+ / Part 11)</Label>
-              <Textarea
-                className="mt-1"
-                placeholder="Describe why this create/update is being performed"
-                value={form.changeReason || ''}
-                onChange={(e) => setForm((f) => ({ ...f, changeReason: e.target.value }))}
-              />
-            </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button>
               <Button onClick={() => void saveForm()} disabled={submitting}>{submitting ? 'Saving...' : 'Save'}</Button>

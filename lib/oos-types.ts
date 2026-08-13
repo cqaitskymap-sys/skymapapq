@@ -714,13 +714,13 @@ export function isOpenOosStatus(status: string): boolean {
 
 export function isCriticalTest(testName: string): boolean {
   return CRITICAL_TESTS.some((t) =>
-    testName.toLowerCase().includes(t.toLowerCase()),
+    String(testName || '').toLowerCase().includes(t.toLowerCase()),
   );
 }
 
 export function isCriticalOosTest(testName: string): boolean {
   const criticalNames = ['Sterility', 'Endotoxin', 'Assay'];
-  return criticalNames.some((t) => testName.toLowerCase().includes(t.toLowerCase()))
+  return criticalNames.some((t) => String(testName || '').toLowerCase().includes(t.toLowerCase()))
     || isCriticalTest(testName);
 }
 

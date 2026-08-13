@@ -2,10 +2,9 @@ import {
   addDoc, collection, doc, getDoc, getDocs, limit, orderBy, query, updateDoc, where,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { getFirebaseFirestore, getFirebaseStorage } from '@/lib/firebase';
+import { getFirebaseFirestore, getFirebaseStorage, isFirebaseConfigured } from '@/lib/firebase';
 import { logAuditEvent } from '@/lib/admin/admin-service';
 import { generateDocumentNumber } from '@/lib/admin/document-numbering-service';
-import { buildRecallNumberFallback } from '@/lib/recall-create-records';
 import { downloadCsv } from '@/lib/export-utils';
 import { createCapa } from '@/lib/capa-service';
 import {
@@ -40,32 +39,16 @@ async function notify(title: string, message: string, recordId: string, roles: s
 }
 
 export async function generateRecallNumber(): Promise<string> {
-  const year = new Date().getFullYear();
+  if (!isFirebaseConfigured()) {
+    throw new Error('Firebase is not configured.');
+  }
   try {
     const result = await generateDocumentNumber('REC', 'Product Recall', { increment: true });
     if (result.number) return result.number;
   } catch (e) {
     console.error('generateRecallNumber document numbering', e);
   }
-  const prefix = `REC/${year}/`;
-  try {
-    const snap = await getDocs(query(
-      collection(getFirebaseFirestore(), RECALL_COLLECTIONS.records),
-      where('recall_number', '>=', prefix),
-      where('recall_number', '<=', `${prefix}\uf8ff`),
-      orderBy('recall_number', 'desc'),
-      limit(1),
-    ));
-    if (!snap.empty) {
-      const last = snap.docs[0].data().recall_number as string;
-      const seq = parseInt(last.split('/').pop() || '0', 10) + 1;
-      return buildRecallNumberFallback(year, seq);
-    }
-  } catch {
-    const all = await getDocs(collection(getFirebaseFirestore(), RECALL_COLLECTIONS.records));
-    return buildRecallNumberFallback(year, all.size + 1);
-  }
-  return buildRecallNumberFallback(year, 1);
+  throw new Error('Unable to generate Recall number from backend configuration.');
 }
 
 async function linkBatch(batchNumber: string) {

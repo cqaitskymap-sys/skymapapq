@@ -204,23 +204,28 @@ export function CppMonitoringPage() {
       ? (bmrName: string) => resolveOndansetronCppDefaults(bmrName)
       : undefined;
     const hierarchyOptions = getCppHierarchyOptionsForStageArea(processStage, processArea, resolveDefaults);
-
     const dbParams = await fetchCppParametersForProduct(productName, productId, processStage, processArea);
-    const hierarchyNames = new Set(hierarchyOptions.map((o) => o.parameterName.toLowerCase()));
 
-    if (isOndansetronProduct(productName)) {
-      const bmrOptions = getOndansetronCppOptionsForStage(processStage);
-      const filteredBmr = bmrOptions.filter((o) => !hierarchyNames.has(o.parameterName.toLowerCase()));
-      if (!dbParams.length) return [...hierarchyOptions, ...filteredBmr];
-      const dbNames = new Set(dbParams.map((p) => normalizeParameter(p).parameterName.toLowerCase()));
-      const extras = filteredBmr.filter((o) => !dbNames.has(o.parameterName.toLowerCase()));
-      const dbExtras = dbParams.filter((p) => !hierarchyNames.has(normalizeParameter(p).parameterName.toLowerCase()));
-      return [...hierarchyOptions, ...dbParams.filter((p) => hierarchyNames.has(normalizeParameter(p).parameterName.toLowerCase())), ...dbExtras, ...extras];
+    // Prefer DB params over hierarchy when names collide; never show duplicates.
+    const byName = new Map<string, CppParamOption>();
+    const keyOf = (name: string) => name.trim().toLowerCase().replace(/\s+/g, ' ');
+
+    for (const o of hierarchyOptions) {
+      byName.set(keyOf(o.parameterName), o);
+    }
+    for (const p of dbParams) {
+      const n = normalizeParameter(p);
+      byName.set(keyOf(n.parameterName), p);
     }
 
-    if (!dbParams.length) return hierarchyOptions;
-    const extras = dbParams.filter((p) => !hierarchyNames.has(normalizeParameter(p).parameterName.toLowerCase()));
-    return [...hierarchyOptions, ...extras];
+    if (isOndansetronProduct(productName)) {
+      for (const o of getOndansetronCppOptionsForStage(processStage)) {
+        const key = keyOf(o.parameterName);
+        if (!byName.has(key)) byName.set(key, o);
+      }
+    }
+
+    return Array.from(byName.values());
   }, []);
 
   const openCreate = () => {
@@ -229,8 +234,10 @@ export function CppMonitoringPage() {
     setFormProductName('');
     setFormBatches([]);
     setFormParams([]);
+    const today = new Date();
+    const todayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     setForm({
-      observationDateTime: new Date().toISOString(),
+      observationDateTime: todayDate,
       recordedBy: profile?.full_name || '',
       processStage: CPP_PROCESS_STAGES[0],
       processArea: '',
@@ -403,10 +410,6 @@ export function CppMonitoringPage() {
       toast.error('Complete required fields');
       return;
     }
-    if (!form.changeReason || form.changeReason.trim().length < 5) {
-      toast.error('Change reason must be at least 5 characters');
-      return;
-    }
     const qaOverride = Boolean(editing?.isLocked && editing.reviewStatus === 'Approved' && canQaOverride);
     if (qaOverride) {
       setOverrideEsign(true);
@@ -414,7 +417,10 @@ export function CppMonitoringPage() {
       return;
     }
     setSubmitting(true);
-    const data = form as CppResultFormData;
+    const data = {
+      ...form,
+      changeReason: form.changeReason?.trim() || (editing ? 'CPP result update' : 'Initial CPP result entry'),
+    } as CppResultFormData;
     if (editing) {
       const { error: err } = await updateCppResult(editing.id, data, actor, editing, false);
       if (err) toast.error(err);
@@ -860,23 +866,8 @@ export function CppMonitoringPage() {
                 <Input className="mt-1 bg-muted" type="number" value={form.upperLimit ?? ''} readOnly placeholder="Auto-filled from parameter" />
               </div>
             </div>
-            <div><Label>Observation Date Time *</Label><Input className="mt-1" type="datetime-local" value={form.observationDateTime?.slice(0, 16) || ''} onChange={(e) => setForm((f) => ({ ...f, observationDateTime: e.target.value }))} /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Equipment</Label><Input className="mt-1" value={form.equipmentName || ''} onChange={(e) => setForm((f) => ({ ...f, equipmentName: e.target.value }))} /></div>
-              <div><Label>Site</Label><Input className="mt-1" value={form.site || ''} onChange={(e) => setForm((f) => ({ ...f, site: e.target.value }))} /></div>
-              <div><Label>Department</Label><Input className="mt-1" value={form.department || ''} onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))} /></div>
-              <div><Label>Shift</Label><Input className="mt-1" value={form.shift || ''} onChange={(e) => setForm((f) => ({ ...f, shift: e.target.value }))} /></div>
-            </div>
+            <div><Label>Observation Date *</Label><Input className="mt-1" type="date" value={form.observationDateTime?.slice(0, 10) || ''} onChange={(e) => setForm((f) => ({ ...f, observationDateTime: e.target.value }))} /></div>
             <div><Label>Remarks</Label><Textarea className="mt-1" value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} /></div>
-            <div>
-              <Label>Change Reason * (ALCOA+ / Part 11)</Label>
-              <Textarea
-                className="mt-1"
-                placeholder="Describe why this create/update is being performed"
-                value={form.changeReason || ''}
-                onChange={(e) => setForm((f) => ({ ...f, changeReason: e.target.value }))}
-              />
-            </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button>
               <Button onClick={() => void saveForm()} disabled={submitting}>{submitting ? 'Saving...' : 'Save'}</Button>

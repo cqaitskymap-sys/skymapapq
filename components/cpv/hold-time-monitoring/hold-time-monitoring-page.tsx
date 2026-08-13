@@ -245,6 +245,10 @@ export function HoldTimeMonitoringPage() {
 
   const onHoldStageChange = async (holdStage: string) => {
     const master = await fetchHoldTimeMaster(holdStage);
+    if (!master) {
+      toast.error('Hold-time master limits are not configured for this stage.');
+      return;
+    }
     setForm((f) => {
       const next = {
         ...f,
@@ -264,6 +268,7 @@ export function HoldTimeMonitoringPage() {
     setFormProductId('');
     setComputedPreview(null);
     setFormOpen(true);
+    void onHoldStageChange(HOLD_STAGES[0]);
   };
 
   const saveForm = async (qaOverride = false, esignConfirmed = false) => {
@@ -301,9 +306,15 @@ export function HoldTimeMonitoringPage() {
     setFormBatches(await fetchHoldTimeBatchesForProduct(p.productName, productId));
     const rows = await Promise.all(BULK_HOLD_STAGES.map(async (stage) => {
       const master = await fetchHoldTimeMaster(stage);
+      if (!master) return null;
       return { stage, start: '', end: '', allowed: master.allowed, unit: master.unit };
     }));
-    setBulkRows(rows);
+    const configuredRows = rows.filter((row): row is NonNullable<typeof row> => Boolean(row));
+    if (!configuredRows.length) {
+      toast.error('No hold-time stage master limits are configured.');
+      return;
+    }
+    setBulkRows(configuredRows);
   };
 
   const saveBulk = async () => {

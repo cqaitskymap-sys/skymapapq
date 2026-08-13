@@ -59,20 +59,16 @@ export default function EquipmentMasterPage() {
         <Card><CardHeader><CardTitle>All Equipment ({equipment.length})</CardTitle></CardHeader>
           <CardContent className="overflow-x-auto p-0">
             <Table><TableHeader><TableRow>
-              <TableHead>ID</TableHead><TableHead>Name</TableHead><TableHead>Type</TableHead>
-              <TableHead>Department</TableHead><TableHead>Area</TableHead><TableHead>Status</TableHead><TableHead>Cal</TableHead><TableHead>PM</TableHead><TableHead></TableHead>
+              <TableHead>ID</TableHead><TableHead>Name</TableHead>
+              <TableHead>Qualification</TableHead><TableHead>Manufacturing Line</TableHead><TableHead></TableHead>
             </TableRow></TableHeader><TableBody>
-              {equipment.length === 0 ? <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground">No equipment — create your first record</TableCell></TableRow>
+              {equipment.length === 0 ? <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No equipment — create your first record</TableCell></TableRow>
                 : equipment.map((e) => (
                   <TableRow key={e.id}>
                     <TableCell className="font-mono text-sm">{e.equipment_id}</TableCell>
                     <TableCell>{e.equipment_name}</TableCell>
-                    <TableCell className="text-xs">{e.equipment_type}</TableCell>
-                    <TableCell>{e.department}</TableCell>
-                    <TableCell>{e.area_room_no || '—'}</TableCell>
-                    <TableCell><EquipmentStatusBadge status={e.equipment_status} /></TableCell>
-                    <TableCell><EquipmentStatusBadge status={e.calibration_status} /></TableCell>
-                    <TableCell><EquipmentStatusBadge status={e.pm_status} /></TableCell>
+                    <TableCell><EquipmentStatusBadge status={e.qualification_status || '—'} /></TableCell>
+                    <TableCell>{e.manufacturing_line || '—'}</TableCell>
                     <TableCell><Link href={`/qms/equipment/${e.id}`}><Button variant="ghost" size="sm"><Eye className="h-4 w-4" /></Button></Link></TableCell>
                   </TableRow>
                 ))}

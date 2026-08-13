@@ -175,7 +175,7 @@ export async function fetchProductAttachments(productId: string): Promise<Produc
 }
 
 export async function isProductActiveForUse(productCodeOrId: string): Promise<boolean> {
-  if (!isFirebaseConfigured() || !productCodeOrId) return true;
+  if (!isFirebaseConfigured() || !productCodeOrId) return false;
   try {
     const byId = await fetchProductById(productCodeOrId);
     if (byId) return byId.productStatus === 'Active' && !byId.isDeleted;
@@ -183,10 +183,10 @@ export async function isProductActiveForUse(productCodeOrId: string): Promise<bo
     const product = products.find(
       (item) => item.productCode === productCodeOrId || item.productId === productCodeOrId,
     );
-    if (!product) return true;
-    return product.productStatus === 'Active';
+    if (!product) return false;
+    return product.productStatus === 'Active' && !product.isDeleted;
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -273,7 +273,7 @@ export async function createProduct(
     );
     const response = await createFn({
       ...data,
-      reason: data.changeReason,
+      reason: data.changeReason?.trim() || 'Product master change',
     });
     return { product: normalizeProduct(response.data), error: null };
   } catch (error) {
@@ -295,7 +295,7 @@ export async function updateProduct(
     const response = await updateFn({
       productDocId: id,
       updates: data,
-      reason: data.changeReason,
+      reason: data.changeReason?.trim() || 'Product master change',
     });
     return {
       product: normalizeProduct(response.data.product),

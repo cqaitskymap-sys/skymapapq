@@ -156,6 +156,9 @@ function CreateComplaintInner() {
       setCustomers(cust);
       setProducts(prods);
       setInvestigators(inv);
+      if (!num) {
+        toast.error('Complaint numbering backend configuration is not available.');
+      }
     } finally {
       setLoading(false);
     }
@@ -281,7 +284,7 @@ function CreateComplaintInner() {
           <Link href="/qms/complaints" className="inline-flex items-center gap-1 hover:text-foreground">
             <ArrowLeft className="h-4 w-4" /> Back to Dashboard
           </Link>
-          <span className="ml-auto font-mono text-blue-700">{previewNumber || 'CMP/YYYY/0001'}</span>
+          <span className="ml-auto font-mono text-blue-700">{previewNumber || 'Number not available from backend'}</span>
         </div>
 
         {(autoRules.head_qa_approval_required || autoRules.notify_head_qa) && (

@@ -4,15 +4,11 @@
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
-import { getFirestore, type Firestore, type DocumentData } from 'firebase-admin/firestore';
-import { getStorage } from 'firebase-admin/storage';
+
+import { type Firestore, type DocumentData } from 'firebase-admin/firestore';
+import { getAdminAuth, getAdminFirestore, getAdminStorage } from './admin-app';
 import * as logger from 'firebase-functions/logger';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -47,8 +43,7 @@ function assertViewer(actor: DocumentData | undefined, role: string) {
 
 async function resolveActor(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const snap = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = snap.data();
   return {
@@ -148,7 +143,7 @@ async function runHealthProbes(firestore: Firestore): Promise<{
   const checks: ServiceCheck[] = [];
 
   checks.push(await timedCheck('auth', 'Firebase Authentication', 'Authentication', async () => {
-    const list = await getAuth().listUsers(1);
+    const list = await getAdminAuth().listUsers(1);
     return {
       status: 'Healthy',
       detail: `Auth Admin SDK reachable (${list.users.length} sample user(s))`,
@@ -170,7 +165,7 @@ async function runHealthProbes(firestore: Firestore): Promise<{
   }));
 
   checks.push(await timedCheck('storage', 'Cloud Storage', 'Storage', async () => {
-    const bucket = getStorage().bucket();
+    const bucket = getAdminStorage().bucket();
     const [exists] = await bucket.exists();
     if (!exists) {
       return {
@@ -381,8 +376,7 @@ export const scheduledFirebaseHealthCheck = onSchedule(
     memory: '512MiB',
   },
   async () => {
-    initializeAdmin();
-    const firestore = getFirestore();
+        const firestore = getAdminFirestore();
     try {
       const result = await runHealthProbes(firestore);
       const now = new Date().toISOString();

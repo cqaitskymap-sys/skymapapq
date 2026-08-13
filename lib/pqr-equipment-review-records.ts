@@ -78,6 +78,8 @@ export interface PqrEquipmentReviewRecord {
   pqrNumber: string;
   product: string;
   productCode: string;
+  batchNumber: string;
+  manufacturingLine: string;
   equipmentId: string;
   equipmentCode: string;
   equipmentName: string;
@@ -174,12 +176,14 @@ export interface PqrEquipmentReviewCharts {
 
 export const equipmentReviewFormSchema = z.object({
   pqrId: z.string().min(1, 'PQR selection is required'),
-  product: z.string().min(1, 'Product is required'),
-  productCode: z.string().min(1, 'Product code is required'),
+  product: z.string().min(1, 'Product name is required'),
+  productCode: z.string().default(''),
+  batchNumber: z.string().min(1, 'Batch number is required'),
+  manufacturingLine: z.string().min(1, 'Manufacturing line is required'),
   equipmentId: z.string().min(1, 'Equipment ID is required'),
   equipmentCode: z.string().default(''),
   equipmentName: z.string().min(1, 'Equipment name is required'),
-  equipmentCategory: z.enum(PQR_EQUIPMENT_CATEGORIES),
+  equipmentCategory: z.enum(PQR_EQUIPMENT_CATEGORIES).default('Manufacturing Equipment'),
   equipmentType: z.enum(PQR_EQUIPMENT_TYPES).default('Other'),
   department: z.string().default(''),
   area: z.string().default(''),
@@ -191,10 +195,10 @@ export const equipmentReviewFormSchema = z.object({
   iqStatus: z.string().default(''),
   oqStatus: z.string().default(''),
   pqStatus: z.string().default(''),
-  calibrationStatus: z.enum(PQR_CALIBRATION_STATUSES),
+  calibrationStatus: z.enum(PQR_CALIBRATION_STATUSES).default('Not Calibrated'),
   lastCalibrationDate: z.string().default(''),
   nextCalibrationDate: z.string().default(''),
-  pmStatus: z.enum(PQR_PM_STATUSES),
+  pmStatus: z.enum(PQR_PM_STATUSES).default('Not Applicable'),
   lastPmDate: z.string().default(''),
   nextPmDate: z.string().default(''),
   breakdownCount: z.coerce.number().nonnegative().default(0),
@@ -529,6 +533,8 @@ export function normalizeEquipmentReviewRecord(raw: Record<string, unknown>): Pq
     pqrNumber: S(raw.pqrNumber),
     product: S(raw.product || raw.productName),
     productCode: S(raw.productCode),
+    batchNumber: S(raw.batchNumber || raw.batch_number || (batchesUsed[0] || '')),
+    manufacturingLine: S(raw.manufacturingLine || raw.manufacturing_line),
     equipmentId: S(raw.equipmentId),
     equipmentCode: S(raw.equipmentCode || raw.equipmentId),
     equipmentName: S(raw.equipmentName),
@@ -602,6 +608,7 @@ export function filterEquipmentReviewRecords(
     if (search) {
       const hay = [
         r.equipmentName, r.equipmentId, r.equipmentCode, r.equipmentCategory,
+        r.batchNumber, r.manufacturingLine, r.product,
         r.equipmentType, r.department, r.area, r.manufacturer, r.modelNumber,
         r.serialNumber, r.remarks,
       ].join(' ').toLowerCase();

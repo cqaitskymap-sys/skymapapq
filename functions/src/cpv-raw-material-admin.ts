@@ -3,12 +3,9 @@
  * CF-only writes, review/approve with e-sign, dual audit, compliance evaluation.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
+import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -115,8 +112,7 @@ function assertReviewer(actor: DocumentData | undefined, role: string) {
 
 async function resolveActor(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const snap = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = snap.data();
   return {
@@ -378,12 +374,14 @@ function sanitizePayload(data: Record<string, unknown>, existing?: DocumentData)
     throw new HttpsError('invalid-argument', `Invalid COA option: ${coaAvailable}`);
   }
 
-  const mfgDate = requiredString(data.mfgDate ?? existing?.mfgDate, 'MFG date', 40);
-  const expDate = requiredString(data.expDate ?? existing?.expDate, 'EXP date', 40);
-  const mfg = toComparableDate(mfgDate);
-  const exp = toComparableDate(expDate);
-  if (!mfg || !exp || !(exp > mfg)) {
-    throw new HttpsError('invalid-argument', 'EXP date must be after MFG date');
+  const mfgDate = optionalString(data.mfgDate ?? existing?.mfgDate, 'MFG date', 40);
+  const expDate = optionalString(data.expDate ?? existing?.expDate, 'EXP date', 40);
+  if (mfgDate && expDate) {
+    const mfg = toComparableDate(mfgDate);
+    const exp = toComparableDate(expDate);
+    if (!mfg || !exp || !(exp > mfg)) {
+      throw new HttpsError('invalid-argument', 'EXP date must be after MFG date');
+    }
   }
 
   const usedQuantity = asNonNegNumber(data.usedQuantity ?? existing?.usedQuantity ?? 0, 'Used quantity');

@@ -5,7 +5,6 @@ import { createAuditLog } from '@/lib/audit-trail';
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import {
   applyPreventiveActionOverdueCheck,
-  buildPreventiveActionIdFallback,
   buildPreventiveActionNumber,
   canApproveCriticalCapaPreventiveAction,
   CAPA_PREVENTIVE_ACTION_MODULE,
@@ -88,7 +87,7 @@ export async function assertApprovedRcaForPreventiveAction(capaId: string): Prom
 
 export async function generatePreventiveActionId(): Promise<string> {
   const year = new Date().getFullYear();
-  if (!isFirebaseConfigured()) return buildPreventiveActionIdFallback(year, 1);
+  if (!isFirebaseConfigured()) throw new Error('Firebase is not configured');
   try {
     const prefix = `PA-CAPA/${year}/`;
     const snap = await getDocs(query(
@@ -101,17 +100,17 @@ export async function generatePreventiveActionId(): Promise<string> {
     if (!snap.empty) {
       const last = String(snap.docs[0].data().preventive_action_id || '');
       const seq = parseInt(last.split('/').pop() || '0', 10) + 1;
-      return buildPreventiveActionIdFallback(year, seq);
+      return `PA-CAPA/${year}/${String(seq).padStart(4, '0')}`;
     }
   } catch {
     try {
       const snap = await getDocs(collection(getFirebaseFirestore(), CAPA_COLLECTIONS.preventiveActions));
-      return buildPreventiveActionIdFallback(year, snap.size + 1);
+      return `PA-CAPA/${year}/${String(snap.size + 1).padStart(4, '0')}`;
     } catch {
-      return buildPreventiveActionIdFallback(year, 1);
+      throw new Error('Unable to generate preventive action ID from backend.');
     }
   }
-  return buildPreventiveActionIdFallback(year, 1);
+  throw new Error('Unable to generate preventive action ID from backend.');
 }
 
 async function nextPreventiveActionNumber(capaId: string, capaNumber: string): Promise<string> {

@@ -35,7 +35,6 @@ import {
   previewCcReport,
   scheduleCcReport,
 } from '@/lib/cc-reports-service';
-import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 import { EmptyState } from '@/components/admin/dashboard/empty-state';
@@ -251,7 +250,7 @@ export function CcReportsAnalyticsPage() {
     setScheduling(false);
     if (err) toast.error(err);
     else {
-      toast.success('Report scheduled (placeholder)');
+      toast.success('Report scheduled');
       await load();
     }
     void id;
@@ -301,28 +300,19 @@ export function CcReportsAnalyticsPage() {
       is_deleted: false,
     } as CcReportRecord;
 
-    if (type === 'CSV' || type === 'Excel') {
-      const rows = analytics?.previewRows ?? [];
-      const ext = type === 'Excel' ? 'xlsx' : 'csv';
-      downloadCsv(
-        `${report.report_number.replace(/\//g, '-')}.${ext}`,
-        CC_PREVIEW_COLUMNS.map((c) => c.header),
-        rows.map((r) => CC_PREVIEW_COLUMNS.map((c) => String(r[c.key as keyof CcReportPreviewRow] ?? ''))),
-      );
-    }
+    try {
+      await exportCcReport(report, type, actor);
+      if (savedReport) await logCcReportDownloaded(actor, savedReport.id, savedReport.report_number);
 
-    await exportCcReport(report, type, actor);
-    if (savedReport) await logCcReportDownloaded(actor, savedReport.id, savedReport.report_number);
-
-    if (type === 'PDF') {
-      setShowPdf(true);
-      await logCcReportPrinted(actor, report.id, report.report_number);
-      setTimeout(() => printPage(), 300);
-      toast.success('PDF export — print dialog opened');
-    } else {
-      toast.success(`${type} export downloaded (audit logged)`);
+      if (type === 'PDF') {
+        setShowPdf(true);
+        await logCcReportPrinted(actor, report.id, report.report_number);
+      }
+      toast.success(`${type} export requested via backend`);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Change control report export is not available.');
     }
-    await load();
   };
 
   const historyColumns = useMemo(() => [
@@ -337,7 +327,7 @@ export function CcReportsAnalyticsPage() {
       key: 'actions',
       header: '',
       render: (r: CcReportRecord) => canExport ? (
-        <Button variant="ghost" size="sm" onClick={() => void logCcReportDownloaded(actor, r.id, r.report_number).then(() => toast.success('Download placeholder logged'))}>
+        <Button variant="ghost" size="sm" onClick={() => void logCcReportDownloaded(actor, r.id, r.report_number).then(() => toast.success('Download request logged'))}>
           <Download className="h-4 w-4" />
         </Button>
       ) : null,

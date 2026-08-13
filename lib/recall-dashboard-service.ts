@@ -109,12 +109,12 @@ export async function fetchRecallDashboardData(
 
     return {
       records: filtered,
-      metrics: computeRecallDashboardMetrics(scoped),
-      charts: computeRecallChartData(scoped),
+      metrics: computeRecallDashboardMetrics(filtered),
+      charts: computeRecallChartData(filtered),
       recentRecalls: getRecentRecalls(filtered),
-      openRecovery: getOpenRecoveryRows(scoped),
-      regulatoryPending: getRegulatoryPendingRows(scoped),
-      activity: auditActivity.length ? auditActivity : buildRecallActivityTimeline(scoped),
+      openRecovery: getOpenRecoveryRows(filtered),
+      regulatoryPending: getRegulatoryPendingRows(filtered),
+      activity: auditActivity.length ? auditActivity : buildRecallActivityTimeline(filtered),
     };
   } catch (e) {
     console.error('fetchRecallDashboardData', e);
@@ -135,7 +135,7 @@ export async function logRecallDashboardFilterApplied(actor: RecallDashboardActo
 }
 
 export async function logRecallDashboardPdfExport(actor: RecallDashboardActor, count: number): Promise<void> {
-  await audit(actor, 'PDF Export', `Dashboard PDF placeholder (${count} records)`);
+  await audit(actor, 'PDF Export Blocked', `Backend PDF export is not configured (${count} records)`);
 }
 
 export async function logRecallDashboardExcelExport(actor: RecallDashboardActor, count: number): Promise<void> {
@@ -156,52 +156,8 @@ export function openRecallDashboardPdfPlaceholder(
   metrics: RecallDashboardMetrics,
   generatedBy: string,
 ): void {
-  const rows = records.slice(0, 50).map((r, i) => `
-    <tr>
-      <td>${i + 1}</td>
-      <td>${r.recall_number}</td>
-      <td>${r.recall_date}</td>
-      <td>${r.product_name}</td>
-      <td>${r.recall_classification}</td>
-      <td>${r.recall_status}</td>
-      <td>${r.recovery_percent ?? 0}%</td>
-    </tr>
-  `).join('');
-
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Recall Dashboard</title>
-<style>
-body{font-family:Arial,sans-serif;margin:24px;color:#1e293b;font-size:11px}
-.header{border:2px solid #000;padding:12px;margin-bottom:16px;text-align:center}
-h1{color:#1e40af;margin:0 0 4px}.meta{color:#64748b;font-size:11px}
-.kpi{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
-.kpi span{border:1px solid #cbd5e1;padding:6px 10px;border-radius:4px}
-table{width:100%;border-collapse:collapse} th,td{border:1px solid #cbd5e1;padding:5px;text-align:left}
-th{background:#f1f5f9}
-</style></head><body>
-<div class="header">
-  <strong>SKYMAP PHARMACEUTICALS PVT. LTD.</strong><br/>
-  <h1>Product Recall Dashboard Report</h1>
-  <p class="meta">Generated: ${new Date().toLocaleString()} | By: ${generatedBy}</p>
-  <p class="meta">Page 1 of 1</p>
-</div>
-<div class="kpi">
-  <span>Total: ${metrics.total}</span>
-  <span>Open: ${metrics.open}</span>
-  <span>Closed: ${metrics.closed}</span>
-  <span>Mock: ${metrics.mockRecalls}</span>
-  <span>Class I: ${metrics.classI}</span>
-  <span>Regulatory Pending: ${metrics.regulatoryPending}</span>
-  <span>Avg Recovery: ${metrics.avgRecoveryPercent}%</span>
-</div>
-<table>
-<thead><tr><th>#</th><th>Recall No</th><th>Date</th><th>Product</th><th>Class</th><th>Status</th><th>Recovery</th></tr></thead>
-<tbody>${rows}</tbody>
-</table>
-<button onclick="window.print()">Print / Save PDF</button>
-</body></html>`;
-
-  const win = window.open('', '_blank');
-  if (!win) return;
-  win.document.write(html);
-  win.document.close();
+  void records;
+  void metrics;
+  void generatedBy;
+  throw new Error('Recall dashboard PDF export backend is not configured.');
 }

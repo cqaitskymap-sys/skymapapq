@@ -35,11 +35,17 @@ export function useWarehouse(filters?: WarehouseFilters) {
     setLoading(true);
     setError(null);
     try {
-      await syncInventoryExpiry();
-      const [rec, smp, rel, dsp, inv, fg] = await Promise.all([
+      try { await syncInventoryExpiry(); } catch { /* non-fatal */ }
+      const settled = await Promise.allSettled([
         listReceipts(stableFilters), listSamplings(), listReleases(),
         listDispensing(), listInventory(stableFilters), listFinishedGoods(),
       ]);
+      const rec = settled[0].status === 'fulfilled' ? settled[0].value : [];
+      const smp = settled[1].status === 'fulfilled' ? settled[1].value : [];
+      const rel = settled[2].status === 'fulfilled' ? settled[2].value : [];
+      const dsp = settled[3].status === 'fulfilled' ? settled[3].value : [];
+      const inv = settled[4].status === 'fulfilled' ? settled[4].value : [];
+      const fg = settled[5].status === 'fulfilled' ? settled[5].value : [];
       setReceipts(rec);
       setSamplings(smp);
       setReleases(rel);
@@ -47,6 +53,11 @@ export function useWarehouse(filters?: WarehouseFilters) {
       setInventory(inv);
       setFinishedGoods(fg);
       setMetrics(computeDashboardMetrics(inv, rec, dsp, fg));
+      const firstErr = settled.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
+      if (firstErr) {
+        const reason = firstErr.reason;
+        setError(reason instanceof Error ? reason.message : 'Failed to load warehouse data');
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load warehouse data');
     } finally {

@@ -33,23 +33,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchProfile = async (userId: string) => {
+  const fetchProfile = async (userId: string): Promise<Profile | null> => {
     try {
       const { getUserProfile } = await import('@/lib/auth');
-      const data = await getUserProfile(userId);
-      setProfile(data ?? null);
+      return (await getUserProfile(userId)) ?? null;
     } catch (error) {
       console.error('Error fetching profile:', error);
-      setProfile(null);
+      return null;
     }
   };
 
   const refreshProfile = async () => {
-    if (user) await fetchProfile(user.uid);
+    if (!user) return;
+    const data = await fetchProfile(user.uid);
+    setProfile(data);
   };
 
   useEffect(() => {
     let cancelled = false;
+    let profileRequestId = 0;
     let unsubscribe: (() => void) | undefined;
 
     const safetyTimer = window.setTimeout(() => {
@@ -69,15 +71,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { subscribeToAuthState } = await import('@/lib/auth');
         unsubscribe = subscribeToAuthState((currentUser) => {
           void (async () => {
+            const requestId = ++profileRequestId;
             setUser(currentUser ?? null);
             if (currentUser) {
               void syncAuthSessionCookie(currentUser).catch(() => clearAuthSessionCookies());
-              await fetchProfile(currentUser.uid);
+              const data = await fetchProfile(currentUser.uid);
+              if (cancelled || requestId !== profileRequestId) return;
+              setProfile(data);
             } else {
               clearAuthSessionCookies();
-              setProfile(null);
+              if (!cancelled && requestId === profileRequestId) {
+                setProfile(null);
+              }
             }
-            if (!cancelled) setLoading(false);
+            if (!cancelled && requestId === profileRequestId) {
+              setLoading(false);
+            }
           })();
         });
       } catch (error) {
@@ -107,7 +116,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const signedInUser = await firebaseSignIn(email, password);
       await syncAuthSessionCookie(signedInUser);
-      await fetchProfile(signedInUser.uid);
+      const data = await fetchProfile(signedInUser.uid);
+      setUser(signedInUser);
+      setProfile(data);
       return { error: null };
     } catch (error) {
       if (error instanceof FirebaseNotConfiguredError || (error as Error)?.name === 'FirebaseNotConfiguredError') {

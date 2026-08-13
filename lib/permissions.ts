@@ -196,7 +196,9 @@ export function getDefaultPermissionMatrix(roleId: AdminRoleId): PermissionMatri
 
 export function canAccessAdminPanel(role?: string | null): boolean {
   const r = normalizeRole(role);
-  return ['super_admin', 'admin', 'head_qa', 'auditor'].includes(r);
+  if (['super_admin', 'admin', 'head_qa', 'auditor'].includes(r)) return true;
+  // Master-data roles that have at least one scoped admin route (products, equipment, etc.)
+  return canViewProducts(role) || canViewEquipmentMaster(role) || canViewBatches(role) || canViewParameters(role);
 }
 
 export function canManageRoles(role?: string | null): boolean {
@@ -315,6 +317,7 @@ export function canAccessAdminRoute(role: string | null | undefined, pathname: s
     ['/admin/designations', canViewDesignations],
     ['/admin/company-site', canViewCompanySites],
     ['/admin/products', canViewProducts],
+    ['/admin/equipment', canViewEquipmentMaster],
     ['/admin/batches', canViewBatches],
     ['/admin/parameters', canViewParameters],
     ['/admin/workflows', canViewWorkflows],
@@ -399,9 +402,27 @@ export function canEditProducts(role?: string | null): boolean {
   return ['super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive'].includes(r);
 }
 
-export function canUploadProductAttachments(role?: string | null): boolean {
+/** View equipment master register (Admin Master Data). */
+export function canViewEquipmentMaster(role?: string | null): boolean {
   const r = normalizeRole(role);
-  return canEditProducts(role) || ['qc_manager', 'qc_executive'].includes(r);
+  return [
+    'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive',
+    'engineering_manager', 'engineering_executive', 'maintenance',
+    'production_manager', 'qc_manager', 'auditor',
+  ].includes(r);
+}
+
+export function canEditEquipmentMaster(role?: string | null): boolean {
+  const r = normalizeRole(role);
+  return [
+    'super_admin', 'admin', 'head_qa', 'qa_manager',
+    'engineering_manager', 'engineering_executive', 'maintenance',
+  ].includes(r);
+}
+
+/** Align with Cloud Function product editors + storage write rules (QC cannot register attachments). */
+export function canUploadProductAttachments(role?: string | null): boolean {
+  return canEditProducts(role);
 }
 
 export function canImportProducts(role?: string | null): boolean {

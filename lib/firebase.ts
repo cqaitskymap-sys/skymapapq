@@ -46,7 +46,13 @@ let authInstance: Auth | null = null;
 let firestoreInstance: Firestore | null = null;
 let storageInstance: FirebaseStorage | null = null;
 let functionsInstance: Functions | null = null;
-let emulatorsConnected = false;
+const emulatorConnected = {
+  auth: false,
+  firestore: false,
+  storage: false,
+  functions: false,
+};
+let emulatorStatusLogged = false;
 
 /** Must match the region used in Firebase Functions deployment (default: us-central1). */
 const FIREBASE_FUNCTIONS_REGION = normalizeFirebaseEnvValue(
@@ -91,20 +97,51 @@ function createFirestoreInstance(): Firestore {
 }
 
 function maybeConnectEmulators() {
-  if (emulatorsConnected || typeof window === 'undefined') return;
+  if (typeof window === 'undefined') return;
   if (!isFirebaseEmulatorEnabled()) return;
-  if (!authInstance || !firestoreInstance || !storageInstance || !functionsInstance) return;
+
+  // Connect each service independently as it initializes (waiting for all four blocked emulator use).
   try {
-    connectAuthEmulator(authInstance, 'http://127.0.0.1:9099', { disableWarnings: true });
-    connectFirestoreEmulator(firestoreInstance, '127.0.0.1', 8080);
-    connectStorageEmulator(storageInstance, '127.0.0.1', 9199);
-    connectFunctionsEmulator(functionsInstance, '127.0.0.1', 5001);
-    emulatorsConnected = true;
-    if (process.env.NODE_ENV === 'development') {
-      console.info('[Firebase] Using local emulators (auth:9099, firestore:8080, storage:9199, functions:5001)');
+    if (authInstance && !emulatorConnected.auth) {
+      connectAuthEmulator(authInstance, 'http://127.0.0.1:9099', { disableWarnings: true });
+      emulatorConnected.auth = true;
     }
   } catch {
-    // Already connected
+    emulatorConnected.auth = true;
+  }
+  try {
+    if (firestoreInstance && !emulatorConnected.firestore) {
+      connectFirestoreEmulator(firestoreInstance, '127.0.0.1', 8080);
+      emulatorConnected.firestore = true;
+    }
+  } catch {
+    emulatorConnected.firestore = true;
+  }
+  try {
+    if (storageInstance && !emulatorConnected.storage) {
+      connectStorageEmulator(storageInstance, '127.0.0.1', 9199);
+      emulatorConnected.storage = true;
+    }
+  } catch {
+    emulatorConnected.storage = true;
+  }
+  try {
+    if (functionsInstance && !emulatorConnected.functions) {
+      connectFunctionsEmulator(functionsInstance, '127.0.0.1', 5001);
+      emulatorConnected.functions = true;
+    }
+  } catch {
+    emulatorConnected.functions = true;
+  }
+
+  if (
+    process.env.NODE_ENV === 'development'
+    && !emulatorStatusLogged
+    && emulatorConnected.auth
+    && emulatorConnected.firestore
+  ) {
+    emulatorStatusLogged = true;
+    console.info('[Firebase] Using local emulators (auth:9099, firestore:8080; storage/functions on first use)');
   }
 }
 

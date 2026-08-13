@@ -111,20 +111,20 @@ export async function fetchComplaintDashboardData(
     ? filterComplaintsByRole(allRecords, actor.role, actor.id)
     : allRecords;
   const filtered = applyComplaintDashboardFilters(scoped, filters);
-  const metrics = computeComplaintDashboardMetrics(scoped);
+  const metrics = computeComplaintDashboardMetrics(filtered);
 
   let activity: ComplaintActivityEntry[] = [];
   try {
     const auditActivity = await fetchComplaintAuditActivity();
-    activity = auditActivity.length ? auditActivity : buildComplaintActivityTimeline(scoped);
+    activity = auditActivity.length ? auditActivity : buildComplaintActivityTimeline(filtered);
   } catch {
-    activity = buildComplaintActivityTimeline(scoped);
+    activity = buildComplaintActivityTimeline(filtered);
   }
 
   return {
     records: filtered,
     metrics,
-    charts: computeComplaintChartData(scoped),
+    charts: computeComplaintChartData(filtered),
     activity,
   };
 }
@@ -142,7 +142,7 @@ export async function logComplaintDashboardFilterApplied(actor: ComplaintDashboa
 }
 
 export async function logComplaintDashboardPdfExport(actor: ComplaintDashboardActor, count: number) {
-  await audit(actor, 'PDF export clicked', `Dashboard PDF placeholder (${count} records)`);
+  await audit(actor, 'PDF export blocked', `Backend PDF export is not configured (${count} records)`);
 }
 
 export async function logComplaintDashboardExcelExport(actor: ComplaintDashboardActor, count: number) {
@@ -159,44 +159,9 @@ export function exportComplaintDashboardCsvDownload(records: ComplaintRecord[], 
 }
 
 export function openComplaintDashboardPdfPlaceholder(records: ComplaintRecord[], generatedBy: string): void {
-  const rows = records.slice(0, 50).map((r, i) => `
-    <tr>
-      <td>${i + 1}</td>
-      <td>${r.complaint_number || '—'}</td>
-      <td>${r.complaint_date || '—'}</td>
-      <td>${r.product_name || '—'}</td>
-      <td>${r.batch_number || '—'}</td>
-      <td>${r.complaint_category || '—'}</td>
-      <td>${r.complaint_criticality || '—'}</td>
-      <td>${(r.status || '').replace(/_/g, ' ')}</td>
-      <td>${r.due_date || '—'}</td>
-    </tr>
-  `).join('');
-
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Complaint Dashboard</title>
-<style>
-body{font-family:Arial,sans-serif;margin:24px;font-size:11px;color:#1e293b}
-.header{border:2px solid #1e40af;padding:16px;text-align:center;margin-bottom:16px}
-h1{color:#1e40af;margin:0} table{width:100%;border-collapse:collapse}
-th,td{border:1px solid #cbd5e1;padding:6px;text-align:left} th{background:#f1f5f9}
-</style></head><body>
-<div class="header">
-  <strong>SKYMAP PHARMACEUTICALS PVT. LTD.</strong>
-  <h1>Complaint Dashboard Report</h1>
-  <p>Generated: ${new Date().toLocaleString()} | By: ${generatedBy}</p>
-  <p>Total records: ${records.length} | Page 1 of 1</p>
-</div>
-<table>
-<thead><tr><th>#</th><th>Complaint No</th><th>Date</th><th>Product</th><th>Batch</th><th>Category</th><th>Criticality</th><th>Status</th><th>Due Date</th></tr></thead>
-<tbody>${rows}</tbody>
-</table>
-<button onclick="window.print()">Print / Save PDF</button>
-</body></html>`;
-
-  const win = window.open('', '_blank');
-  if (!win) return;
-  win.document.write(html);
-  win.document.close();
+  void records;
+  void generatedBy;
+  throw new Error('Complaint dashboard PDF export backend is not configured.');
 }
 
 export { computeComplaintChartData, computeComplaintDashboardMetrics };

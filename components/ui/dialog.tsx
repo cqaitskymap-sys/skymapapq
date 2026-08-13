@@ -6,7 +6,46 @@ import { X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
-const Dialog = DialogPrimitive.Root;
+function blurActiveElement() {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement) active.blur();
+}
+
+/** Portaled Select/Menu/Popover content lives outside the dialog DOM; ignore those events. */
+function isPortaledOverlayTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest('[data-radix-select-content]') ||
+      target.closest('[data-radix-popper-content-wrapper]') ||
+      target.closest('[data-radix-menu-content]') ||
+      target.closest('[role="listbox"]')
+  );
+}
+
+const Dialog = ({
+  open,
+  onOpenChange,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root>) => {
+  const wasOpen = React.useRef(open);
+
+  // Controlled closes (setOpen(false)) skip onOpenChange — blur before paint when possible.
+  React.useLayoutEffect(() => {
+    if (wasOpen.current && open === false) blurActiveElement();
+    wasOpen.current = open;
+  }, [open]);
+
+  return (
+    <DialogPrimitive.Root
+      open={open}
+      {...props}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) blurActiveElement();
+        onOpenChange?.(nextOpen);
+      }}
+    />
+  );
+};
 
 const DialogTrigger = DialogPrimitive.Trigger;
 
@@ -32,7 +71,7 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, onCloseAutoFocus, onEscapeKeyDown, onPointerDownOutside, onFocusOutside, onInteractOutside, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
@@ -43,6 +82,39 @@ const DialogContent = React.forwardRef<
       )}
       {...props}
       aria-describedby={props['aria-describedby']}
+      onEscapeKeyDown={(event) => {
+        onEscapeKeyDown?.(event);
+        if (!event.defaultPrevented) blurActiveElement();
+      }}
+      onPointerDownOutside={(event) => {
+        if (isPortaledOverlayTarget(event.target)) {
+          event.preventDefault();
+          return;
+        }
+        onPointerDownOutside?.(event);
+        if (!event.defaultPrevented) blurActiveElement();
+      }}
+      onFocusOutside={(event) => {
+        if (isPortaledOverlayTarget(event.target)) {
+          event.preventDefault();
+          return;
+        }
+        onFocusOutside?.(event);
+      }}
+      onInteractOutside={(event) => {
+        if (isPortaledOverlayTarget(event.target)) {
+          event.preventDefault();
+          return;
+        }
+        onInteractOutside?.(event);
+      }}
+      onCloseAutoFocus={(event) => {
+        // Prevent focus from remaining on Select/Combobox triggers inside a closing dialog
+        // (avoids aria-hidden + focused descendant warnings).
+        event.preventDefault();
+        blurActiveElement();
+        onCloseAutoFocus?.(event);
+      }}
     >
       {children}
       <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">

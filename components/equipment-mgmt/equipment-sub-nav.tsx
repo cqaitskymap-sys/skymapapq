@@ -55,6 +55,7 @@ export function EquipmentStatusBadge({ status }: { status: string }) {
     Calibrated: 'bg-green-100 text-green-800', Due: 'bg-amber-100 text-amber-800',
     Overdue: 'bg-red-100 text-red-800', Failed: 'bg-red-100 text-red-800', 'Not Required': 'bg-gray-100 text-gray-600',
     Completed: 'bg-green-100 text-green-800', Open: 'bg-red-100 text-red-800', Closed: 'bg-green-100 text-green-800',
+    Qualified: 'bg-green-100 text-green-800', 'Not Qualified': 'bg-red-100 text-red-800',
   };
   return <span className={cn('inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium', colors[status] || colors.Active)}>{status}</span>;
 }

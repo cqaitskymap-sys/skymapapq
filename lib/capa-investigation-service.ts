@@ -4,7 +4,6 @@ import {
 import { createAuditLog } from '@/lib/audit-trail';
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import {
-  buildInvestigationIdFallback,
   canApproveCriticalCapaInvestigation,
   CAPA_INVESTIGATION_MODULE,
   computeInvestigationAutoRules,
@@ -76,7 +75,7 @@ async function notify(title: string, message: string, capaId: string, userId: st
 
 export async function generateInvestigationId(): Promise<string> {
   const year = new Date().getFullYear();
-  if (!isFirebaseConfigured()) return buildInvestigationIdFallback(year, 1);
+  if (!isFirebaseConfigured()) throw new Error('Firebase is not configured');
   try {
     const prefix = `INV-CAPA/${year}/`;
     const snap = await getDocs(query(
@@ -89,17 +88,17 @@ export async function generateInvestigationId(): Promise<string> {
     if (!snap.empty) {
       const last = String(snap.docs[0].data().investigation_id || '');
       const seq = parseInt(last.split('/').pop() || '0', 10) + 1;
-      return buildInvestigationIdFallback(year, seq);
+      return `INV-CAPA/${year}/${String(seq).padStart(4, '0')}`;
     }
   } catch {
     try {
       const snap = await getDocs(collection(getFirebaseFirestore(), CAPA_COLLECTIONS.investigations));
-      return buildInvestigationIdFallback(year, snap.size + 1);
+      return `INV-CAPA/${year}/${String(snap.size + 1).padStart(4, '0')}`;
     } catch {
-      return buildInvestigationIdFallback(year, 1);
+      throw new Error('Unable to generate investigation ID from backend.');
     }
   }
-  return buildInvestigationIdFallback(year, 1);
+  throw new Error('Unable to generate investigation ID from backend.');
 }
 
 export async function getCapaInvestigationByCapaId(capaId: string): Promise<CapaInvestigation | null> {
@@ -249,7 +248,7 @@ function buildInvestigationPayload(
   const uniqueRecs = Array.from(new Set(autoRecs));
 
   return {
-    investigation_id: existing?.investigation_id || investigationId || buildInvestigationIdFallback(new Date().getFullYear(), 1),
+    investigation_id: existing?.investigation_id || investigationId || '',
     capa_id: capa.id,
     capa_number: capa.capa_number,
     source_type: capa.capa_source,
@@ -603,11 +602,8 @@ export async function uploadCapaInvestigationAttachmentPlaceholder(
   fileName: string,
   actor: CapaInvestigationActor,
 ): Promise<void> {
-  await addCapaInvestigationEvidence(
-    capaId,
-    { name: fileName, description: 'Attachment placeholder — upload integration pending', file_url: '' },
-    actor,
-  );
+  await audit(actor, 'ATTACHMENT_UPLOAD_BLOCKED', capaId, fileName);
+  throw new Error('CAPA investigation attachment upload backend is not implemented. Configure real file upload first.');
 }
 
 export async function assertInvestigationApprovedForCapaWorkflow(capaId: string): Promise<void> {

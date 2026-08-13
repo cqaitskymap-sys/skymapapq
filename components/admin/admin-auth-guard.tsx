@@ -38,7 +38,7 @@ export function AdminAuthGuard({
       return;
     }
     if (!perms.canAccessAdmin) {
-      router.replace('/dashboard');
+      router.replace('/launcher');
       return;
     }
     if (!canAccessRoute) {

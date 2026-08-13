@@ -35,8 +35,17 @@ function str(v: unknown, fallback = ''): string {
 }
 
 function cfErrorMessage(e: unknown, fallback: string): string {
+  const localhost = typeof window !== 'undefined'
+    && ['localhost', '127.0.0.1'].includes(window.location.hostname);
   if (e && typeof e === 'object' && 'message' in e) {
     const msg = String((e as { message?: string }).message || '');
+    const code = String((e as { code?: string }).code || '');
+    if (
+      localhost
+      && (code === 'functions/internal' || /cors|preflight|access-control-allow-origin/i.test(msg))
+    ) {
+      return 'Cloud Function call failed from localhost. Verify NEXT_PUBLIC_FIREBASE_FUNCTIONS_REGION matches the deployed region and that createAdminCpvProduct is deployed in project apq-skymap, then restart dev server.';
+    }
     if (msg) return msg.replace(/^Firebase:\s*/i, '').replace(/\s*\(.*\)$/, '').trim() || fallback;
   }
   return fallback;

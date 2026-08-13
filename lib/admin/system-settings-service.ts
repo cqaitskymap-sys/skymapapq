@@ -193,13 +193,6 @@ export function normalizeSystemSettings(raw: SystemSettings): SystemSettings {
   };
 }
 
-function getLocalSystemSettings(id = 'local'): SystemSettings {
-  return normalizeSystemSettings({
-    id,
-    ...getDefaultSystemSettings(),
-  } as SystemSettings);
-}
-
 export async function fetchSystemSettings(): Promise<SystemSettings | null> {
   if (!isFirebaseConfigured()) return null;
 
@@ -212,11 +205,11 @@ export async function fetchSystemSettings(): Promise<SystemSettings | null> {
       getDoc(ref),
       new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 15000)),
     ]);
-    if (!snap || snap === null) return getLocalSystemSettings('default');
-    if (!snap.exists()) return getLocalSystemSettings('default');
+    if (!snap || snap === null) return null;
+    if (!snap.exists()) return null;
     return normalizeSystemSettings({ id: snap.id, ...snap.data() } as SystemSettings);
   } catch {
-    return getLocalSystemSettings('local');
+    return null;
   }
 }
 
@@ -233,14 +226,14 @@ export function subscribeSystemSettings(
     ref,
     (snap) => {
       if (!snap.exists()) {
-        onData(getLocalSystemSettings('default'));
+        onData(null);
         return;
       }
       onData(normalizeSystemSettings({ id: snap.id, ...snap.data() } as SystemSettings));
     },
     (err) => {
       onError?.(err.message);
-      onData(getLocalSystemSettings('local'));
+      onData(null);
     },
   );
 }

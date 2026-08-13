@@ -61,7 +61,7 @@ export function filterDeviationsByRole(records: DeviationRecord[], role?: string
   const dept = deptByRole[r];
   if (!dept) return records;
   return records.filter((rec) =>
-    rec.department === dept || rec.department.toLowerCase().includes(dept.toLowerCase()),
+    rec.department === dept || (rec.department || '').toLowerCase().includes(dept.toLowerCase()),
   );
 }
 
@@ -102,13 +102,13 @@ export function applyDashboardFilters(
   if (filters?.criticality) results = results.filter((r) => r.criticality === filters.criticality);
   if (filters?.product_name) {
     const q = filters.product_name.toLowerCase();
-    results = results.filter((r) => r.product_name.toLowerCase().includes(q));
+    results = results.filter((r) => (r.product_name || '').toLowerCase().includes(q));
   }
   if (filters?.batch_number) {
     results = results.filter((r) => (r.batch_number || '').includes(filters.batch_number!));
   }
   if (filters?.deviation_number) {
-    results = results.filter((r) => r.deviation_number.includes(filters.deviation_number!));
+    results = results.filter((r) => (r.deviation_number || '').includes(filters.deviation_number!));
   }
   if (filters?.capa_required !== undefined) {
     results = results.filter((r) => r.capa_required === filters.capa_required);
@@ -125,9 +125,9 @@ export function applyDashboardFilters(
   if (filters?.search) {
     const q = filters.search.toLowerCase();
     results = results.filter((r) =>
-      r.deviation_number.toLowerCase().includes(q) ||
-      r.title.toLowerCase().includes(q) ||
-      r.product_name.toLowerCase().includes(q) ||
+      (r.deviation_number || '').toLowerCase().includes(q) ||
+      (r.title || '').toLowerCase().includes(q) ||
+      (r.product_name || '').toLowerCase().includes(q) ||
       (r.batch_number || '').toLowerCase().includes(q),
     );
   }
@@ -211,7 +211,7 @@ export async function fetchDeviationDashboardData(
     const activity = buildRecentActivity(filtered, await loadAuditActivity());
     return {
       records: filtered,
-      metrics: computeExtendedDashboardMetrics(scoped),
+      metrics: computeExtendedDashboardMetrics(filtered),
       activity,
     };
   } catch (e) {

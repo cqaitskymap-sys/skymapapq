@@ -127,14 +127,14 @@ export function applyCapaDashboardFilters(records: CapaRecord[], filters?: CapaF
   }
   if (f.date_from) results = results.filter((r) => r.capa_date >= f.date_from!);
   if (f.date_to) results = results.filter((r) => r.capa_date <= f.date_to!);
-  if (f.capa_number) results = results.filter((r) => r.capa_number.toLowerCase().includes(f.capa_number!.toLowerCase()));
+  if (f.capa_number) results = results.filter((r) => (r.capa_number || '').toLowerCase().includes(f.capa_number!.toLowerCase()));
   if (f.search) {
     const q = f.search.toLowerCase();
     results = results.filter((r) =>
-      r.capa_number.toLowerCase().includes(q)
-      || r.capa_title.toLowerCase().includes(q)
-      || r.product_name.toLowerCase().includes(q)
-      || r.batch_number.toLowerCase().includes(q)
+      (r.capa_number || '').toLowerCase().includes(q)
+      || (r.capa_title || '').toLowerCase().includes(q)
+      || (r.product_name || '').toLowerCase().includes(q)
+      || (r.batch_number || '').toLowerCase().includes(q)
       || (r.action_owner_name || '').toLowerCase().includes(q),
     );
   }
@@ -285,8 +285,8 @@ export function buildCapaActivityTimeline(records: CapaRecord[]): CapaActivityEn
     .slice(0, 15)
     .map((r) => ({
       date: r.updated_at || r.created_at,
-      title: `${r.capa_number} — ${r.capa_status.replace(/_/g, ' ')}`,
-      description: r.capa_title.slice(0, 100),
+      title: `${r.capa_number} — ${(r.capa_status || '').replace(/_/g, ' ')}`,
+      description: (r.capa_title || '').slice(0, 100),
       user: r.updated_by_name || r.created_by_name || 'System',
       capa_id: r.id,
       capa_number: r.capa_number,
@@ -314,7 +314,10 @@ export function getEffectivenessPendingCapas(records: CapaRecord[]): CapaRecord[
 
 export function canViewCapaDashboard(role?: string | null): boolean {
   const r = normalizeRole(role);
-  return Boolean(r) && ![''].includes(r);
+  return [
+    'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa', 'qa_executive',
+    'auditor', 'viewer', 'production_manager', 'production',
+  ].includes(r);
 }
 
 export function canExportCapaDashboard(role?: string | null): boolean {

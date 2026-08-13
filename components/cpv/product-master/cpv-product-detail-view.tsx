@@ -313,12 +313,10 @@ export function CpvProductDetailView({ id }: { id: string }) {
                 ['Generic Name', product.genericName],
                 ['Brand Name', product.brandName],
                 ['Category', product.productCategory],
-                ['Family', product.productFamily],
                 ['Strength', product.strength],
                 ['Dosage Form', product.dosageForm],
                 ['Route', product.routeOfAdministration],
                 ['Pack Size', product.packSize],
-                ['Pack Type', product.packType],
                 ['Market', product.market],
                 ['Manufacturing Site', product.manufacturingSite],
                 ['Business Unit', product.businessUnit],
@@ -362,7 +360,7 @@ export function CpvProductDetailView({ id }: { id: string }) {
                 ['Batch Size', product.standardBatchSize],
                 ['Mfg License', product.manufacturingLicenseNumber],
                 ['MFR', product.mfrNumber],
-                ['BMR / MBR', product.bmrNumber],
+                ['BMR', product.bmrNumber],
                 ['BPR', product.bprNumber],
               ].map(([label, val]) => (
                 <div key={label}>

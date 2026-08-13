@@ -9,7 +9,6 @@ const PATH_MODULE_MAP: Array<{ prefixes: string[]; navGroupLabel: string }> = [
   { prefixes: ['/dashboard/audit-trail'], navGroupLabel: 'Regulatory & Compliance' },
   { prefixes: ['/dashboard/master', '/admin/products'], navGroupLabel: 'Master Data' },
   { prefixes: ['/dashboard/reports'], navGroupLabel: 'Reports' },
-  { prefixes: ['/dashboard/ai-analytics'], navGroupLabel: 'AI Analytics' },
   { prefixes: ['/dashboard/notifications', '/notifications'], navGroupLabel: 'Notifications' },
   { prefixes: ['/admin', '/dashboard/admin'], navGroupLabel: 'Admin' },
 ];

@@ -100,11 +100,11 @@ export function applyOosDashboardFilters(
   if (filters?.department) results = results.filter((r) => r.department === filters.department);
   if (filters?.product_name) {
     const q = filters.product_name.toLowerCase();
-    results = results.filter((r) => r.product_name.toLowerCase().includes(q));
+    results = results.filter((r) => (r.product_name || '').toLowerCase().includes(q));
   }
-  if (filters?.batch_number) results = results.filter((r) => r.batch_number.includes(filters.batch_number!));
-  if (filters?.oos_number) results = results.filter((r) => r.oos_number.includes(filters.oos_number!));
-  if (filters?.test_name) results = results.filter((r) => r.test_name.toLowerCase().includes(filters.test_name!.toLowerCase()));
+  if (filters?.batch_number) results = results.filter((r) => (r.batch_number || '').includes(filters.batch_number!));
+  if (filters?.oos_number) results = results.filter((r) => (r.oos_number || '').includes(filters.oos_number!));
+  if (filters?.test_name) results = results.filter((r) => (r.test_name || '').toLowerCase().includes(filters.test_name!.toLowerCase()));
   if (filters?.assigned_to) {
     const q = filters.assigned_to.toLowerCase();
     results = results.filter((r) => (r.assigned_to_name || '').toLowerCase().includes(q));
@@ -120,10 +120,10 @@ export function applyOosDashboardFilters(
   if (filters?.search) {
     const q = filters.search.toLowerCase();
     results = results.filter((r) =>
-      r.oos_number.toLowerCase().includes(q)
-      || r.product_name.toLowerCase().includes(q)
-      || r.batch_number.toLowerCase().includes(q)
-      || r.test_name.toLowerCase().includes(q)
+      (r.oos_number || '').toLowerCase().includes(q)
+      || (r.product_name || '').toLowerCase().includes(q)
+      || (r.batch_number || '').toLowerCase().includes(q)
+      || (r.test_name || '').toLowerCase().includes(q)
       || (r.assigned_to_name || '').toLowerCase().includes(q),
     );
   }
@@ -204,7 +204,7 @@ export function computeExtendedOosDashboardMetrics(
     .slice(0, 12)
     .map((r) => ({
       date: r.updated_at || r.created_at,
-      title: r.status.replace(/_/g, ' '),
+      title: (r.status || '').replace(/_/g, ' '),
       description: `${r.test_name} — ${r.product_name} / ${r.batch_number}`,
       user: r.updated_by_name || r.created_by_name,
       oosId: r.id,

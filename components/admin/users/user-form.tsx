@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,38 +21,71 @@ import { emptyPermissionMatrix, type PermissionMatrixData } from '@/lib/permissi
 import { getUserPermissionRecord } from '@/services/permissionService';
 import { useAdminPermissions } from '@/hooks/use-admin-permissions';
 
-const defaultValues: Partial<AdminUser> = {
-  employeeId: '',
-  employeeCode: '',
-  firstName: '',
-  middleName: '',
-  lastName: '',
-  fullName: '',
-  email: '',
-  mobileNumber: '',
-  alternateMobile: '',
-  username: '',
-  profilePhoto: '',
-  gender: '',
-  dateOfBirth: '',
-  department: '',
-  designation: '',
-  role: 'qa_executive',
-  reportingManager: '',
-  managerId: '',
-  businessUnit: '',
-  siteId: '',
-  siteName: '',
-  location: '',
-  shift: '',
-  employmentType: 'Permanent',
-  remarks: '',
-  userStatus: 'Active',
-  accountLocked: false,
-  passwordResetRequired: false,
-  twoFactorEnabled: false,
-  status: 'Active',
-};
+const GENDER_VALUES = ['', 'Female', 'Male', 'Non-binary', 'Prefer not to say'] as const;
+const EMPLOYMENT_VALUES = ['Permanent', 'Contract', 'Temporary', 'Consultant', 'Vendor', 'Intern'] as const;
+
+function asText(value: unknown): string {
+  return value == null ? '' : String(value).trim();
+}
+
+function asDateInput(value: unknown): string {
+  if (value == null || value === '') return '';
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw.slice(0, 10);
+  const usDate = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (usDate) {
+    const [, month, day, year] = usDate;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  const parsed = Date.parse(raw);
+  return Number.isNaN(parsed) ? '' : new Date(parsed).toISOString().slice(0, 10);
+}
+
+function toUserFormValues(user?: AdminUser | null): Partial<AdminUser> {
+  const gender = asText(user?.gender);
+  const employmentType = asText(user?.employmentType) || 'Permanent';
+  return {
+    id: user?.id,
+    authUid: user?.authUid,
+    userId: user?.userId,
+    employeeId: asText(user?.employeeId),
+    employeeCode: asText(user?.employeeCode),
+    firstName: asText(user?.firstName),
+    middleName: asText(user?.middleName),
+    lastName: asText(user?.lastName),
+    fullName: asText(user?.fullName),
+    email: asText(user?.email),
+    mobileNumber: asText(user?.mobileNumber),
+    alternateMobile: asText(user?.alternateMobile),
+    username: asText(user?.username),
+    profilePhoto: asText(user?.profilePhoto),
+    gender: (GENDER_VALUES as readonly string[]).includes(gender)
+      ? gender as AdminUser['gender']
+      : '',
+    dateOfBirth: asDateInput(user?.dateOfBirth),
+    department: asText(user?.department),
+    designation: asText(user?.designation),
+    role: asText(user?.role) || 'qa_executive',
+    reportingManager: asText(user?.reportingManager),
+    managerId: asText(user?.managerId),
+    businessUnit: asText(user?.businessUnit),
+    siteId: asText(user?.siteId),
+    siteName: asText(user?.siteName),
+    location: asText(user?.location),
+    shift: asText(user?.shift),
+    employmentType: (EMPLOYMENT_VALUES as readonly string[]).includes(employmentType)
+      ? employmentType as AdminUser['employmentType']
+      : 'Permanent',
+    joiningDate: asDateInput(user?.joiningDate),
+    remarks: asText(user?.remarks),
+    userStatus: user?.userStatus || 'Active',
+    accountLocked: Boolean(user?.accountLocked),
+    passwordResetRequired: Boolean(user?.passwordResetRequired),
+    twoFactorEnabled: Boolean(user?.twoFactorEnabled),
+    status: user?.userStatus === 'Active' || !user ? 'Active' : 'Inactive',
+  };
+}
 
 export interface UserFormSubmitOptions {
   tempPassword?: string;
@@ -81,6 +115,8 @@ export function UserForm({
   const [tempPassword, setTempPassword] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [changeReason, setChangeReason] = useState('');
+  const [reasonError, setReasonError] = useState('');
+  const formValues = useMemo(() => toUserFormValues(initial), [initial]);
   const [modulePermissions, setModulePermissions] = useState<PermissionMatrixData>(emptyPermissionMatrix());
   const [presetId, setPresetId] = useState('');
   const [accessDirty, setAccessDirty] = useState(false);
@@ -96,7 +132,7 @@ export function UserForm({
 
   const form = useForm<AdminUser>({
     resolver: zodResolver(adminUserSchema),
-    defaultValues: initial || defaultValues,
+    defaultValues: formValues,
   });
 
   useEffect(() => {
@@ -104,8 +140,8 @@ export function UserForm({
   }, []);
 
   useEffect(() => {
-    if (initial) form.reset(initial);
-  }, [initial, form]);
+    form.reset(formValues);
+  }, [formValues, form]);
 
   useEffect(() => {
     const uid = initial?.authUid || initial?.id;
@@ -127,6 +163,10 @@ export function UserForm({
       (!form.watch('department') || d.department === form.watch('department')),
   );
 
+  const firstFormError = Object.values(form.formState.errors)
+    .map((error) => error?.message)
+    .find(Boolean);
+
   const handleSubmit = form.handleSubmit(async (data) => {
     if (isCreate && (
       tempPassword.length < 12
@@ -136,10 +176,23 @@ export function UserForm({
       || !/[^A-Za-z0-9]/.test(tempPassword)
     )) {
       setPasswordError('Use 12+ characters with uppercase, lowercase, number, and special character.');
+      toast.error('Temporary password does not meet the required policy.');
       return;
     }
-    if (!isCreate && changeReason.trim().length < 8) return;
+    if (!isCreate && changeReason.trim().length < 8) {
+      setReasonError('Enter at least 8 characters explaining this change.');
+      toast.error('Reason for Change is required before saving.');
+      document.getElementById('changeReason')?.focus();
+      return;
+    }
+    if (data.profilePhoto && !/^https:\/\//i.test(data.profilePhoto)
+      && data.profilePhoto !== asText(initial?.profilePhoto)) {
+      form.setError('profilePhoto', { type: 'manual', message: 'Profile picture URL must use HTTPS' });
+      toast.error('Profile picture URL must use HTTPS.');
+      return;
+    }
     setPasswordError('');
+    setReasonError('');
     await onSubmit(data, {
       tempPassword: isCreate ? tempPassword : undefined,
       modulePermissions: currentRole === 'super_admin' && (isCreate || accessDirty)
@@ -150,6 +203,10 @@ export function UserForm({
         : undefined,
       changeReason: isCreate ? undefined : changeReason.trim(),
     });
+  }, (errors) => {
+    const message = Object.values(errors).map((error) => error?.message).find(Boolean)
+      || 'Please fix the highlighted fields before saving.';
+    toast.error(String(message));
   });
 
   const detailsForm = (
@@ -302,6 +359,9 @@ export function UserForm({
                   ))}
               </SelectContent>
             </Select>
+            {form.formState.errors.managerId && (
+              <p className="text-xs text-destructive">{form.formState.errors.managerId.message}</p>
+            )}
           </div>
           <div className="space-y-2">
             <Label>Site</Label>
@@ -427,14 +487,17 @@ export function UserForm({
           <Textarea
             id="changeReason"
             value={changeReason}
-            onChange={(event) => setChangeReason(event.target.value)}
+            onChange={(event) => {
+              setChangeReason(event.target.value);
+              if (event.target.value.trim().length >= 8) setReasonError('');
+            }}
             rows={3}
             minLength={8}
             required
             placeholder="Provide an attributable reason for this governed user change"
           />
-          {changeReason.trim().length > 0 && changeReason.trim().length < 8 && (
-            <p className="text-xs text-destructive">Enter at least 8 characters.</p>
+          {(reasonError || (changeReason.trim().length > 0 && changeReason.trim().length < 8)) && (
+            <p className="text-xs text-destructive">{reasonError || 'Enter at least 8 characters.'}</p>
           )}
         </section>
       )}
@@ -443,6 +506,11 @@ export function UserForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {(firstFormError || reasonError) && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {String(firstFormError || reasonError)}
+        </div>
+      )}
       <Tabs defaultValue="details">
         <TabsList>
           <TabsTrigger value="details">User Details</TabsTrigger>
@@ -469,15 +537,22 @@ export function UserForm({
       </Tabs>
 
       {!readOnly && (
-        <div className="flex gap-3 justify-end">
-          <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-          <Button
-            type="submit"
-            className="bg-blue-600 hover:bg-blue-700"
-            disabled={submitting || (!isCreate && changeReason.trim().length < 8)}
-          >
-            {submitting ? 'Saving...' : isCreate ? 'Create User' : 'Save Changes'}
-          </Button>
+        <div className="sticky bottom-0 z-10 flex flex-col gap-2 border-t bg-background/95 py-4 backdrop-blur sm:flex-row sm:items-center sm:justify-end">
+          {!isCreate && changeReason.trim().length < 8 && (
+            <p className="text-xs text-muted-foreground sm:mr-auto">
+              Enter a Reason for Change (min 8 characters), then click Save Changes.
+            </p>
+          )}
+          <div className="flex gap-3 justify-end">
+            <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
+            <Button
+              type="submit"
+              className="bg-blue-600 hover:bg-blue-700"
+              disabled={submitting}
+            >
+              {submitting ? 'Saving...' : isCreate ? 'Create User' : 'Save Changes'}
+            </Button>
+          </div>
         </div>
       )}
     </form>

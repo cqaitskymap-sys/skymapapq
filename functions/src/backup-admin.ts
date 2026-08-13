@@ -5,14 +5,10 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type Firestore, type DocumentData } from 'firebase-admin/firestore';
-import { getStorage } from 'firebase-admin/storage';
+import { type Firestore, type DocumentData } from 'firebase-admin/firestore';
+import { getAdminFirestore, getAdminStorage } from './admin-app';
 import * as logger from 'firebase-functions/logger';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -127,8 +123,7 @@ function assertApprover(actor: DocumentData | undefined, role: string) {
 
 async function resolveActor(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const snap = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = snap.data();
   return {
@@ -395,7 +390,7 @@ async function runBackupJob(input: {
 
     await jobRef.update({ progressPct: 70 });
     const storagePath = `backups/${backupId}/${backupNumber}.enc.json`;
-    const bucket = getStorage().bucket();
+    const bucket = getAdminStorage().bucket();
     const file = bucket.file(storagePath);
     await file.save(storageBody, {
       contentType: 'application/json',
@@ -526,7 +521,7 @@ async function loadAndDecryptBackup(
   const path = String(hist.storageLocation || hist.filePath || '');
   if (!path) throw new HttpsError('failed-precondition', 'Backup has no storage location');
 
-  const [buf] = await getStorage().bucket().file(path).download();
+  const [buf] = await getAdminStorage().bucket().file(path).download();
   const raw = buf.toString('utf8');
   let plain: string;
   try {
@@ -981,7 +976,7 @@ export const purgeExpiredAdminBackups = onCall(async (request) => {
     const path = String(d.storageLocation || '');
     if (path) {
       try {
-        await getStorage().bucket().file(path).delete({ ignoreNotFound: true });
+        await getAdminStorage().bucket().file(path).delete({ ignoreNotFound: true });
       } catch {
         /* ignore storage delete errors */
       }
@@ -1107,8 +1102,7 @@ export const scheduledAdminBackup = onSchedule(
     memory: '1GiB',
   },
   async () => {
-    initializeAdmin();
-    const firestore = getFirestore();
+        const firestore = getAdminFirestore();
     const settingsSnap = await firestore.collection('backup_settings').limit(1).get();
     if (settingsSnap.empty) {
       logger.info('No backup_settings — skipping scheduled backup');

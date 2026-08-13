@@ -33,6 +33,10 @@ import {
   recalculateAllEquipmentCompliance, saveEquipmentSectionToPqr,
   softDeleteEquipmentReviewRecord, updateEquipmentReviewRecord,
 } from '@/lib/pqr-equipment-review-service';
+import { fetchProducts } from '@/lib/admin/product-service';
+import { fetchBatches } from '@/lib/admin/batch-service';
+import { listSelectableEquipment } from '@/lib/equipment-mgmt-service';
+import type { EquipmentRecord } from '@/lib/equipment-mgmt-types';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ResponsiveDataTable } from '@/components/cpv/product-master/responsive-data-table';
 import { KpiCard } from '@/components/cpv/cpv-ui';
@@ -43,7 +47,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { EquipmentReviewAccessGuard } from './equipment-review-access-guard';
 import { EquipmentReviewFormDialog } from './equipment-review-form-dialog';
 import {
-  CalibrationBadge, EquipmentComplianceBadge, EquipmentRiskBadge, PmBadge, QualificationBadge,
+  CalibrationBadge, EquipmentComplianceBadge, PmBadge, QualificationBadge,
 } from './equipment-review-badges';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -105,6 +109,9 @@ export function EquipmentReviewPage() {
   const [qualityMetrics, setQualityMetrics] = useState({
     equipmentDeviations: 0, equipmentOos: 0, equipmentCapa: 0, equipmentChangeControls: 0,
   });
+  const [productNames, setProductNames] = useState<string[]>([]);
+  const [equipmentMaster, setEquipmentMaster] = useState<EquipmentRecord[]>([]);
+  const [batchByProduct, setBatchByProduct] = useState<Record<string, string[]>>({});
 
   const narrativeAuditTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -171,6 +178,57 @@ export function EquipmentReviewPage() {
   useEffect(() => { void loadPqrs(); void logEquipmentReviewView(actor); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    const loadProductMaster = async () => {
+      try {
+        const products = await fetchProducts();
+        setProductNames(
+          Array.from(new Set(
+            products
+              .map((item) => item.productName?.trim())
+              .filter((name): name is string => Boolean(name)),
+          )).sort((a, b) => a.localeCompare(b)),
+        );
+      } catch {
+        setProductNames([]);
+      }
+    };
+    void loadProductMaster();
+  }, []);
+
+  useEffect(() => {
+    const loadEquipmentMaster = async () => {
+      try {
+        const rows = await listSelectableEquipment();
+        setEquipmentMaster(rows);
+      } catch {
+        setEquipmentMaster([]);
+      }
+    };
+    void loadEquipmentMaster();
+  }, []);
+
+  useEffect(() => {
+    const loadBatches = async () => {
+      try {
+        const rows = await fetchBatches();
+        const map: Record<string, string[]> = {};
+        rows.forEach((row) => {
+          const productName = (row.productName || '').trim();
+          const batchNumber = (row.batchNumber || '').trim();
+          if (!productName || !batchNumber) return;
+          if (!map[productName]) map[productName] = [];
+          if (!map[productName].includes(batchNumber)) map[productName].push(batchNumber);
+        });
+        Object.keys(map).forEach((key) => map[key].sort((a, b) => b.localeCompare(a)));
+        setBatchByProduct(map);
+      } catch {
+        setBatchByProduct({});
+      }
+    };
+    void loadBatches();
+  }, []);
+
+  useEffect(() => {
     if (selectedPqrId) {
       void loadRecords(selectedPqrId, selectedPqr);
       syncPqrIdToUrl(selectedPqrId);
@@ -226,15 +284,12 @@ export function EquipmentReviewPage() {
 
   const tableColumns: ColumnDef<TableRow>[] = [
     { key: 'srNo', header: 'Sr. No.' },
+    { key: 'product', header: 'Product Name' },
+    { key: 'batchNumber', header: 'Batch Number', render: (r) => r.batchNumber || (r.batchesUsed?.[0] || '—') },
+    { key: 'manufacturingLine', header: 'Manufacturing Line', render: (r) => r.manufacturingLine || '—' },
     { key: 'equipmentName', header: 'Equipment Name' },
     { key: 'equipmentId', header: 'Equipment ID' },
-    { key: 'equipmentCategory', header: 'Category', render: (r) => <span className="text-xs">{r.equipmentCategory.replace(' Equipment', '')}</span> },
     { key: 'qualificationStatus', header: 'Qualification', render: (r) => <QualificationBadge status={r.qualificationStatus} /> },
-    { key: 'calibrationStatus', header: 'Calibration', render: (r) => <CalibrationBadge status={r.calibrationStatus} /> },
-    { key: 'pmStatus', header: 'PM Status', render: (r) => <PmBadge status={r.pmStatus} /> },
-    { key: 'breakdownCount', header: 'Breakdowns' },
-    { key: 'complianceStatus', header: 'Compliance', render: (r) => <EquipmentComplianceBadge status={r.complianceStatus} /> },
-    { key: 'remarks', header: 'Remarks', render: (r) => <span className="line-clamp-1 max-w-[80px]">{r.remarks || '—'}</span> },
     {
       key: 'actions', header: 'Action',
       render: (r) => (
@@ -254,7 +309,7 @@ export function EquipmentReviewPage() {
   const toTable = (rows: PqrEquipmentReviewRecord[]): TableRow[] => rows.map((r, i) => ({ ...r, srNo: i + 1 }));
   const renderTable = (rows: PqrEquipmentReviewRecord[], emptyTitle: string) => (
     rows.length ? (
-      <ResponsiveDataTable columns={tableColumns} data={toTable(rows)} searchKeys={['equipmentName', 'equipmentId']} mobileTitleKey="equipmentName" mobileSubtitleKey="equipmentId" pageSize={15} />
+      <ResponsiveDataTable columns={tableColumns} data={toTable(rows)} searchKeys={['equipmentName', 'equipmentId', 'product', 'batchNumber', 'manufacturingLine']} mobileTitleKey="equipmentName" mobileSubtitleKey="equipmentId" pageSize={15} />
     ) : <EmptyState title={emptyTitle} message="Pull equipment data or add manually." />
   );
 
@@ -713,7 +768,17 @@ export function EquipmentReviewPage() {
         )}
 
         {selectedPqr && (
-          <EquipmentReviewFormDialog open={formOpen} onOpenChange={setFormOpen} pqr={selectedPqr} record={editRecord} onSubmit={handleSaveForm} loading={busy} />
+          <EquipmentReviewFormDialog
+            open={formOpen}
+            onOpenChange={setFormOpen}
+            pqr={selectedPqr}
+            record={editRecord}
+            onSubmit={handleSaveForm}
+            loading={busy}
+            productNames={productNames}
+            equipmentMaster={equipmentMaster}
+            batchByProduct={batchByProduct}
+          />
         )}
 
         <Dialog open={!!detailRecord} onOpenChange={() => setDetailRecord(null)}>
@@ -723,40 +788,19 @@ export function EquipmentReviewPage() {
               <div className="space-y-4">
                 <dl className="grid grid-cols-2 gap-2 text-sm">
                   {[
+                    ['Product Name', detailRecord.product],
+                    ['Batch Number', detailRecord.batchNumber || (detailRecord.batchesUsed || []).join(', ') || '—'],
+                    ['Manufacturing Line', detailRecord.manufacturingLine || '—'],
+                    ['Equipment Name', detailRecord.equipmentName],
                     ['Equipment ID', detailRecord.equipmentId],
-                    ['Category', detailRecord.equipmentCategory],
-                    ['Type', detailRecord.equipmentType],
-                    ['Department', detailRecord.department],
-                    ['Area', detailRecord.area || '—'],
-                    ['Criticality', detailRecord.criticality || '—'],
-                    ['Status', detailRecord.equipmentStatus || '—'],
-                    ['Cleaning', detailRecord.cleaningStatus || '—'],
-                    ['Validation', detailRecord.validationStatus || '—'],
-                    ['Batches Used', (detailRecord.batchesUsed || []).join(', ') || '—'],
-                    ['Usage Count', detailRecord.usageCount ?? 0],
-                    ['Breakdowns', detailRecord.breakdownCount],
-                    ['Downtime (h)', detailRecord.downtimeHours],
-                    ['Linked Deviations', detailRecord.linkedDeviations],
-                    ['Linked OOS', detailRecord.linkedOos ?? 0],
-                    ['Linked CAPA', detailRecord.linkedCapa],
-                    ['Change Controls', detailRecord.linkedChangeControls],
-                    ['Product Impact', detailRecord.impactOnProduct],
+                    ['Qualification Status', detailRecord.qualificationStatus],
                   ].map(([k, v]) => (
                     <div key={String(k)}><dt className="text-muted-foreground">{k}</dt><dd className="font-medium">{String(v)}</dd></div>
                   ))}
                 </dl>
                 <div className="flex flex-wrap gap-2">
                   <QualificationBadge status={detailRecord.qualificationStatus} />
-                  <CalibrationBadge status={detailRecord.calibrationStatus} />
-                  <PmBadge status={detailRecord.pmStatus} />
-                  <EquipmentComplianceBadge status={detailRecord.complianceStatus} />
-                  <EquipmentRiskBadge level={detailRecord.riskLevel} />
                 </div>
-                {(detailRecord.complianceReasons || []).length > 0 && (
-                  <ul className="list-disc pl-5 text-sm text-muted-foreground">
-                    {detailRecord.complianceReasons.map((reason) => <li key={reason}>{reason}</li>)}
-                  </ul>
-                )}
               </div>
             )}
           </DialogContent>

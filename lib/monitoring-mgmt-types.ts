@@ -1,7 +1,8 @@
+/** QMS Environmental & Utility Monitoring — dedicated collections (not CPV CF-locked names). */
 export const MONITORING_COLLECTIONS = {
-  areaMaster: 'area_master',
-  environmental: 'environmental_monitoring',
-  utility: 'utility_monitoring',
+  areaMaster: 'monitoring_area_master',
+  environmental: 'monitoring_environmental',
+  utility: 'monitoring_utility',
   excursions: 'monitoring_excursions',
   trends: 'monitoring_trends',
   attachments: 'monitoring_attachments',

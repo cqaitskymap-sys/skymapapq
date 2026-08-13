@@ -457,7 +457,7 @@ export async function logCpvDashboardAudit(
     const { httpsCallable } = await import('firebase/functions');
     const { getFirebaseFunctions, isFirebaseConfigured } = await import('@/lib/firebase');
     if (!isFirebaseConfigured()) return;
-    const fn = httpsCallable(getFirebaseFunctions(), 'logAdminCpvDashboardAudit');
+    const fn = httpsCallable(getFirebaseFunctions(), 'recordAdminCpvDashboardAudit');
     await fn({
       actionType,
       description: `CPV Dashboard ${actionType}${detail ? ` — ${detail}` : ''}`,

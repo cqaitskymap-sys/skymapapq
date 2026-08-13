@@ -233,25 +233,8 @@ export async function exportRiskReport(
   exportType: 'PDF' | 'Excel' | 'CSV',
   actor: RiskReportActor,
 ): Promise<{ fileUrl: string; error?: string }> {
-  const placeholderUrl = `/api/exports/risk-reports/${report.id}/${exportType.toLowerCase()}`;
-  const ext = exportType === 'Excel' ? 'xlsx' : exportType === 'PDF' ? 'pdf' : 'csv';
-  const fileName = `${report.report_number.replace(/\//g, '-')}.${ext}`;
-  if (isFirebaseConfigured() && report.id) {
-    try {
-      await updateDoc(doc(getFirebaseFirestore(), RISK_REPORTS_COLLECTION, report.id), {
-        export_type: exportType,
-        file_url: placeholderUrl,
-        file_name: fileName,
-        report_status: 'Exported',
-        updated_at: nowIso(),
-      });
-    } catch (e) {
-      console.error('exportRiskReport update', e);
-    }
-  }
-  const actionMap = { PDF: 'PDF exported', Excel: 'Excel exported', CSV: 'CSV exported' } as const;
-  await audit(actor, actionMap[exportType], report.id || report.report_id, `${report.report_number} — ${exportType}`, undefined, { fileName, placeholderUrl });
-  return { fileUrl: placeholderUrl };
+  await audit(actor, `${exportType} export blocked`, report.id || report.report_id, `${report.report_number} — backend export is not configured`);
+  throw new Error('Risk report export backend is not configured.');
 }
 
 export async function logRiskReportPrinted(actor: RiskReportActor, reportId: string, reportNumber: string) {
@@ -284,52 +267,10 @@ export function openRiskReportPdfHtml(
   generatedBy: string,
   filterSummary?: string,
 ): void {
-  const rows = (report.preview_rows || []).slice(0, 50).map((r, i) => `
-    <tr>
-      <td>${i + 1}</td>
-      <td>${r.risk_number}</td>
-      <td>${r.product}</td>
-      <td>${r.department}</td>
-      <td>${r.risk_category}</td>
-      <td>${r.risk_level}</td>
-      <td>${r.rpn_score}</td>
-      <td>${r.residual_rpn}</td>
-      <td>${r.status}</td>
-    </tr>`).join('');
-  const m = report.metrics_snapshot;
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>Risk Report</title>
-<style>body{font-family:Arial,sans-serif;margin:24px;font-size:11px;color:#1e293b}
-.header{border:2px solid #000;padding:12px;margin-bottom:16px;text-align:center}
-h1{color:#1e40af;margin:0} table{width:100%;border-collapse:collapse} th,td{border:1px solid #cbd5e1;padding:5px}
-th{background:#f1f5f9}</style></head><body>
-<div class="header">
-<strong>SKYMAP PHARMACEUTICALS PVT. LTD.</strong>
-<h1>${report.report_type}</h1>
-<p>ICH Q9 | GMP Risk Management | Report No: ${report.report_number}</p>
-<p>Review Period: ${report.review_period_from} — ${report.review_period_to}</p>
-${filterSummary ? `<p><strong>Filter Summary:</strong> ${filterSummary}</p>` : ''}
-<p>Prepared By: ${generatedBy} | Generated: ${new Date().toLocaleString()} | Page 1</p>
-</div>
-<h2>Risk Register Summary</h2>
-<ul>
-<li>Total Risks: ${m?.totalRisks ?? 0}</li>
-<li>Open: ${m?.openRisks ?? 0} | Closed: ${m?.closedRisks ?? 0}</li>
-<li>Critical: ${m?.criticalRisks ?? 0} | Closure Rate: ${m?.riskClosureRate ?? 0}%</li>
-<li>Avg RPN: ${m?.averageRpn ?? 0} | Risk Reduction: ${m?.riskReductionPercent ?? 0}%</li>
-</ul>
-<h2>FMEA / Mitigation Summary</h2>
-<p>Mitigation Pending: ${m?.mitigationPending ?? 0} | Mitigation Completion: ${m?.mitigationCompletionRate ?? 0}%</p>
-<h2>Residual Risk Summary</h2>
-<p>Residual High Risks: ${m?.residualHighRisks ?? 0}</p>
-<h2>Management Recommendations</h2>
-<pre>${report.recommendations || report.summary}</pre>
-<table><thead><tr><th>#</th><th>Risk No</th><th>Product</th><th>Dept</th><th>Category</th><th>Level</th><th>RPN</th><th>Residual</th><th>Status</th></tr></thead>
-<tbody>${rows || '<tr><td colspan="9">No records</td></tr>'}</tbody></table>
-<p><em>Approved By: _________________________</em></p>
-<button onclick="window.print()">Print / Save PDF</button>
-</body></html>`;
-  const win = window.open('', '_blank');
-  if (win) { win.document.write(html); win.document.close(); }
+  void report;
+  void generatedBy;
+  void filterSummary;
+  throw new Error('Risk report PDF export backend is not configured.');
 }
 
 export { computeRiskReportAnalytics, summarizeRiskReportsDashboard } from '@/lib/risk-reports-records';

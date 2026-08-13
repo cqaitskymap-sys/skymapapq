@@ -6,7 +6,6 @@ import { generateDocumentNumber } from '@/lib/admin/document-numbering-service';
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import {
   CAPA_CREATE_MODULE,
-  buildCapaNumberFallback,
   computeCapaAutoRules,
   getSourceLookupConfig,
   mapSourceRecordToPrefill,
@@ -39,9 +38,8 @@ async function audit(actor: CapaCreateActor, actionType: string, recordId: strin
 }
 
 export async function previewCapaNumber(): Promise<string> {
-  const year = new Date().getFullYear();
   if (!isFirebaseConfigured()) {
-    return buildCapaNumberFallback(year, 1);
+    return '';
   }
   try {
     const result = await generateDocumentNumber('CAPA', 'Corrective Action', {
@@ -52,29 +50,7 @@ export async function previewCapaNumber(): Promise<string> {
   } catch (e) {
     console.error('previewCapaNumber document numbering', e);
   }
-  try {
-    const prefix = `CAPA/QA/${year}/`;
-    const snap = await getDocs(query(
-      collection(getFirebaseFirestore(), CAPA_COLLECTIONS.records),
-      where('capa_number', '>=', prefix),
-      where('capa_number', '<=', `${prefix}\uf8ff`),
-      orderBy('capa_number', 'desc'),
-      limit(1),
-    ));
-    if (!snap.empty) {
-      const last = String(snap.docs[0].data().capa_number || '');
-      const seq = parseInt(last.split('/').pop() || '0', 10) + 1;
-      return buildCapaNumberFallback(year, seq);
-    }
-  } catch {
-    try {
-      const snap = await getDocs(collection(getFirebaseFirestore(), CAPA_COLLECTIONS.records));
-      return buildCapaNumberFallback(year, snap.size + 1);
-    } catch {
-      return buildCapaNumberFallback(year, 1);
-    }
-  }
-  return buildCapaNumberFallback(year, 1);
+  return '';
 }
 
 export async function lookupCapaSourceReference(
@@ -297,25 +273,8 @@ export async function uploadCapaAttachmentPlaceholder(
   fileName: string,
   actor: CapaCreateActor,
 ): Promise<{ id: string; file_name: string }> {
-  const id = `att-${Date.now()}`;
-  if (isFirebaseConfigured() && capaId !== 'draft') {
-    try {
-      const ref = await addDoc(collection(getFirebaseFirestore(), CAPA_COLLECTIONS.attachments), {
-        capa_id: capaId,
-        file_name: fileName,
-        file_url: `/api/attachments/capa/${capaId}/${encodeURIComponent(fileName)}`,
-        file_type: 'placeholder',
-        uploaded_by: actor.id,
-        uploaded_by_name: actor.name,
-        uploaded_at: nowIso(),
-      });
-      await audit(actor, 'Attachment Uploaded', capaId, fileName);
-      return { id: ref.id, file_name: fileName };
-    } catch (e) {
-      console.error('uploadCapaAttachmentPlaceholder', e);
-    }
-  }
-  return { id, file_name: fileName };
+  await audit(actor, 'Attachment Upload Blocked', capaId, fileName);
+  throw new Error('CAPA attachment upload backend is not implemented. Configure real file upload first.');
 }
 
 export { previewCapaNumber as generateCapaNumberPreview };

@@ -51,20 +51,24 @@ export function PackingTable({ rows, onChange, readOnly }: PackingTableProps) {
           </TableHeader>
           <TableBody>
             {rows.length === 0 ? (
-              <TableRow><TableCell colSpan={8} className="text-center text-sm text-muted-foreground">No packing rows</TableCell></TableRow>
+              <TableRow><TableCell colSpan={readOnly ? 7 : 8} className="text-center text-sm text-muted-foreground">No packing rows</TableCell></TableRow>
             ) : (
               rows.map((row, i) => (
                 <TableRow key={row.id || i}>
                   <TableCell><Input value={row.packingMaterial} disabled={readOnly} onChange={(e) => update(i, { packingMaterial: e.target.value })} className="h-8" /></TableCell>
                   <TableCell>
-                    <Select value={row.materialType} onValueChange={(v) => update(i, { materialType: v as ProductPackingRow['materialType'] })} disabled={readOnly}>
+                    <Select
+                      value={PACKING_MATERIAL_TYPES.includes(row.materialType as typeof PACKING_MATERIAL_TYPES[number]) ? row.materialType : 'Primary Packing'}
+                      onValueChange={(v) => update(i, { materialType: v as ProductPackingRow['materialType'] })}
+                      disabled={readOnly}
+                    >
                       <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
                       <SelectContent>{PACKING_MATERIAL_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                     </Select>
                   </TableCell>
                   <TableCell><Input value={row.packSize} disabled={readOnly} onChange={(e) => update(i, { packSize: e.target.value })} className="h-8" /></TableCell>
-                  <TableCell><Input type="number" value={row.quantity ?? 0} disabled={readOnly} onChange={(e) => update(i, { quantity: Number(e.target.value) })} className="h-8 w-20" /></TableCell>
-                  <TableCell><Input value={row.unit} disabled={readOnly} onChange={(e) => update(i, { unit: e.target.value })} className="h-8 w-16" /></TableCell>
+                  <TableCell><Input type="number" min={0} step="any" value={row.quantity} disabled={readOnly} onChange={(e) => update(i, { quantity: Number(e.target.value) || 0 })} className="h-8 w-24" /></TableCell>
+                  <TableCell><Input value={row.unit} disabled={readOnly} onChange={(e) => update(i, { unit: e.target.value })} className="h-8 w-20" /></TableCell>
                   <TableCell><Input value={row.specificationNo} disabled={readOnly} onChange={(e) => update(i, { specificationNo: e.target.value })} className="h-8" /></TableCell>
                   <TableCell><Input value={row.stpNo} disabled={readOnly} onChange={(e) => update(i, { stpNo: e.target.value })} className="h-8" /></TableCell>
                   {!readOnly && (

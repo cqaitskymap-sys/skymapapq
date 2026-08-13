@@ -3,12 +3,8 @@
  * CF-only writes, dual audit, change reason, e-sign gate for critical status changes.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
-
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
+import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -82,8 +78,7 @@ function assertActivator(actor: DocumentData | undefined, role: string) {
 
 async function resolveActor(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const snap = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = snap.data();
   return {
@@ -403,7 +398,7 @@ function sanitizePayload(data: Record<string, unknown>, existing?: DocumentData)
   };
 }
 
-export const createAdminCpvProduct = onCall({ timeoutSeconds: 60 }, async (request) => {
+export const createAdminCpvProduct = onCall({ timeoutSeconds: 60, cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertEditor(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -451,7 +446,7 @@ export const createAdminCpvProduct = onCall({ timeoutSeconds: 60 }, async (reque
   return record;
 });
 
-export const updateAdminCpvProduct = onCall({ timeoutSeconds: 60 }, async (request) => {
+export const updateAdminCpvProduct = onCall({ timeoutSeconds: 60, cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertEditor(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -512,7 +507,7 @@ export const updateAdminCpvProduct = onCall({ timeoutSeconds: 60 }, async (reque
   return { id, ...existing, ...updates };
 });
 
-export const setAdminCpvProductStatus = onCall({ timeoutSeconds: 60 }, async (request) => {
+export const setAdminCpvProductStatus = onCall({ timeoutSeconds: 60, cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   const data = (request.data || {}) as Record<string, unknown>;
   const id = requiredString(data.id, 'Product id', 120);
@@ -577,7 +572,7 @@ export const setAdminCpvProductStatus = onCall({ timeoutSeconds: 60 }, async (re
   return { id, ...existing, ...updates };
 });
 
-export const linkAdminCpvParameter = onCall(async (request) => {
+export const linkAdminCpvParameter = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertEditor(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -623,7 +618,7 @@ export const linkAdminCpvParameter = onCall(async (request) => {
   return { id, ...existing, [field]: next };
 });
 
-export const unlinkAdminCpvParameter = onCall(async (request) => {
+export const unlinkAdminCpvParameter = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertEditor(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -666,7 +661,7 @@ export const unlinkAdminCpvParameter = onCall(async (request) => {
   return { id, ...existing, [field]: next };
 });
 
-export const importAdminCpvProduct = onCall({ timeoutSeconds: 60 }, async (request) => {
+export const importAdminCpvProduct = onCall({ timeoutSeconds: 60, cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertEditor(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -743,7 +738,7 @@ export const importAdminCpvProduct = onCall({ timeoutSeconds: 60 }, async (reque
   return record;
 });
 
-export const softDeleteAdminCpvProduct = onCall(async (request) => {
+export const softDeleteAdminCpvProduct = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertActivator(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -800,7 +795,7 @@ export const softDeleteAdminCpvProduct = onCall(async (request) => {
   return { success: true, id };
 });
 
-export const logAdminCpvProductExport = onCall(async (request) => {
+export const logAdminCpvProductExport = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertViewer(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;

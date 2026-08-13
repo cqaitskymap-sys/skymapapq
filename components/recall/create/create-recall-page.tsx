@@ -149,6 +149,9 @@ function CreateRecallInner() {
       setProducts(prods);
       setCapas(caps);
       setOwners(own);
+      if (!num) {
+        toast.error('Recall numbering backend configuration is not available.');
+      }
     } finally {
       setLoading(false);
     }
@@ -231,8 +234,12 @@ function CreateRecallInner() {
       toast.error('Save draft first to attach files');
       return;
     }
-    await uploadRecallCreateAttachmentPlaceholder(draftId, 'recall-initiation-document.pdf', actor);
-    toast.success('Attachment placeholder logged — upload full file from recall detail');
+    try {
+      await uploadRecallCreateAttachmentPlaceholder(draftId, 'recall-initiation-document.pdf', actor);
+      toast.success('Attachment uploaded');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Attachment upload failed');
+    }
   };
 
   if (loading) return <LoadingSkeleton rows={4} />;
@@ -254,7 +261,7 @@ function CreateRecallInner() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Recall Number Preview</CardTitle>
-            <CardDescription>Auto-generated on save: <span className="font-mono font-semibold text-blue-700">{previewNumber}</span></CardDescription>
+            <CardDescription>Auto-generated on save: <span className="font-mono font-semibold text-blue-700">{previewNumber || 'Number not available from backend'}</span></CardDescription>
           </CardHeader>
         </Card>
 

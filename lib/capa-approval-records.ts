@@ -91,7 +91,7 @@ export function roleMatchesCapaStep(userRole: string | undefined, stepRole: stri
   if (stepRole === 'department_head') {
     return ['production_manager', 'qc_manager', 'engineering_manager', 'department_head'].includes(u);
   }
-  if (stepRole === 'qa') return ['qa', 'qa_executive'].includes(u);
+  if (stepRole === 'qa') return ['qa', 'qa_executive', 'qa_manager'].includes(u);
   if (stepRole === 'qa_manager') return ['qa_manager', 'head_qa'].includes(u);
   if (stepRole === 'head_qa') return u === 'head_qa';
   return u === stepRole;

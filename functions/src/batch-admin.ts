@@ -2,14 +2,10 @@
  * Batch Master — privileged Cloud Functions.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
 import {
-  getFirestore, type Firestore, type DocumentData, type WriteBatch, FieldValue,
+  type Firestore, type DocumentData, type WriteBatch, FieldValue,
 } from 'firebase-admin/firestore';
-
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
+import { getAdminFirestore } from './admin-app';
 
 function requiredString(value: unknown, field: string, maxLength = 200): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -481,8 +477,7 @@ async function loadActiveProduct(firestore: Firestore, productCode: string): Pro
 
 export const createAdminBatch = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertBatchEditor(actor, String(actor?.role || ''));
@@ -563,8 +558,7 @@ export const createAdminBatch = onCall(async (request) => {
 
 export const updateAdminBatch = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -648,8 +642,7 @@ export const updateAdminBatch = onCall(async (request) => {
 
 export const setAdminBatchStatus = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertBatchReleaser(actor, String(actor?.role || ''));
@@ -732,8 +725,7 @@ export const setAdminBatchStatus = onCall(async (request) => {
 
 export const softDeleteAdminBatch = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -796,8 +788,7 @@ export const softDeleteAdminBatch = onCall(async (request) => {
 
 export const restoreAdminBatch = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertBatchEditor(actor, String(actor?.role || ''));
@@ -835,8 +826,7 @@ export const restoreAdminBatch = onCall(async (request) => {
 
 export const bulkUpdateAdminBatches = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertBatchEditor(actor, String(actor?.role || ''));
@@ -894,8 +884,7 @@ export const bulkUpdateAdminBatches = onCall(async (request) => {
 
 export const bulkSoftDeleteAdminBatches = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -962,8 +951,7 @@ export const bulkSoftDeleteAdminBatches = onCall(async (request) => {
 
 export const importAdminBatches = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertActiveAdmin(actor, String(actor?.role || ''));
@@ -1036,8 +1024,7 @@ export const importAdminBatches = onCall(async (request) => {
 
 export const logAdminBatchExport = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertBatchEditor(actor, String(actor?.role || ''));
@@ -1062,8 +1049,7 @@ export const logAdminBatchExport = onCall(async (request) => {
 
 export const registerAdminBatchAttachment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertBatchEditor(actor, String(actor?.role || ''));
@@ -1116,8 +1102,7 @@ export const registerAdminBatchAttachment = onCall(async (request) => {
 
 export const softDeleteAdminBatchAttachment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertBatchEditor(actor, String(actor?.role || ''));
@@ -1148,8 +1133,7 @@ export const softDeleteAdminBatchAttachment = onCall(async (request) => {
 
 export const previewAdminBatchNumber = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertBatchEditor(actor, String(actor?.role || ''));

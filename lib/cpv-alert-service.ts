@@ -3,6 +3,7 @@ import {
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
+import { shouldSkipRemoteCallablesInLocalDev } from '@/lib/audit-trail';
 import { getRecord, getRecords } from '@/lib/firestore';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS, CppRecord, CqaRecord } from '@/lib/cpv';
@@ -22,7 +23,6 @@ import {
   ALERTS_COLLECTION,
   ALERTS_LEGACY,
   ALERT_RULES_COLLECTION,
-  buildDefaultAlertRules,
   buildAlertId,
   computeAlertIntelligence,
   emptyAlertAiIntelligence,
@@ -213,11 +213,11 @@ export async function fetchCpvAlertById(id: string): Promise<CpvAlertRecord | nu
 }
 
 export async function fetchAlertRules(): Promise<CpvAlertRuleRecord[]> {
-  if (!isFirebaseConfigured()) return buildDefaultAlertRules();
+  if (!isFirebaseConfigured()) return [];
   try {
     const rows = await getRecords<CpvAlertRuleRecord>(ALERT_RULES_COLLECTION, [limit(100)]);
     if (rows.length) return rows.map((r) => ({ ...r, id: r.id || r.ruleId }));
-    return buildDefaultAlertRules();
+    return [];
   } catch (e) {
     console.error('fetchAlertRules failed', e);
     return [];
@@ -260,6 +260,9 @@ async function isDuplicateAlert(
   return hours < suppressionHours;
 }
 
+const LOCAL_CALLABLE_SKIP_MESSAGE =
+  'Cloud Functions are skipped on localhost. Set NEXT_PUBLIC_ALLOW_REMOTE_AUDIT_FROM_LOCALHOST=true (and deploy functions), or use Firebase emulators.';
+
 export async function createCpvAlert(
   form: CpvAlertFormData,
   _actor: CpvAlertActor,
@@ -267,6 +270,9 @@ export async function createCpvAlert(
   options?: { sourceRecordId?: string; autoCreated?: boolean; changeReason?: string },
 ): Promise<{ result: CpvAlertRecord | null; error: string | null }> {
   if (!isFirebaseConfigured()) return { result: null, error: 'Firebase is not configured.' };
+  if (shouldSkipRemoteCallablesInLocalDev()) {
+    return { result: null, error: LOCAL_CALLABLE_SKIP_MESSAGE };
+  }
   const changeReason = resolveChangeReason(
     form.changeReason || options?.changeReason,
     null,
@@ -339,6 +345,7 @@ export async function acknowledgeCpvAlert(
   existing: CpvAlertRecord,
   changeReason = 'Alert acknowledged by responsible user',
 ) {
+  if (shouldSkipRemoteCallablesInLocalDev()) return { error: LOCAL_CALLABLE_SKIP_MESSAGE };
   try {
     const reason = resolveChangeReason(changeReason, existing.changeReason, 'Alert acknowledged by responsible user');
     if (!reason) return { error: 'Change reason must be at least 5 characters.' };
@@ -359,6 +366,7 @@ export async function assignCpvAlert(
   existing: CpvAlertRecord,
   changeReason = 'Alert assignment updated',
 ) {
+  if (shouldSkipRemoteCallablesInLocalDev()) return { error: LOCAL_CALLABLE_SKIP_MESSAGE };
   try {
     const reason = resolveChangeReason(changeReason, existing.changeReason, 'Alert assignment updated');
     if (!reason) return { error: 'Change reason must be at least 5 characters.' };
@@ -379,6 +387,7 @@ export async function linkCpvAlert(
   existing: CpvAlertRecord,
   changeReason = 'Alert linked to QMS record',
 ) {
+  if (shouldSkipRemoteCallablesInLocalDev()) return { error: LOCAL_CALLABLE_SKIP_MESSAGE };
   try {
     const reason = resolveChangeReason(changeReason, existing.changeReason, 'Alert linked to QMS record');
     if (!reason) return { error: 'Change reason must be at least 5 characters.' };
@@ -396,6 +405,7 @@ export async function investigateCpvAlert(
   existing: CpvAlertRecord,
   changeReason = 'Alert moved under investigation',
 ) {
+  if (shouldSkipRemoteCallablesInLocalDev()) return { error: LOCAL_CALLABLE_SKIP_MESSAGE };
   try {
     const reason = resolveChangeReason(changeReason, existing.changeReason, 'Alert moved under investigation');
     if (!reason) return { error: 'Change reason must be at least 5 characters.' };
@@ -418,6 +428,7 @@ export async function closeCpvAlert(
   if (!closureRemarks.trim() || closureRemarks.trim().length < 5) {
     return { error: 'Closure remarks must be at least 5 characters.' };
   }
+  if (shouldSkipRemoteCallablesInLocalDev()) return { error: LOCAL_CALLABLE_SKIP_MESSAGE };
   try {
     const reason = resolveChangeReason(options?.changeReason, existing.changeReason, 'Alert closed with justification');
     if (!reason) return { error: 'Change reason must be at least 5 characters.' };
@@ -442,6 +453,7 @@ export async function rejectCpvAlert(
   existing: CpvAlertRecord,
   options?: { changeReason?: string; esignConfirmed?: boolean },
 ) {
+  if (shouldSkipRemoteCallablesInLocalDev()) return { error: LOCAL_CALLABLE_SKIP_MESSAGE };
   try {
     const reason = resolveChangeReason(options?.changeReason, existing.changeReason, 'Alert rejected with justification');
     if (!reason) return { error: 'Change reason must be at least 5 characters.' };
@@ -466,6 +478,7 @@ export async function escalateCpvAlert(
   escalationRole = 'head_qa',
   options?: { changeReason?: string; esignConfirmed?: boolean },
 ) {
+  if (shouldSkipRemoteCallablesInLocalDev()) return { error: LOCAL_CALLABLE_SKIP_MESSAGE };
   try {
     const reason = resolveChangeReason(options?.changeReason, existing.changeReason, 'Alert escalated per SLA matrix');
     if (!reason) return { error: 'Change reason must be at least 5 characters.' };
@@ -485,6 +498,7 @@ export async function escalateCpvAlert(
 
 export async function saveAlertRule(form: CpvAlertRuleFormData, _actor: CpvAlertActor, existingId?: string) {
   if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
+  if (shouldSkipRemoteCallablesInLocalDev()) return { error: LOCAL_CALLABLE_SKIP_MESSAGE };
   const reason = resolveChangeReason(form.changeReason, null, 'Alert rule configuration updated');
   if (!reason) return { error: 'Change reason must be at least 5 characters.' };
   try {
@@ -502,6 +516,7 @@ export async function saveAlertRule(form: CpvAlertRuleFormData, _actor: CpvAlert
 }
 
 export async function deactivateAlertRule(id: string, _actor: CpvAlertActor, changeReason = 'Alert rule deactivated') {
+  if (shouldSkipRemoteCallablesInLocalDev()) return { error: LOCAL_CALLABLE_SKIP_MESSAGE };
   try {
     const reason = resolveChangeReason(changeReason, null, 'Alert rule deactivated');
     if (!reason) return { error: 'Change reason must be at least 5 characters.' };
@@ -515,6 +530,7 @@ export async function deactivateAlertRule(id: string, _actor: CpvAlertActor, cha
 }
 
 export async function softDeleteCpvAlert(id: string, existing: CpvAlertRecord, changeReason: string) {
+  if (shouldSkipRemoteCallablesInLocalDev()) return { error: LOCAL_CALLABLE_SKIP_MESSAGE };
   try {
     const reason = resolveChangeReason(changeReason, existing.changeReason);
     if (!reason) return { error: 'Change reason must be at least 5 characters.' };
@@ -529,6 +545,9 @@ export async function softDeleteCpvAlert(id: string, existing: CpvAlertRecord, c
 
 export async function scanAndCreateAlerts(actor: CpvAlertActor): Promise<{ created: number; error: string | null }> {
   if (!isFirebaseConfigured()) return { created: 0, error: 'Firebase is not configured.' };
+  if (shouldSkipRemoteCallablesInLocalDev()) {
+    return { created: 0, error: LOCAL_CALLABLE_SKIP_MESSAGE };
+  }
   try {
     const [existing, rules, cpp, cqa, stability, holdTime, capability, spc, riskAssessment, utility, environmental, yieldRows, rawMaterial, packingMaterial, cpvReviews] = await Promise.all([
       fetchCpvAlerts(500),
@@ -657,6 +676,7 @@ export async function scanAndCreateAlerts(actor: CpvAlertActor): Promise<{ creat
 }
 
 export async function logAlertExport(actor: CpvAlertActor, count: number) {
+  if (shouldSkipRemoteCallablesInLocalDev()) return;
   try {
     const fn = httpsCallable(getFirebaseFunctions(), 'logAdminCpvAlertExport');
     await fn({

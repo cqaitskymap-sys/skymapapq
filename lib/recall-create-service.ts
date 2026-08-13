@@ -6,7 +6,6 @@ import { generateDocumentNumber } from '@/lib/admin/document-numbering-service';
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import {
   RECALL_CREATE_MODULE,
-  buildRecallNumberFallback,
   computeRecallAutoRules,
   defaultNotificationDueDate,
   type RecallBatchOption,
@@ -144,37 +143,14 @@ async function linkSourceReferences(input: RecallCreateInput): Promise<Partial<R
 }
 
 export async function previewRecallNumber(): Promise<string> {
-  const year = new Date().getFullYear();
-  if (!isFirebaseConfigured()) return buildRecallNumberFallback(year, 1);
+  if (!isFirebaseConfigured()) return '';
   try {
     const result = await generateDocumentNumber('REC', 'Product Recall', { increment: false });
     if (result.number) return result.number;
   } catch (e) {
     console.error('previewRecallNumber document numbering', e);
   }
-  try {
-    const prefix = `REC/${year}/`;
-    const snap = await getDocs(query(
-      collection(getFirebaseFirestore(), RECALL_COLLECTIONS.records),
-      where('recall_number', '>=', prefix),
-      where('recall_number', '<=', `${prefix}\uf8ff`),
-      orderBy('recall_number', 'desc'),
-      limit(1),
-    ));
-    if (!snap.empty) {
-      const last = String(snap.docs[0].data().recall_number || '');
-      const seq = parseInt(last.split('/').pop() || '0', 10) + 1;
-      return buildRecallNumberFallback(year, seq);
-    }
-  } catch {
-    try {
-      const snap = await getDocs(collection(getFirebaseFirestore(), RECALL_COLLECTIONS.records));
-      return buildRecallNumberFallback(year, snap.size + 1);
-    } catch {
-      return buildRecallNumberFallback(year, 1);
-    }
-  }
-  return buildRecallNumberFallback(year, 1);
+  return '';
 }
 
 export async function fetchRecallProductOptions(): Promise<RecallProductOption[]> {
@@ -409,5 +385,6 @@ export async function uploadRecallCreateAttachmentPlaceholder(
   fileName: string,
   actor: RecallCreateActor,
 ): Promise<void> {
-  await audit(actor, 'Attachment Uploaded', recallId, `${fileName} (placeholder — upload on detail view)`);
+  await audit(actor, 'Attachment Upload Blocked', recallId, fileName);
+  throw new Error('Recall attachment upload backend is not implemented. Configure real file upload first.');
 }

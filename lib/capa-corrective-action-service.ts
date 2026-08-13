@@ -6,7 +6,6 @@ import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import {
   applyCorrectiveActionOverdueCheck,
   buildActionNumber,
-  buildCorrectiveActionIdFallback,
   canApproveCriticalCapaCorrectiveAction,
   CAPA_CORRECTIVE_ACTION_MODULE,
   computeCorrectiveActionDashboardMetrics,
@@ -85,7 +84,7 @@ export async function assertApprovedRcaForCorrectiveAction(capaId: string): Prom
 
 export async function generateCorrectiveActionId(): Promise<string> {
   const year = new Date().getFullYear();
-  if (!isFirebaseConfigured()) return buildCorrectiveActionIdFallback(year, 1);
+  if (!isFirebaseConfigured()) throw new Error('Firebase is not configured');
   try {
     const prefix = `CA-CAPA/${year}/`;
     const snap = await getDocs(query(
@@ -98,17 +97,17 @@ export async function generateCorrectiveActionId(): Promise<string> {
     if (!snap.empty) {
       const last = String(snap.docs[0].data().corrective_action_id || '');
       const seq = parseInt(last.split('/').pop() || '0', 10) + 1;
-      return buildCorrectiveActionIdFallback(year, seq);
+      return `CA-CAPA/${year}/${String(seq).padStart(4, '0')}`;
     }
   } catch {
     try {
       const snap = await getDocs(collection(getFirebaseFirestore(), CAPA_COLLECTIONS.correctiveActions));
-      return buildCorrectiveActionIdFallback(year, snap.size + 1);
+      return `CA-CAPA/${year}/${String(snap.size + 1).padStart(4, '0')}`;
     } catch {
-      return buildCorrectiveActionIdFallback(year, 1);
+      throw new Error('Unable to generate corrective action ID from backend.');
     }
   }
-  return buildCorrectiveActionIdFallback(year, 1);
+  throw new Error('Unable to generate corrective action ID from backend.');
 }
 
 async function nextActionNumber(capaId: string, capaNumber: string): Promise<string> {

@@ -19,6 +19,13 @@ function formatRole(role?: string): string {
   return role.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
+function getTimeGreeting(date: Date): string {
+  const hour = date.getHours();
+  if (hour < 12) return 'Good Morning';
+  if (hour < 17) return 'Good Afternoon';
+  return 'Good Evening';
+}
+
 export function ModuleLauncherPage() {
   const [search, setSearch] = useState('');
   const [now, setNow] = useState(() => new Date());
@@ -99,7 +106,7 @@ export function ModuleLauncherPage() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <p className="text-sm font-medium tracking-wide text-muted-foreground">
-                  Welcome Back,
+                  {getTimeGreeting(now)},
                 </p>
                 <h1 className="mt-0.5 bg-gradient-to-r from-foreground to-[#2563EB] bg-clip-text text-2xl font-bold tracking-tight text-transparent sm:text-3xl">
                   {profile?.full_name || 'Super Admin'}

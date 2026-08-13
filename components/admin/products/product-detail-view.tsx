@@ -14,6 +14,7 @@ import { ProductLifecycleBadge } from './product-lifecycle-badge';
 import { CompositionTable } from './composition-table';
 import { PackingTable } from './packing-table';
 import { ProductAttachmentsSection } from './product-attachments-section';
+import { parseBrandNames } from './brand-names-input';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -109,40 +110,25 @@ export function ProductDetailView({ id }: { id: string }) {
     { label: 'Product ID', value: product.productId },
     { label: 'Product Code', value: product.productCode },
     { label: 'Generic Name', value: product.genericName },
-    { label: 'Brand Name', value: product.brandName },
-    { label: 'Product Family', value: product.productFamily },
-    { label: 'Category', value: product.category || product.therapeuticCategory },
     { label: 'Strength', value: product.strength },
-    { label: 'Route', value: product.routeOfAdministration },
     { label: 'Pack Size', value: product.packSize },
-    { label: 'Pack Type', value: product.packType },
     { label: 'Container Closure', value: product.containerClosure },
     { label: 'Market', value: product.market },
-    { label: 'Country', value: product.country },
-    { label: 'Manufacturing Site', value: product.manufacturingSite },
-    { label: 'Business Unit', value: product.businessUnit },
-    { label: 'Department', value: product.department },
-    { label: 'Product Owner', value: product.productOwner },
     { label: 'Shelf Life (months)', value: product.shelfLife },
     { label: 'Storage', value: product.storageCondition },
     { label: 'Batch Size', value: product.standardBatchSize || product.batchSize },
-    { label: 'Batch Prefix', value: product.batchPrefix },
     { label: 'Mfg License', value: product.manufacturingLicenseNumber },
-    { label: 'Registration No.', value: product.registrationNumber },
-    { label: 'License No.', value: product.licenseNumber },
     { label: 'MFR', value: product.mfrNumber },
     { label: 'BMR / BPR', value: `${product.bmrNumber || '-'} / ${product.bprNumber || '-'}` },
     { label: 'Specification No.', value: product.specificationNumber },
     { label: 'STP No.', value: product.stpNumber },
-    { label: 'HSN Code', value: product.hsnCode },
-    { label: 'GTIN', value: product.gtin },
-    { label: 'Barcode', value: product.barcode },
-    { label: 'QR Code', value: product.qrCode },
     { label: 'Created By', value: product.createdBy },
     { label: 'Created At', value: product.createdAt ? new Date(product.createdAt).toLocaleString() : '-' },
     { label: 'Updated By', value: product.updatedBy },
     { label: 'Updated At', value: product.updatedAt ? new Date(product.updatedAt).toLocaleString() : '-' },
   ];
+
+  const brandNames = parseBrandNames(product.brandName || '');
 
   return (
     <div className="space-y-6">
@@ -165,7 +151,6 @@ export function ProductDetailView({ id }: { id: string }) {
 
       <div className="flex flex-wrap gap-2 items-center">
         <ProductStatusBadge status={product.productStatus} />
-        <ProductLifecycleBadge status={product.lifecycleStatus} />
         <DosageFormBadge form={product.dosageForm} />
         {product.isDeleted && <Badge variant="destructive">Deleted</Badge>}
         {product.productStatus !== 'Active' && (
@@ -179,7 +164,7 @@ export function ProductDetailView({ id }: { id: string }) {
       <Tabs defaultValue="overview">
         <TabsList className="flex flex-wrap h-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="composition">Composition</TabsTrigger>
+          <TabsTrigger value="composition">Composition per batch</TabsTrigger>
           <TabsTrigger value="packing">Packing</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
@@ -193,6 +178,18 @@ export function ProductDetailView({ id }: { id: string }) {
           <Card>
             <CardHeader><CardTitle className="text-base">Product Profile</CardTitle></CardHeader>
             <CardContent className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+              <div>
+                <p className="text-xs text-muted-foreground">Brand Names</p>
+                {brandNames.length > 0 ? (
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {brandNames.map((name) => (
+                      <Badge key={name} variant="secondary" className="font-normal">{name}</Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="font-medium">-</p>
+                )}
+              </div>
               {overviewFields.map((field) => (
                 <div key={field.label}>
                   <p className="text-xs text-muted-foreground">{field.label}</p>
@@ -201,7 +198,7 @@ export function ProductDetailView({ id }: { id: string }) {
               ))}
               {product.description && (
                 <div className="sm:col-span-2 md:col-span-3">
-                  <p className="text-xs text-muted-foreground">Description</p>
+                  <p className="text-xs text-muted-foreground">Label change</p>
                   <p className="font-medium">{product.description}</p>
                 </div>
               )}
@@ -217,7 +214,7 @@ export function ProductDetailView({ id }: { id: string }) {
 
         <TabsContent value="composition">
           <Card>
-            <CardHeader><CardTitle className="text-base">Composition</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-base">Composition per batch</CardTitle></CardHeader>
             <CardContent>
               <CompositionTable rows={compositions} onChange={() => {}} readOnly />
             </CardContent>
@@ -287,9 +284,6 @@ export function ProductDetailView({ id }: { id: string }) {
             <CardHeader><CardTitle className="text-base">Product Reports</CardTitle></CardHeader>
             <CardContent className="text-sm space-y-3">
               <p>Linked batches: <span className="font-medium">{linkedBatches}</span></p>
-              <p>Lifecycle: <span className="font-medium">{product.lifecycleStatus}</span></p>
-              <p>Status: <span className="font-medium">{product.productStatus}</span></p>
-              <p>Category: <span className="font-medium">{product.category || product.therapeuticCategory || '—'}</span></p>
               <p className="text-muted-foreground">
                 Export product configuration or use Audit Trail for formal Part 11 / ALCOA+ evidence.
               </p>

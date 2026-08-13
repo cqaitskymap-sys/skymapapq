@@ -2,12 +2,8 @@
  * Product Master — privileged Cloud Functions.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
-
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
+import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
 
 function requiredString(value: unknown, field: string, maxLength = 200): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -34,14 +30,30 @@ function optionalString(value: unknown, field: string, maxLength = 200): string 
 
 const PRODUCT_EDITOR_ROLES = ['super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive'];
 
+function normalizeActorRole(role: string): string {
+  const lowered = String(role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const legacy: Record<string, string> = {
+    qa: 'qa_manager',
+    'qa_manager': 'qa_manager',
+    'head_qa': 'head_qa',
+    'qa_executive': 'qa_executive',
+    superadmin: 'super_admin',
+    'super_admin': 'super_admin',
+    admin: 'admin',
+  };
+  return legacy[lowered] || lowered;
+}
+
 function assertProductEditor(actor: DocumentData | undefined, actorRole: string) {
-  if (!actor || actor.is_active !== true || !PRODUCT_EDITOR_ROLES.includes(actorRole)) {
+  const role = normalizeActorRole(actorRole);
+  if (!actor || actor.is_active !== true || !PRODUCT_EDITOR_ROLES.includes(role)) {
     throw new HttpsError('permission-denied', 'Active product editor access required');
   }
 }
 
 function assertActiveAdmin(actor: DocumentData | undefined, actorRole: string) {
-  if (!actor || actor.is_active !== true || !['super_admin', 'admin'].includes(actorRole)) {
+  const role = normalizeActorRole(actorRole);
+  if (!actor || actor.is_active !== true || !['super_admin', 'admin'].includes(role)) {
     throw new HttpsError('permission-denied', 'Active administrator access required');
   }
 }
@@ -54,7 +66,7 @@ const PRODUCT_STATUSES = ['Active', 'Inactive', 'Discontinued', 'Under Developme
 
 const DOSAGE_FORMS = [
   'Injection', 'Tablet', 'Capsule', 'Syrup', 'Suspension', 'Ointment',
-  'Cream', 'Gel', 'Drops', 'Powder', 'Other',
+  'Cream', 'Gel', 'Drops', 'Eye Drop', 'Nasal Drop', 'Powder', 'Dry Powder', 'Other',
 ] as const;
 
 const MARKET_OPTIONS = ['Domestic', 'Export', 'Both'] as const;
@@ -64,7 +76,7 @@ const INGREDIENT_TYPES = [
 ] as const;
 
 const PACKING_MATERIAL_TYPES = [
-  'Primary Packing', 'Secondary Packing', 'Tertiary Packing',
+  'Primary Packing',
 ] as const;
 
 const PRODUCT_ATTACHMENT_TYPES = ['specification', 'stp', 'other'] as const;
@@ -209,10 +221,10 @@ function parsePackingDetails(value: unknown): ParsedPacking[] {
     }
     const r = row as Record<string, unknown>;
     const packingMaterial = requiredString(r.packingMaterial, `packingDetails[${index}].packingMaterial`, 200);
-    const materialType = String(r.materialType || 'Primary Packing');
-    if (!PACKING_MATERIAL_TYPES.includes(materialType as typeof PACKING_MATERIAL_TYPES[number])) {
-      throw new HttpsError('invalid-argument', `Invalid packing material type at index ${index}`);
-    }
+    const materialTypeRaw = String(r.materialType || 'Primary Packing');
+    const materialType = PACKING_MATERIAL_TYPES.includes(materialTypeRaw as typeof PACKING_MATERIAL_TYPES[number])
+      ? materialTypeRaw
+      : 'Primary Packing';
     const quantity = r.quantity == null ? 0 : Number(r.quantity);
     if (!Number.isFinite(quantity) || quantity < 0) {
       throw new HttpsError('invalid-argument', `Packing quantity must be numeric at index ${index}`);
@@ -282,7 +294,7 @@ function parseProductPayload(input: Record<string, unknown>, existing?: Document
     productCode,
     productName,
     genericName,
-    brandName: optionalString(input.brandName ?? existing?.brandName, 'brandName', 160),
+    brandName: optionalString(input.brandName ?? existing?.brandName, 'brandName', 500),
     productFamily: optionalString(input.productFamily ?? existing?.productFamily, 'productFamily', 160),
     therapeuticCategory: optionalString(
       input.therapeuticCategory ?? input.category ?? existing?.therapeuticCategory ?? existing?.category,
@@ -492,10 +504,9 @@ function stripSubcollections<T extends Record<string, unknown>>(payload: T) {
   return record;
 }
 
-export const createAdminProduct = onCall(async (request) => {
+export const createAdminProduct = onCall({ timeoutSeconds: 60, cors: true }, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   const actorRole = String(actor?.role || '');
@@ -546,10 +557,9 @@ export const createAdminProduct = onCall(async (request) => {
   return { id: ref.id, ...record };
 });
 
-export const updateAdminProduct = onCall(async (request) => {
+export const updateAdminProduct = onCall({ timeoutSeconds: 60, cors: true }, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertProductEditor(actor, String(actor?.role || ''));
@@ -655,10 +665,9 @@ export const updateAdminProduct = onCall(async (request) => {
   return { product: { id: productDocId, ...existing, ...record }, cascadeCount };
 });
 
-export const setAdminProductStatus = onCall(async (request) => {
+export const setAdminProductStatus = onCall({ cors: true }, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertProductEditor(actor, String(actor?.role || ''));
@@ -706,8 +715,7 @@ export const setAdminProductStatus = onCall(async (request) => {
 
 export const setAdminProductLifecycle = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertProductEditor(actor, String(actor?.role || ''));
@@ -754,8 +762,7 @@ export const setAdminProductLifecycle = onCall(async (request) => {
 
 export const archiveAdminProduct = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertProductEditor(actor, String(actor?.role || ''));
@@ -804,11 +811,10 @@ export const archiveAdminProduct = onCall(async (request) => {
 
 export const softDeleteAdminProduct = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
-  const actorRole = String(actor?.role || '');
+  const actorRole = normalizeActorRole(String(actor?.role || ''));
   assertActiveAdmin(actor, actorRole);
   if (actorRole !== 'super_admin') {
     throw new HttpsError('permission-denied', 'Only Super Admin can soft-delete products');
@@ -862,8 +868,7 @@ export const softDeleteAdminProduct = onCall(async (request) => {
 
 export const restoreAdminProduct = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertProductEditor(actor, String(actor?.role || ''));
@@ -899,8 +904,7 @@ export const restoreAdminProduct = onCall(async (request) => {
 
 export const bulkUpdateAdminProducts = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertProductEditor(actor, String(actor?.role || ''));
@@ -977,11 +981,10 @@ export const bulkUpdateAdminProducts = onCall(async (request) => {
 
 export const bulkSoftDeleteAdminProducts = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
-  const actorRole = String(actor?.role || '');
+  const actorRole = normalizeActorRole(String(actor?.role || ''));
   assertActiveAdmin(actor, actorRole);
   if (actorRole !== 'super_admin') {
     throw new HttpsError('permission-denied', 'Only Super Admin can bulk soft-delete products');
@@ -1039,8 +1042,7 @@ export const bulkSoftDeleteAdminProducts = onCall(async (request) => {
 
 export const importAdminProducts = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertProductEditor(actor, String(actor?.role || ''));
@@ -1105,8 +1107,7 @@ export const importAdminProducts = onCall(async (request) => {
 
 export const logAdminProductExport = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertProductEditor(actor, String(actor?.role || ''));
@@ -1131,8 +1132,7 @@ export const logAdminProductExport = onCall(async (request) => {
 
 export const registerAdminProductAttachment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertProductEditor(actor, String(actor?.role || ''));
@@ -1198,8 +1198,7 @@ export const registerAdminProductAttachment = onCall(async (request) => {
 
 export const softDeleteAdminProductAttachment = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
   assertProductEditor(actor, String(actor?.role || ''));

@@ -432,7 +432,7 @@ export async function importFromWarehouseReceipt(
     materialName: receipt.material_name,
     materialType: (receipt.material_type === 'API'
       ? 'API'
-      : receipt.material_type.includes('Excipient')
+      : (receipt.material_type || '').includes('Excipient')
         ? 'Excipient'
         : 'Raw Material') as RawMaterialMonitoringFormData['materialType'],
     materialGrade: '',

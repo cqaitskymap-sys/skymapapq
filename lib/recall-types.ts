@@ -741,7 +741,7 @@ export function canCreateRecall(role?: string | null): boolean {
 }
 
 export function canApproveRecall(role: string): boolean {
-  return ['super_admin', 'admin', 'qa', 'qa_manager', 'head_qa', 'regulatory_affairs'].includes(role);
+  return ['super_admin', 'admin', 'qa_manager', 'head_qa', 'regulatory_affairs'].includes(normalizeRole(role));
 }
 
 export function canViewRecallRecovery(role?: string | null): boolean {

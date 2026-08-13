@@ -1,28 +1,14 @@
 import { z } from 'zod';
 import {
-  EQUIPMENT_TYPES, EQUIPMENT_STATUSES, EQUIPMENT_DEPARTMENTS,
+  EQUIPMENT_QUALIFICATION_STATUSES,
   CALIBRATION_STATUSES, CALIBRATION_TYPES, PM_STATUSES, PM_TYPES, BREAKDOWN_STATUSES,
 } from './equipment-mgmt-types';
 
 export const equipmentCreateSchema = z.object({
   equipment_name: z.string().min(1, 'Equipment name required'),
-  equipment_type: z.enum(EQUIPMENT_TYPES as unknown as [string, ...string[]]),
-  department: z.enum(EQUIPMENT_DEPARTMENTS as unknown as [string, ...string[]]),
-  area_room_no: z.string().default(''),
-  make: z.string().default(''),
-  model: z.string().default(''),
-  serial_no: z.string().default(''),
-  capacity: z.string().default(''),
-  installation_date: z.string().nullable().optional(),
-  calibration_required: z.boolean().default(true),
-  pm_required: z.boolean().default(true),
-  qualification_required: z.boolean().default(false),
-  cleaning_required: z.boolean().default(false),
-  equipment_status: z.enum(EQUIPMENT_STATUSES as unknown as [string, ...string[]]).default('Active'),
-  calibration_due_date: z.string().nullable().optional(),
-  pm_due_date: z.string().nullable().optional(),
-  validation_id: z.string().nullable().optional(),
-  remarks: z.string().default(''),
+  equipment_id: z.string().min(1, 'Equipment ID required'),
+  qualification_status: z.enum(EQUIPMENT_QUALIFICATION_STATUSES as unknown as [string, ...string[]]),
+  manufacturing_line: z.string().min(1, 'Manufacturing line required'),
 });
 
 export const calibrationSchema = z.object({

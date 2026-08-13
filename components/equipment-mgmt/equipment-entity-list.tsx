@@ -75,7 +75,20 @@ export function EquipmentEntityList({
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
           <SheetHeader><SheetTitle>Add {title}</SheetTitle></SheetHeader>
-          <div className="mt-6">{renderForm({ equipment, onSuccess: () => { setOpen(false); onRefresh(); toast.success('Saved'); }, onClose: () => setOpen(false) })}</div>
+          <div className="mt-6">{renderForm({
+            equipment,
+            onSuccess: () => {
+              // Blur before close so Select triggers aren't focused under aria-hidden.
+              if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+              setOpen(false);
+              onRefresh();
+              toast.success('Saved');
+            },
+            onClose: () => {
+              if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+              setOpen(false);
+            },
+          })}</div>
         </SheetContent>
       </Sheet>
     </div>

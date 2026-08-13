@@ -60,14 +60,20 @@ export function useElectronicSignatures(initialFilters?: SignatureFilters) {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
+  useEffect(() => {
+    setPage(1);
+    setSelectedIds([]);
+  }, [filters]);
+
   const totalPages = Math.max(1, Math.ceil(records.length / PAGE_SIZE));
-  const paginatedRecords = records.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const safePage = Math.min(page, totalPages);
+  const paginatedRecords = records.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   return {
     records, paginatedRecords, metrics, charts, meanings, filters, setFilters,
     loading, refreshing, error, refresh, actor,
-    page, setPage, pageSize: PAGE_SIZE, totalPages,
-    pagination: { page, pageSize: PAGE_SIZE, total: records.length, totalPages },
+    page: safePage, setPage, pageSize: PAGE_SIZE, totalPages,
+    pagination: { page: safePage, pageSize: PAGE_SIZE, total: records.length, totalPages },
     selectedIds,
     toggleSelect: (id: string) => setSelectedIds((p) => p.includes(id) ? p.filter((x) => x !== id) : [...p, id]),
     toggleSelectAll: () => {

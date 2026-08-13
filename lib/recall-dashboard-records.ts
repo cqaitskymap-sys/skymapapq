@@ -95,14 +95,14 @@ export function applyRecallDashboardFilters(
   }
   if (f.product) {
     const p = f.product.toLowerCase();
-    results = results.filter((r) => r.product_name.toLowerCase().includes(p));
+    results = results.filter((r) => (r.product_name || '').toLowerCase().includes(p));
   }
   if (f.batch_number) {
-    results = results.filter((r) => r.batch_number.includes(f.batch_number!));
+    results = results.filter((r) => (r.batch_number || '').includes(f.batch_number!));
   }
   if (f.market_region) {
     const m = f.market_region.toLowerCase();
-    results = results.filter((r) => r.market_region.toLowerCase().includes(m));
+    results = results.filter((r) => (r.market_region || '').toLowerCase().includes(m));
   }
   if (f.date_from) {
     results = results.filter((r) => r.recall_date >= f.date_from!);
@@ -113,10 +113,10 @@ export function applyRecallDashboardFilters(
   if (f.search) {
     const s = f.search.toLowerCase();
     results = results.filter((r) =>
-      r.recall_number.toLowerCase().includes(s)
-      || r.product_name.toLowerCase().includes(s)
-      || r.batch_number.toLowerCase().includes(s)
-      || r.market_region.toLowerCase().includes(s));
+      (r.recall_number || '').toLowerCase().includes(s)
+      || (r.product_name || '').toLowerCase().includes(s)
+      || (r.batch_number || '').toLowerCase().includes(s)
+      || (r.market_region || '').toLowerCase().includes(s));
   }
   return results;
 }

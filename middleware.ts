@@ -19,12 +19,13 @@ async function hasValidSession(request: NextRequest): Promise<boolean> {
   if (!token) return false;
 
   // Emulator bypass only on local hosts — never on shared preview/staging.
+  // Still require a JWT-shaped cookie so empty/garbage values cannot unlock routes.
   if (
     process.env.NODE_ENV !== 'production'
     && process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATOR === 'true'
     && isLocalEmulatorHost(request)
   ) {
-    return true;
+    return token.split('.').length === 3;
   }
 
   const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
@@ -35,6 +36,8 @@ async function hasValidSession(request: NextRequest): Promise<boolean> {
       audience: projectId,
       algorithms: ['RS256'],
     });
+    // Custom claim set by Cloud Functions (createAdminUser / updateAdminUser).
+    // Missing claim is allowed for legacy sessions; explicit false blocks access.
     return payload.active !== false;
   } catch {
     return false;
@@ -61,7 +64,14 @@ export async function middleware(request: NextRequest) {
   }
 
   if (isAuthRoute && sessionIsValid) {
-    return NextResponse.redirect(new URL('/launcher', request.url));
+    const redirectParam = request.nextUrl.searchParams.get('redirect');
+    const safeRedirect = redirectParam
+      && redirectParam.startsWith('/')
+      && !redirectParam.startsWith('//')
+      && !AUTH_ROUTES.some((route) => redirectParam === route || redirectParam.startsWith(`${route}/`))
+      ? redirectParam
+      : '/launcher';
+    return NextResponse.redirect(new URL(safeRedirect, request.url));
   }
 
   return NextResponse.next();

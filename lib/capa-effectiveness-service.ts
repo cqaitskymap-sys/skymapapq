@@ -6,7 +6,6 @@ import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import { listCapaCorrectiveActions } from '@/lib/capa-corrective-action-service';
 import { listCapaPreventiveActions } from '@/lib/capa-preventive-action-service';
 import {
-  buildEffectivenessIdFallback,
   canApproveCriticalCapaEffectiveness,
   canCapaCloseFromEffectiveness,
   CAPA_EFFECTIVENESS_MODULE,
@@ -107,7 +106,7 @@ export async function assertCapaReadyForEffectiveness(capaId: string): Promise<C
 
 export async function generateEffectivenessId(): Promise<string> {
   const year = new Date().getFullYear();
-  if (!isFirebaseConfigured()) return buildEffectivenessIdFallback(year, 1);
+  if (!isFirebaseConfigured()) throw new Error('Firebase is not configured');
   try {
     const prefix = `EFF-CAPA/${year}/`;
     const snap = await getDocs(query(
@@ -119,13 +118,13 @@ export async function generateEffectivenessId(): Promise<string> {
     ));
     if (!snap.empty) {
       const last = String(snap.docs[0].data().effectiveness_id || '');
-      return buildEffectivenessIdFallback(year, parseInt(last.split('/').pop() || '0', 10) + 1);
+      return `EFF-CAPA/${year}/${String(parseInt(last.split('/').pop() || '0', 10) + 1).padStart(4, '0')}`;
     }
   } catch {
     const snap = await getDocs(collection(getFirebaseFirestore(), CAPA_COLLECTIONS.effectiveness));
-    return buildEffectivenessIdFallback(year, snap.size + 1);
+    return `EFF-CAPA/${year}/${String(snap.size + 1).padStart(4, '0')}`;
   }
-  return buildEffectivenessIdFallback(year, 1);
+  throw new Error('Unable to generate effectiveness ID from backend.');
 }
 
 export async function getCapaEffectivenessReview(capaId: string): Promise<CapaEffectiveness | null> {
@@ -258,7 +257,7 @@ function buildReviewPayload(
   const result = input.effectiveness_result || computeAutoEffectivenessResult({ ...input, effectiveness_score: score });
 
   return {
-    effectiveness_id: existing?.effectiveness_id || effectivenessId || buildEffectivenessIdFallback(new Date().getFullYear(), 1),
+    effectiveness_id: existing?.effectiveness_id || effectivenessId || '',
     capa_id: capa.id,
     capa_number: capa.capa_number,
     source_type: capa.capa_source,
@@ -504,9 +503,8 @@ export async function uploadCapaEffectivenessEvidencePlaceholder(
   description: string,
   actor: CapaEffectivenessActor,
 ): Promise<void> {
-  await audit(actor, 'EFFECTIVENESS_EVIDENCE_UPLOADED', capaId, `${fileName}: ${description}`);
-  const capa = await getCapaById(capaId);
-  if (capa) await notify('Effectiveness Evidence', `Evidence uploaded for ${capa.capa_number}: ${fileName}`, capaId, capa.qa_reviewer || capa.created_by);
+  await audit(actor, 'EFFECTIVENESS_EVIDENCE_UPLOAD_BLOCKED', capaId, `${fileName}: ${description}`);
+  throw new Error('CAPA effectiveness evidence upload backend is not implemented. Configure real file upload first.');
 }
 
 export async function assertEffectivenessApprovedForCapaClosure(capaId: string): Promise<void> {

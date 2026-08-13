@@ -17,7 +17,6 @@ import {
   cpvProductFormSchema,
   CPV_PRODUCT_STATUSES,
   CPV_REVIEW_FREQUENCIES,
-  CPV_LIFECYCLE_STATUSES,
   type CpvProductFormData,
   type CpvProductRecord,
 } from '@/lib/cpv-product-master';
@@ -83,13 +82,13 @@ const emptyDefaults: CpvProductFormData = {
   targetValue: '',
   samplingPlan: '',
   testingFrequency: '',
-  cpvStatus: 'Draft',
+  cpvStatus: 'Active',
   cpvStartDate: today(),
   cpvReviewFrequency: 'Yearly',
-  cpvOwner: '',
+  cpvOwner: 'QA Reviewer',
   qaReviewer: '',
   remarks: '',
-  changeReason: '',
+  changeReason: 'Add Product to CPV',
   linkedCppParameterIds: [],
   linkedCqaParameterIds: [],
 };
@@ -164,12 +163,12 @@ export function CpvProductFormSheet({
         cpvOwner: editing.cpvOwner,
         qaReviewer: editing.qaReviewer,
         remarks: editing.remarks,
-        changeReason: '',
+        changeReason: 'Update CPV Product',
         linkedCppParameterIds: editing.linkedCppParameterIds || [],
         linkedCqaParameterIds: editing.linkedCqaParameterIds || [],
       });
     } else {
-      form.reset({ ...emptyDefaults, cpvStartDate: today() });
+      form.reset({ ...emptyDefaults, cpvStartDate: today(), changeReason: 'Add Product to CPV' });
     }
   }, [open, editing, form]);
 
@@ -186,11 +185,14 @@ export function CpvProductFormSheet({
   };
 
   const submit = form.handleSubmit(async (values) => {
-    await onSubmit(values);
+    await onSubmit({
+      ...values,
+      changeReason: values.changeReason?.trim() || (editing ? 'Update CPV Product' : 'Add Product to CPV'),
+    });
   });
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
       <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{editing ? 'Edit CPV Product' : 'Add Product to CPV'}</SheetTitle>
@@ -240,12 +242,6 @@ export function CpvProductFormSheet({
               <FormField control={form.control} name="brandName" render={({ field }) => (
                 <FormItem><FormLabel>Brand Name</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
-              <FormField control={form.control} name="productCategory" render={({ field }) => (
-                <FormItem><FormLabel>Category</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="productFamily" render={({ field }) => (
-                <FormItem><FormLabel>Product Family</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
               <FormField control={form.control} name="strength" render={({ field }) => (
                 <FormItem><FormLabel>Strength *</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
               )} />
@@ -264,9 +260,6 @@ export function CpvProductFormSheet({
               <FormField control={form.control} name="packSize" render={({ field }) => (
                 <FormItem><FormLabel>Pack Size</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
-              <FormField control={form.control} name="packType" render={({ field }) => (
-                <FormItem><FormLabel>Pack Type</FormLabel><FormControl><Input {...field} placeholder="e.g. Blister, Vial" /></FormControl></FormItem>
-              )} />
               <FormField control={form.control} name="market" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Market</FormLabel>
@@ -278,36 +271,6 @@ export function CpvProductFormSheet({
                   </Select>
                 </FormItem>
               )} />
-              <FormField control={form.control} name="manufacturingSite" render={({ field }) => (
-                <FormItem><FormLabel>Manufacturing Site</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="businessUnit" render={({ field }) => (
-                <FormItem><FormLabel>Business Unit</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="department" render={({ field }) => (
-                <FormItem><FormLabel>Department</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="lifecycleStatus" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Lifecycle</FormLabel>
-                  <Select value={field.value || '__none'} onValueChange={(v) => field.onChange(v === '__none' ? '' : v)}>
-                    <FormControl><SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger></FormControl>
-                    <SelectContent>
-                      <SelectItem value="__none">—</SelectItem>
-                      {CPV_LIFECYCLE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </FormItem>
-              )} />
-              <FormField control={form.control} name="version" render={({ field }) => (
-                <FormItem><FormLabel>Version</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="revision" render={({ field }) => (
-                <FormItem><FormLabel>Revision</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="effectiveDate" render={({ field }) => (
-                <FormItem><FormLabel>Effective Date</FormLabel><FormControl><Input type="date" {...field} /></FormControl></FormItem>
-              )} />
               <FormField control={form.control} name="shelfLife" render={({ field }) => (
                 <FormItem><FormLabel>Shelf Life</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
@@ -317,12 +280,6 @@ export function CpvProductFormSheet({
               <FormField control={form.control} name="standardBatchSize" render={({ field }) => (
                 <FormItem><FormLabel>Standard Batch Size</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
-              <FormField control={form.control} name="productionLine" render={({ field }) => (
-                <FormItem><FormLabel>Production Line</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="manufacturingArea" render={({ field }) => (
-                <FormItem><FormLabel>Manufacturing Area</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
               <FormField control={form.control} name="manufacturingLicenseNumber" render={({ field }) => (
                 <FormItem><FormLabel>Mfg License No.</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
@@ -330,7 +287,7 @@ export function CpvProductFormSheet({
                 <FormItem><FormLabel>MFR Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="bmrNumber" render={({ field }) => (
-                <FormItem><FormLabel>BMR / MBR</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+                <FormItem><FormLabel>BMR</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="bprNumber" render={({ field }) => (
                 <FormItem><FormLabel>BPR Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
@@ -338,70 +295,16 @@ export function CpvProductFormSheet({
               <FormField control={form.control} name="specificationNumber" render={({ field }) => (
                 <FormItem><FormLabel>Specification Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
-              <FormField control={form.control} name="specificationVersion" render={({ field }) => (
-                <FormItem><FormLabel>Spec Version</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="lowerSpecificationLimit" render={({ field }) => (
-                <FormItem><FormLabel>LSL</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="upperSpecificationLimit" render={({ field }) => (
-                <FormItem><FormLabel>USL</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="targetValue" render={({ field }) => (
-                <FormItem><FormLabel>Target</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
               <FormField control={form.control} name="stpNumber" render={({ field }) => (
                 <FormItem><FormLabel>STP Number</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="cpvStartDate" render={({ field }) => (
-                <FormItem><FormLabel>CPV Start Date *</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>
-              )} />
-              <FormField control={form.control} name="cpvReviewFrequency" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>CPV Review Frequency *</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                    <SelectContent>
-                      {CPV_REVIEW_FREQUENCIES.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
               )} />
               <FormField control={form.control} name="cpvOwner" render={({ field }) => (
                 <FormItem><FormLabel>CPV Owner *</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
               )} />
-              <FormField control={form.control} name="qaReviewer" render={({ field }) => (
-                <FormItem><FormLabel>QA Reviewer</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
-              )} />
-              <FormField control={form.control} name="cpvStatus" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>CPV Status</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
-                    <SelectContent>
-                      {CPV_PRODUCT_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </FormItem>
-              )} />
             </div>
 
-            <FormField control={form.control} name="manufacturingProcess" render={({ field }) => (
-              <FormItem><FormLabel>Manufacturing Process</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-            )} />
-            <FormField control={form.control} name="description" render={({ field }) => (
-              <FormItem><FormLabel>Description</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-            )} />
             <FormField control={form.control} name="remarks" render={({ field }) => (
               <FormItem><FormLabel>Remarks</FormLabel><FormControl><Textarea rows={2} {...field} /></FormControl></FormItem>
-            )} />
-            <FormField control={form.control} name="changeReason" render={({ field }) => (
-              <FormItem>
-                <FormLabel>Change Reason * (ALCOA+ / Part 11)</FormLabel>
-                <FormControl><Textarea rows={2} placeholder="Describe why this create/update is being performed" {...field} /></FormControl>
-                <FormMessage />
-              </FormItem>
             )} />
 
             <div className="flex justify-end gap-2 pt-2">

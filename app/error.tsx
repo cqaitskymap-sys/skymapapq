@@ -30,7 +30,7 @@ export default function Error({
         <div className="flex gap-3 justify-center">
           <Button onClick={reset} className="bg-blue-600 hover:bg-blue-700">Try Again</Button>
           <Button asChild variant="outline">
-            <Link href="/dashboard">Go to Dashboard</Link>
+            <Link href="/launcher">Go to Launcher</Link>
           </Button>
         </div>
       </div>

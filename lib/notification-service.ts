@@ -145,25 +145,16 @@ export async function sendInAppNotification(
 export async function sendEmailNotificationPlaceholder(
   input: CreateNotificationInput & { subject: string },
 ): Promise<{ success: boolean; message: string }> {
-  console.info('[Email placeholder]', input.subject, input.message);
-  const record = await createNotification({
-    ...input,
-    notificationChannel: 'Email',
-    title: input.subject,
+  await createAuditLog({
+    moduleName: input.moduleName,
+    collectionName: NOTIFICATIONS_COLLECTION,
+    recordId: input.recordId,
+    actionType: 'Update',
+    actionDescription: 'Email notification blocked: backend email provider not configured',
+    user: { id: input.userId, name: input.userId },
+    status: 'Failed',
   });
-  if (!record) {
-    await createAuditLog({
-      moduleName: input.moduleName,
-      collectionName: NOTIFICATIONS_COLLECTION,
-      recordId: input.recordId,
-      actionType: 'Update',
-      actionDescription: 'Email notification failed (placeholder)',
-      user: { id: input.userId, name: input.userId },
-      status: 'Failed',
-    });
-    return { success: false, message: 'Failed to queue email notification' };
-  }
-  return { success: true, message: 'Email notification queued (placeholder — integrate SMTP/API later)' };
+  return { success: false, message: 'Email provider is not configured on backend.' };
 }
 
 export async function markNotificationAsRead(

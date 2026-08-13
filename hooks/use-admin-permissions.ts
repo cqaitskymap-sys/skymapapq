@@ -6,7 +6,6 @@ import {
   hasPermission, normalizeRole, canManageRoles, canManagePermissions,
   canDeleteRecords, canChangeSystemSettings, canRestoreBackup,
   canManageUsers, canManageMasterData, isReadOnlyRole, canAccessAdminPanel,
-  getDefaultPermissionMatrix,
   type AdminModule, type PermissionAction,
 } from '@/lib/permissions';
 import { resolveUserPermissions } from '@/services/permissionService';
@@ -37,7 +36,7 @@ export function useAdminPermissions() {
           updatedBy: 'system',
         });
       } catch {
-        setPermissions(getDefaultPermissionMatrix(role));
+        setPermissions(null);
       } finally {
         setLoading(false);
       }

@@ -5,15 +5,11 @@
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
-import { getFirestore, type Firestore, type DocumentData } from 'firebase-admin/firestore';
-import { getStorage } from 'firebase-admin/storage';
+
+import { type Firestore, type DocumentData } from 'firebase-admin/firestore';
+import { getAdminAuth, getAdminFirestore, getAdminStorage } from './admin-app';
 import * as logger from 'firebase-functions/logger';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -95,8 +91,7 @@ function assertViewer(actor: DocumentData | undefined, role: string) {
 
 async function resolveActor(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const snap = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = snap.data();
   return {
@@ -216,7 +211,7 @@ async function runSystemHealthScan(firestore: Firestore): Promise<{
 
   // --- Infrastructure ---
   {
-    const authProbe = await timed(() => getAuth().listUsers(1));
+    const authProbe = await timed(() => getAdminAuth().listUsers(1));
     checks.push({
       id: 'infra_auth',
       name: 'Firebase Authentication',
@@ -243,7 +238,7 @@ async function runSystemHealthScan(firestore: Firestore): Promise<{
   {
     const start = Date.now();
     try {
-      const bucket = getStorage().bucket();
+      const bucket = getAdminStorage().bucket();
       const [exists] = await bucket.exists();
       const latencyMs = Date.now() - start;
       checks.push({
@@ -648,8 +643,7 @@ export const scheduledSystemHealthCheck = onSchedule(
     memory: '1GiB',
   },
   async () => {
-    initializeAdmin();
-    const firestore = getFirestore();
+        const firestore = getAdminFirestore();
     try {
       const result = await runSystemHealthScan(firestore);
       const now = new Date().toISOString();

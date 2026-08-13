@@ -128,6 +128,9 @@ function CreateCapaInner() {
       setPreviewNumber(num);
       setProducts(prods);
       setOwners(own);
+      if (!num) {
+        toast.error('CAPA numbering backend configuration is not available.');
+      }
       const source = searchParams.get('source');
       if (source && CAPA_SOURCES.includes(source as typeof CAPA_SOURCES[number])) {
         form.setValue('capa_source', source as CapaCreateInput['capa_source']);
@@ -223,9 +226,13 @@ function CreateCapaInner() {
   const handleAttachment = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const att = await uploadCapaAttachmentPlaceholder(draftId || 'draft', file.name, actor);
-    setAttachments((prev) => [...prev, att]);
-    toast.success('Attachment placeholder added');
+    try {
+      const att = await uploadCapaAttachmentPlaceholder(draftId || 'draft', file.name, actor);
+      setAttachments((prev) => [...prev, att]);
+      toast.success('Attachment uploaded');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Attachment upload failed');
+    }
     e.target.value = '';
   };
 
@@ -249,7 +256,7 @@ function CreateCapaInner() {
           <Link href="/qms/capa" className="inline-flex items-center gap-1 hover:text-foreground">
             <ArrowLeft className="h-4 w-4" /> Back to Dashboard
           </Link>
-          <span className="ml-auto font-mono text-blue-700">{previewNumber || 'CAPA/QA/YYYY/0001'}</span>
+          <span className="ml-auto font-mono text-blue-700">{previewNumber || 'Number not available from backend'}</span>
         </div>
 
         {autoRules.head_qa_approval_required && (

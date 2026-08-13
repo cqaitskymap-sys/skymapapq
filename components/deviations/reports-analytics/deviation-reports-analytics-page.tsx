@@ -28,7 +28,6 @@ import {
   logReportPreviewed,
   previewDeviationReport,
 } from '@/lib/deviation-reports-service';
-import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { KpiCard } from '@/components/cpv/cpv-ui';
 import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
@@ -224,26 +223,18 @@ export function DeviationReportsAnalyticsPage() {
       updated_at: new Date().toISOString(),
     } as DeviationReportRecord;
 
-    const rows = analytics?.previewRows ?? [];
-    downloadCsv(
-      `${report.report_number.replace(/\//g, '-')}.${type === 'Excel' ? 'csv' : 'csv'}`,
-      PREVIEW_COLUMNS.map((c) => c.header),
-      rows.map((r) => PREVIEW_COLUMNS.map((c) => String(r[c.key as keyof ReportPreviewRow] ?? ''))),
-    );
+    try {
+      if (savedReport) {
+        await exportDeviationReport(savedReport, type, actor);
+        await logReportDownloaded(actor, savedReport.id, savedReport.report_number);
+      } else {
+        await exportDeviationReport(report, type, actor);
+      }
 
-    if (savedReport) {
-      await exportDeviationReport(savedReport, type, actor);
-      await logReportDownloaded(actor, savedReport.id, savedReport.report_number);
-    } else {
-      await exportDeviationReport(report, type, actor);
-    }
-
-    if (type === 'PDF') {
-      setShowPdf(true);
-      setTimeout(() => printPage(), 300);
-      toast.success('PDF export placeholder — print dialog opened');
-    } else {
-      toast.success(`${type} export placeholder downloaded (audit logged)`);
+      if (type === 'PDF') setShowPdf(true);
+      toast.success(`${type} export requested via backend`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Deviation report export is not available.');
     }
   };
 
@@ -259,7 +250,7 @@ export function DeviationReportsAnalyticsPage() {
       key: 'actions',
       header: 'Action',
       render: (r: DeviationReportRecord) => canExport ? (
-        <Button variant="ghost" size="sm" onClick={() => void logReportDownloaded(actor, r.id, r.report_number).then(() => toast.success('Download placeholder (audit logged)'))}>
+        <Button variant="ghost" size="sm" onClick={() => void logReportDownloaded(actor, r.id, r.report_number).then(() => toast.success('Download request logged'))}>
           <Download className="h-4 w-4" />
         </Button>
       ) : null,

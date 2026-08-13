@@ -11,7 +11,7 @@ import { cpvPermissions } from '@/lib/cpv';
 import {
   summarizePackingRecords, buildPackingChartSeries, PM_MATERIAL_TYPES, PM_MATERIAL_CATEGORIES,
   PM_QC_STATUSES, PM_COMPLIANCE_STATUSES, PM_FORM_MATERIAL_OPTIONS, packingMaterialMonitoringFormSchema,
-  evaluateReconciliationStatus, calculateBalanceQuantity, isLabelCategory,
+  evaluateReconciliationStatus, isLabelCategory,
   type PackingMaterialMonitoringFormData, type PackingMaterialMonitoringRecord,
 } from '@/lib/cpv-packing-material-monitoring';
 import {
@@ -316,13 +316,6 @@ export function PackingMonitoringPage() {
   const batchNumbers = useMemo(() => Array.from(new Set(records.map((r) => r.batchNumber))), [records]);
 
   const formRecon = useMemo(() => evaluateReconciliationStatus(
-    Number(form.issuedQuantity) || 0,
-    Number(form.usedQuantity) || 0,
-    Number(form.rejectedQuantity) || 0,
-    Number(form.returnedQuantity) || 0,
-  ), [form.issuedQuantity, form.usedQuantity, form.rejectedQuantity, form.returnedQuantity]);
-
-  const formBalance = useMemo(() => calculateBalanceQuantity(
     Number(form.issuedQuantity) || 0,
     Number(form.usedQuantity) || 0,
     Number(form.rejectedQuantity) || 0,
@@ -970,69 +963,17 @@ export function PackingMonitoringPage() {
               </Select>
               {form.avlStatus && <div className="mt-1"><AvlBadge status={form.avlStatus} /></div>}
             </div>
+            <div><Label>AR Number *</Label><Input className="mt-1" value={form.arNumber || ''} onChange={(e) => setForm((f) => ({ ...f, arNumber: e.target.value }))} /></div>
             <div className="grid grid-cols-2 gap-3">
-              <div><Label>GRN Number</Label><Input className="mt-1" value={form.grnNumber || ''} onChange={(e) => setForm((f) => ({ ...f, grnNumber: e.target.value }))} /></div>
-              <div><Label>AR Number *</Label><Input className="mt-1" value={form.arNumber || ''} onChange={(e) => setForm((f) => ({ ...f, arNumber: e.target.value }))} /></div>
-              <div><Label>PO Number</Label><Input className="mt-1" value={form.purchaseOrderNumber || ''} onChange={(e) => setForm((f) => ({ ...f, purchaseOrderNumber: e.target.value }))} /></div>
-              <div><Label>Supplier Batch</Label><Input className="mt-1" value={form.supplierBatchNumber || ''} onChange={(e) => setForm((f) => ({ ...f, supplierBatchNumber: e.target.value }))} /></div>
-              <div><Label>Material Lot</Label><Input className="mt-1" value={form.materialLotNumber || ''} onChange={(e) => setForm((f) => ({ ...f, materialLotNumber: e.target.value }))} /></div>
-              <div><Label>Warehouse Location</Label><Input className="mt-1" value={form.warehouseLocation || ''} onChange={(e) => setForm((f) => ({ ...f, warehouseLocation: e.target.value }))} /></div>
-            </div>
-            <div className="rounded-md border p-3 space-y-2">
-              <p className="text-xs font-medium text-muted-foreground">Reconciliation</p>
-              <div className="grid grid-cols-2 gap-3">
-                <div><Label>Standard Qty *</Label><Input className="mt-1" type="number" value={form.issuedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, issuedQuantity: Number(e.target.value) }))} /></div>
-                <div><Label>Used *</Label><Input className="mt-1" type="number" value={form.usedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, usedQuantity: Number(e.target.value) }))} /></div>
-                <div><Label>Rejected</Label><Input className="mt-1" type="number" value={form.rejectedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, rejectedQuantity: Number(e.target.value) }))} /></div>
-                <div><Label>Returned</Label><Input className="mt-1" type="number" value={form.returnedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, returnedQuantity: Number(e.target.value) }))} /></div>
-                <div><Label>Balance</Label><Input className="mt-1" readOnly value={formBalance} /></div>
-                <div><Label>Recon Status</Label><div className="mt-2"><ReconBadge status={formRecon} /></div></div>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Accepted Qty</Label><Input className="mt-1" type="number" value={form.acceptedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, acceptedQuantity: Number(e.target.value) }))} /></div>
-              <div><Label>Quarantine Qty</Label><Input className="mt-1" type="number" value={form.quarantineQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, quarantineQuantity: Number(e.target.value) }))} /></div>
+              <div><Label>Standard Qty *</Label><Input className="mt-1" type="number" value={form.issuedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, issuedQuantity: Number(e.target.value) }))} /></div>
+              <div><Label>Issued Qty *</Label><Input className="mt-1" type="number" value={form.usedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, usedQuantity: Number(e.target.value) }))} /></div>
               <div><Label>Unit *</Label><Input className="mt-1" value={form.unit || ''} onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))} /></div>
-              <div><Label>QC Status *</Label>
-                <Select value={form.qcStatus || ''} onValueChange={(v) => setForm((f) => ({ ...f, qcStatus: v as PackingMaterialMonitoringFormData['qcStatus'] }))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>{PM_QC_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
               <div><Label>COA *</Label>
                 <Select value={form.coaAvailable || 'No'} onValueChange={(v) => setForm((f) => ({ ...f, coaAvailable: v as 'Yes' | 'No' }))}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="Yes">Yes</SelectItem><SelectItem value="No">No</SelectItem></SelectContent>
                 </Select>
               </div>
-              <div><Label>MFG *</Label><Input className="mt-1" type="date" value={form.mfgDate || ''} onChange={(e) => setForm((f) => ({ ...f, mfgDate: e.target.value }))} /></div>
-              <div><Label>EXP *</Label><Input className="mt-1" type="date" value={form.expDate || ''} onChange={(e) => setForm((f) => ({ ...f, expDate: e.target.value }))} /></div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Artwork Version</Label><Input className="mt-1" value={form.artworkVersion || ''} onChange={(e) => setForm((f) => ({ ...f, artworkVersion: e.target.value }))} /></div>
-              <div><Label>Barcode</Label><Input className="mt-1" value={form.barcode || ''} onChange={(e) => setForm((f) => ({ ...f, barcode: e.target.value }))} /></div>
-              <div><Label>QR Code</Label><Input className="mt-1" value={form.qrCode || ''} onChange={(e) => setForm((f) => ({ ...f, qrCode: e.target.value }))} /></div>
-              <div><Label>Artwork Verified</Label>
-                <Select value={form.artworkVerified || ''} onValueChange={(v) => setForm((f) => ({ ...f, artworkVerified: v as 'Yes' | 'No' }))}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-                  <SelectContent><SelectItem value="Yes">Yes</SelectItem><SelectItem value="No">No</SelectItem></SelectContent>
-                </Select>
-              </div>
-              <div><Label>Barcode Verified</Label>
-                <Select value={form.barcodeVerified || ''} onValueChange={(v) => setForm((f) => ({ ...f, barcodeVerified: v as 'Yes' | 'No' }))}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select" /></SelectTrigger>
-                  <SelectContent><SelectItem value="Yes">Yes</SelectItem><SelectItem value="No">No</SelectItem></SelectContent>
-                </Select>
-              </div>
-              <div><Label>Packaging Integrity</Label><Input className="mt-1" value={form.packagingIntegrity || ''} onChange={(e) => setForm((f) => ({ ...f, packagingIntegrity: e.target.value }))} /></div>
-              <div><Label>Damage Inspection</Label><Input className="mt-1" value={form.damageInspection || ''} onChange={(e) => setForm((f) => ({ ...f, damageInspection: e.target.value }))} /></div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Test Parameter</Label><Input className="mt-1" value={form.testParameter || ''} onChange={(e) => setForm((f) => ({ ...f, testParameter: e.target.value }))} /></div>
-              <div><Label>Test Unit</Label><Input className="mt-1" value={form.testUnit || ''} onChange={(e) => setForm((f) => ({ ...f, testUnit: e.target.value }))} /></div>
-              <div><Label>Observed Result</Label><Input className="mt-1" value={String(form.observedResult ?? '')} onChange={(e) => setForm((f) => ({ ...f, observedResult: e.target.value }))} /></div>
-              <div><Label>Lower Limit</Label><Input className="mt-1" type="number" value={form.lowerLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, lowerLimit: e.target.value === '' ? undefined : Number(e.target.value) }))} /></div>
-              <div><Label>Upper Limit</Label><Input className="mt-1" type="number" value={form.upperLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, upperLimit: e.target.value === '' ? undefined : Number(e.target.value) }))} /></div>
             </div>
             <div><Label>Test Result Summary</Label><Input className="mt-1" value={form.testResultSummary || ''} onChange={(e) => setForm((f) => ({ ...f, testResultSummary: e.target.value }))} /></div>
             <div><Label>Remarks</Label><Textarea className="mt-1" value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} /></div>

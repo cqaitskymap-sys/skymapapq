@@ -268,6 +268,9 @@ function CreateRiskAssessmentInner() {
       setDepartments(depts);
       setOwners(ownerList);
       setPreviewNumber(num);
+      if (!num) {
+        toast.error('Risk numbering backend configuration is not available.');
+      }
     } catch {
       toast.error('Failed to load form options');
     } finally {

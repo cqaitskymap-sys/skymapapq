@@ -338,11 +338,11 @@ export async function listOosRecords(filters?: OosFilters): Promise<OosRecord[]>
     if (filters?.department) results = results.filter((r) => r.department === filters.department);
     if (filters?.product_name) {
       const q = filters.product_name.toLowerCase();
-      results = results.filter((r) => r.product_name.toLowerCase().includes(q));
+      results = results.filter((r) => (r.product_name || '').toLowerCase().includes(q));
     }
-    if (filters?.batch_number) results = results.filter((r) => r.batch_number.includes(filters.batch_number!));
-    if (filters?.oos_number) results = results.filter((r) => r.oos_number.includes(filters.oos_number!));
-    if (filters?.test_name) results = results.filter((r) => r.test_name.toLowerCase().includes(filters.test_name!.toLowerCase()));
+    if (filters?.batch_number) results = results.filter((r) => (r.batch_number || '').includes(filters.batch_number!));
+    if (filters?.oos_number) results = results.filter((r) => (r.oos_number || '').includes(filters.oos_number!));
+    if (filters?.test_name) results = results.filter((r) => (r.test_name || '').toLowerCase().includes(filters.test_name!.toLowerCase()));
     if (filters?.capa_linked !== undefined) {
       results = results.filter((r) => Boolean(r.linked_capa_number) === filters.capa_linked);
     }
@@ -361,10 +361,10 @@ export async function listOosRecords(filters?: OosFilters): Promise<OosRecord[]>
     if (filters?.search) {
       const q = filters.search.toLowerCase();
       results = results.filter((r) =>
-        r.oos_number.toLowerCase().includes(q) ||
-        r.product_name.toLowerCase().includes(q) ||
-        r.batch_number.toLowerCase().includes(q) ||
-        r.test_name.toLowerCase().includes(q),
+        (r.oos_number || '').toLowerCase().includes(q) ||
+        (r.product_name || '').toLowerCase().includes(q) ||
+        (r.batch_number || '').toLowerCase().includes(q) ||
+        (r.test_name || '').toLowerCase().includes(q),
       );
     }
 

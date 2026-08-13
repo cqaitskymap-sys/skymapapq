@@ -130,9 +130,9 @@ export async function fetchCcDashboardData(
 
     const roleScoped = filterRecordsForRole(records, actor.role, actor.department, actor.id);
     const filtered = applyCcDashboardFilters(roleScoped, filters);
-    const baseRecords = filtered.length ? filtered : roleScoped;
+    const baseRecords = filtered;
     const riskMap = buildRiskMap(risks);
-    const metrics = computeCcDashboardMetrics(roleScoped);
+    const metrics = computeCcDashboardMetrics(filtered);
     const charts = buildCcDashboardCharts(baseRecords);
     const rows = baseRecords.map((r) => toDashboardRow(r, riskMap));
 
@@ -181,7 +181,11 @@ export async function logCcDashboardFilterApplied(actor: CcDashboardActor, filte
 }
 
 export async function logCcDashboardExport(actor: CcDashboardActor, type: 'PDF' | 'Excel') {
-  await audit(actor, type === 'PDF' ? 'PDF_EXPORT_CLICKED' : 'EXCEL_EXPORT_CLICKED', `${type} export placeholder`);
+  const action = type === 'PDF' ? 'PDF_EXPORT_BLOCKED' : 'EXCEL_EXPORT_CLICKED';
+  const detail = type === 'PDF'
+    ? 'PDF export blocked: backend export service is not configured'
+    : 'Excel export requested';
+  await audit(actor, action, detail);
 }
 
 export async function logCcChangeOpened(actor: CcDashboardActor, changeId: string, changeNumber: string) {
@@ -189,24 +193,7 @@ export async function logCcChangeOpened(actor: CcDashboardActor, changeId: strin
 }
 
 export function openCcDashboardPdfPlaceholder(data: CcDashboardData, userName: string) {
-  if (typeof window === 'undefined') return;
-  const w = window.open('', '_blank');
-  if (!w) return;
-  w.document.write(`
-    <html><head><title>Change Control Dashboard Export</title></head>
-    <body style="font-family:Arial,sans-serif;padding:24px">
-      <h1>Change Control Dashboard</h1>
-      <p>Exported by ${userName} at ${new Date().toLocaleString()}</p>
-      <h2>Summary</h2>
-      <ul>
-        <li>Total: ${data.metrics.total}</li>
-        <li>Open: ${data.metrics.open}</li>
-        <li>Closed: ${data.metrics.closed}</li>
-        <li>Overdue: ${data.metrics.overdue}</li>
-        <li>Critical: ${data.metrics.critical}</li>
-      </ul>
-      <p><em>PDF export placeholder — connect print stylesheet for production.</em></p>
-    </body></html>
-  `);
-  w.document.close();
+  void data;
+  void userName;
+  throw new Error('Change control dashboard PDF export backend is not configured.');
 }

@@ -159,7 +159,8 @@ export function LoginFormPanel() {
       setLoading(false);
     } else {
       toast.success('Welcome back!', { description: 'Opening module launcher...' });
-      const redirectTo = searchParams.get('redirect') || '/launcher';
+      const raw = searchParams.get('redirect') || '/launcher';
+      const redirectTo = raw.startsWith('/') && !raw.startsWith('//') ? raw : '/launcher';
       router.push(redirectTo);
     }
   };

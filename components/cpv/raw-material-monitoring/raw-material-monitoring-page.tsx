@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Plus, Download, Eye, Pencil, CheckCircle, Layers, Warehouse, FilterX, Printer, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { z } from 'zod';
 import { BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie } from 'recharts';
 import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
@@ -54,10 +53,6 @@ const FORM_CATEGORY_OPTIONS: Array<{ label: string; value: RawMaterialMonitoring
   { label: 'Excipients', value: 'Excipient' },
 ];
 
-const rawMaterialSaveSchema = z.object({
-  changeReason: z.string().trim().min(5, 'Change reason must be at least 5 characters'),
-});
-
 type RawMaterialSaveData = RawMaterialMonitoringFormData & { changeReason: string };
 
 type EsignAction = 'approve' | 'delete' | 'qa-override';
@@ -65,7 +60,7 @@ type EsignAction = 'approve' | 'delete' | 'qa-override';
 function buildRawMaterialExportRows(records: RawMaterialMonitoringRecord[]) {
   const headers = [
     'RM ID', 'Product Code', 'Product', 'Batch', 'Material Code', 'Material', 'Type',
-    'Vendor', 'AR No', 'GRN', 'Lot', 'Used Qty', 'Unit', 'QC Status', 'Compliance',
+    'Vendor', 'AR No', 'GRN', 'Lot', 'Issue Qty', 'Unit', 'QC Status', 'Compliance',
     'Risk', 'AVL', 'Review Status', 'MFG', 'EXP', 'Retest', 'OOS Ref', 'Deviation', 'CAPA',
   ];
   const rows = records.map((r) => [
@@ -308,7 +303,6 @@ export function RawMaterialMonitoringPage() {
       materialGrade: m.grade,
       specificationNumber: m.specificationNo,
       stpNumber: '',
-      storageCondition: m.storageCondition,
       unit: f.unit || 'kg',
     }));
   };
@@ -330,11 +324,20 @@ export function RawMaterialMonitoringPage() {
   const openCreate = () => {
     setEditing(null);
     setForm({
-      mfgDate: new Date().toISOString().split('T')[0],
-      expDate: new Date(Date.now() + 365 * 86400000).toISOString().split('T')[0],
+      mfgDate: '',
+      expDate: '',
+      retestDate: '',
+      grnNumber: '',
+      coaNumber: '',
+      materialLotNumber: '',
+      storageCondition: '',
+      testParameter: '',
+      testUnit: '',
+      lowerLimit: undefined,
+      upperLimit: undefined,
+      receivedQuantity: 0,
       qcStatus: 'Under Test',
       coaAvailable: 'No',
-      receivedQuantity: 0,
       issuedQuantity: 0,
       usedQuantity: 0,
       unit: 'kg',
@@ -352,17 +355,16 @@ export function RawMaterialMonitoringPage() {
   };
 
   const parseFormData = (): RawMaterialSaveData | null => {
-    const parsed = rawMaterialMonitoringFormSchema.safeParse(form);
+    const parsed = rawMaterialMonitoringFormSchema.safeParse({
+      ...form,
+      changeReason: form.changeReason || (editing ? 'Record updated' : 'Record created'),
+      observedResult: undefined,
+    });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message || 'Validation failed');
       return null;
     }
-    const reasonParsed = rawMaterialSaveSchema.safeParse({ changeReason: form.changeReason || '' });
-    if (!reasonParsed.success) {
-      toast.error(reasonParsed.error.issues[0]?.message || 'Change reason required');
-      return null;
-    }
-    return { ...parsed.data, changeReason: reasonParsed.data.changeReason };
+    return { ...parsed.data, changeReason: parsed.data.changeReason };
   };
 
   const saveForm = async () => {
@@ -591,7 +593,7 @@ export function RawMaterialMonitoringPage() {
     { key: 'materialName', header: 'Material' },
     { key: 'vendorName', header: 'Vendor' },
     { key: 'arNumber', header: 'AR No' },
-    { key: 'usedQuantity', header: 'Used' },
+    { key: 'usedQuantity', header: 'Issue Qty' },
     { key: 'complianceStatus', header: 'Compliance', render: (r) => <StatusBadge status={r.complianceStatus} /> },
     { key: 'riskLevel', header: 'Risk', render: (r) => <RiskBadge level={r.riskLevel} /> },
     { key: 'avlStatus', header: 'AVL', render: (r) => <AvlBadge status={r.avlStatus} /> },
@@ -867,10 +869,7 @@ export function RawMaterialMonitoringPage() {
                 <SelectContent>{filteredMaterials.map((m) => <SelectItem key={m.id} value={m.id || ''}>{m.materialName}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Material Grade</Label><Input className="mt-1" value={form.materialGrade || ''} onChange={(e) => setForm((f) => ({ ...f, materialGrade: e.target.value }))} /></div>
-              <div><Label>Storage Condition</Label><Input className="mt-1" value={form.storageCondition || ''} onChange={(e) => setForm((f) => ({ ...f, storageCondition: e.target.value }))} /></div>
-            </div>
+            <div><Label>Material Grade</Label><Input className="mt-1" value={form.materialGrade || ''} onChange={(e) => setForm((f) => ({ ...f, materialGrade: e.target.value }))} /></div>
             <div><Label>Vendor *</Label>
               <Select value={form.vendorId || ''} onValueChange={onVendorChange}>
                 <SelectTrigger className="mt-1"><SelectValue placeholder="Vendor" /></SelectTrigger>
@@ -882,26 +881,11 @@ export function RawMaterialMonitoringPage() {
               <div><Label>Manufacturer</Label><Input className="mt-1" value={form.manufacturerName || ''} onChange={(e) => setForm((f) => ({ ...f, manufacturerName: e.target.value }))} /></div>
               <div><Label>Supplier</Label><Input className="mt-1" value={form.supplierName || ''} onChange={(e) => setForm((f) => ({ ...f, supplierName: e.target.value }))} /></div>
             </div>
+            <div><Label>AR Number *</Label><Input className="mt-1" value={form.arNumber || ''} onChange={(e) => setForm((f) => ({ ...f, arNumber: e.target.value }))} /></div>
             <div className="grid grid-cols-2 gap-3">
-              <div><Label>GRN Number</Label><Input className="mt-1" value={form.grnNumber || ''} onChange={(e) => setForm((f) => ({ ...f, grnNumber: e.target.value }))} /></div>
-              <div><Label>AR Number *</Label><Input className="mt-1" value={form.arNumber || ''} onChange={(e) => setForm((f) => ({ ...f, arNumber: e.target.value }))} /></div>
-              <div><Label>COA Number</Label><Input className="mt-1" value={form.coaNumber || ''} onChange={(e) => setForm((f) => ({ ...f, coaNumber: e.target.value }))} /></div>
-              <div><Label>Material Lot</Label><Input className="mt-1" value={form.materialLotNumber || ''} onChange={(e) => setForm((f) => ({ ...f, materialLotNumber: e.target.value }))} /></div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>MFG Date *</Label><Input className="mt-1" type="month" value={(form.mfgDate || '').slice(0, 7)} onChange={(e) => setForm((f) => ({ ...f, mfgDate: e.target.value }))} /></div>
-              <div><Label>EXP Date *</Label><Input className="mt-1" type="month" value={(form.expDate || '').slice(0, 7)} onChange={(e) => setForm((f) => ({ ...f, expDate: e.target.value }))} /></div>
-              <div><Label>Retest Date</Label><Input className="mt-1" type="month" value={(form.retestDate || '').slice(0, 7)} onChange={(e) => setForm((f) => ({ ...f, retestDate: e.target.value }))} /></div>
-              <div><Label>Received Qty</Label><Input className="mt-1" type="number" value={form.receivedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, receivedQuantity: Number(e.target.value) }))} /></div>
               <div><Label>Standard Qty</Label><Input className="mt-1" type="number" value={form.issuedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, issuedQuantity: Number(e.target.value) }))} /></div>
-              <div><Label>Used Qty *</Label><Input className="mt-1" type="number" value={form.usedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, usedQuantity: Number(e.target.value) }))} /></div>
+              <div><Label>Issue Qty *</Label><Input className="mt-1" type="number" value={form.usedQuantity ?? ''} onChange={(e) => setForm((f) => ({ ...f, usedQuantity: Number(e.target.value) }))} /></div>
               <div><Label>Unit *</Label><Input className="mt-1" value={form.unit || ''} onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))} /></div>
-              <div><Label>QC Status *</Label>
-                <Select value={form.qcStatus || ''} onValueChange={(v) => setForm((f) => ({ ...f, qcStatus: v as RawMaterialMonitoringFormData['qcStatus'] }))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>{RM_QC_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
               <div><Label>COA Available *</Label>
                 <Select value={form.coaAvailable || 'No'} onValueChange={(v) => setForm((f) => ({ ...f, coaAvailable: v as 'Yes' | 'No' }))}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
@@ -913,24 +897,8 @@ export function RawMaterialMonitoringPage() {
               <div><Label>Spec No</Label><Input className="mt-1" value={form.specificationNumber || ''} onChange={(e) => setForm((f) => ({ ...f, specificationNumber: e.target.value }))} /></div>
               <div><Label>STP No</Label><Input className="mt-1" value={form.stpNumber || ''} onChange={(e) => setForm((f) => ({ ...f, stpNumber: e.target.value }))} /></div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Test Parameter</Label><Input className="mt-1" value={form.testParameter || ''} onChange={(e) => setForm((f) => ({ ...f, testParameter: e.target.value }))} /></div>
-              <div><Label>Test Unit</Label><Input className="mt-1" value={form.testUnit || ''} onChange={(e) => setForm((f) => ({ ...f, testUnit: e.target.value }))} /></div>
-              <div><Label>Observed Result</Label><Input className="mt-1" value={String(form.observedResult ?? '')} onChange={(e) => setForm((f) => ({ ...f, observedResult: e.target.value }))} /></div>
-              <div><Label>Lower Limit</Label><Input className="mt-1" type="number" value={form.lowerLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, lowerLimit: Number(e.target.value) }))} /></div>
-              <div><Label>Upper Limit</Label><Input className="mt-1" type="number" value={form.upperLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, upperLimit: Number(e.target.value) }))} /></div>
-            </div>
             <div><Label>Test Result Summary</Label><Input className="mt-1" value={form.testResultSummary || ''} onChange={(e) => setForm((f) => ({ ...f, testResultSummary: e.target.value }))} /></div>
             <div><Label>Remarks</Label><Textarea className="mt-1" value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} /></div>
-            <div>
-              <Label>Change Reason * (ALCOA+ / Part 11)</Label>
-              <Textarea
-                className="mt-1"
-                placeholder="Describe why this create/update is being performed"
-                value={form.changeReason || ''}
-                onChange={(e) => setForm((f) => ({ ...f, changeReason: e.target.value }))}
-              />
-            </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setFormOpen(false)}>Cancel</Button>
               <Button onClick={() => void saveForm()} disabled={submitting}>{submitting ? 'Saving...' : 'Save'}</Button>
@@ -961,7 +929,7 @@ export function RawMaterialMonitoringPage() {
                 <SelectContent>{receipts.map((r) => <SelectItem key={r.id} value={r.id}>{r.grn_number} — {r.material_name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div><Label>Used Quantity</Label><Input className="mt-1" type="number" value={warehouseUsedQty} onChange={(e) => setWarehouseUsedQty(e.target.value)} /></div>
+            <div><Label>Issue Quantity</Label><Input className="mt-1" type="number" value={warehouseUsedQty} onChange={(e) => setWarehouseUsedQty(e.target.value)} /></div>
             <div>
               <Label>Change Reason *</Label>
               <Input className="mt-1" value={warehouseReason} onChange={(e) => setWarehouseReason(e.target.value)} />
@@ -996,7 +964,7 @@ export function RawMaterialMonitoringPage() {
             </div>
           </div>
           <Table>
-            <TableHeader><TableRow><TableHead>Material</TableHead><TableHead>Used Qty</TableHead><TableHead>Remarks</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>Material</TableHead><TableHead>Issue Qty</TableHead><TableHead>Remarks</TableHead></TableRow></TableHeader>
             <TableBody>
               {bulkRows.map((row, i) => (
                 <TableRow key={row.material.id || i}>

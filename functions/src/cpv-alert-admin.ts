@@ -5,12 +5,10 @@
  * e-sign close/reject/escalate, CF-only writes.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
 
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
+import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
+
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -171,8 +169,7 @@ function assertEnum(value: string, allowed: readonly string[], field: string) {
 
 async function resolveActor(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+    const firestore = getAdminFirestore();
   const snap = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = snap.data();
   return {
@@ -363,7 +360,7 @@ async function loadAlert(firestore: Firestore, id: string) {
   return { snap, existing };
 }
 
-export const createAdminCpvAlert = onCall({ timeoutSeconds: 120 }, async (request) => {
+export const createAdminCpvAlert = onCall({ timeoutSeconds: 120, cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertManage(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -489,7 +486,7 @@ export const createAdminCpvAlert = onCall({ timeoutSeconds: 120 }, async (reques
   return record;
 });
 
-export const acknowledgeAdminCpvAlert = onCall(async (request) => {
+export const acknowledgeAdminCpvAlert = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertViewer(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -528,7 +525,7 @@ export const acknowledgeAdminCpvAlert = onCall(async (request) => {
   return { id, ...existing, ...updates };
 });
 
-export const assignAdminCpvAlert = onCall(async (request) => {
+export const assignAdminCpvAlert = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertManage(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -573,7 +570,7 @@ export const assignAdminCpvAlert = onCall(async (request) => {
   return { id, ...existing, ...updates };
 });
 
-export const linkAdminCpvAlert = onCall(async (request) => {
+export const linkAdminCpvAlert = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertManage(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -625,7 +622,7 @@ export const linkAdminCpvAlert = onCall(async (request) => {
   return { id, ...existing, ...updates };
 });
 
-export const investigateAdminCpvAlert = onCall(async (request) => {
+export const investigateAdminCpvAlert = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertManage(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -660,7 +657,7 @@ export const investigateAdminCpvAlert = onCall(async (request) => {
   return { id, ...existing, ...updates };
 });
 
-export const closeAdminCpvAlert = onCall(async (request) => {
+export const closeAdminCpvAlert = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertManage(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -706,7 +703,7 @@ export const closeAdminCpvAlert = onCall(async (request) => {
   return { id, ...existing, ...updates };
 });
 
-export const rejectAdminCpvAlert = onCall(async (request) => {
+export const rejectAdminCpvAlert = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertManage(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -750,7 +747,7 @@ export const rejectAdminCpvAlert = onCall(async (request) => {
   return { id, ...existing, ...updates };
 });
 
-export const escalateAdminCpvAlert = onCall(async (request) => {
+export const escalateAdminCpvAlert = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertManage(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -825,7 +822,7 @@ export const escalateAdminCpvAlert = onCall(async (request) => {
   return { id, ...existing, ...updates };
 });
 
-export const saveAdminAlertRule = onCall(async (request) => {
+export const saveAdminAlertRule = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertConfigure(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -914,7 +911,7 @@ export const saveAdminAlertRule = onCall(async (request) => {
   return record;
 });
 
-export const deactivateAdminAlertRule = onCall(async (request) => {
+export const deactivateAdminAlertRule = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertConfigure(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -945,7 +942,7 @@ export const deactivateAdminAlertRule = onCall(async (request) => {
   return { id, ...existing, ...updates };
 });
 
-export const softDeleteAdminCpvAlert = onCall(async (request) => {
+export const softDeleteAdminCpvAlert = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertManage(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -975,7 +972,7 @@ export const softDeleteAdminCpvAlert = onCall(async (request) => {
   return { id, ...existing, ...updates };
 });
 
-export const logAdminCpvAlertExport = onCall(async (request) => {
+export const logAdminCpvAlertExport = onCall({ cors: true }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertExport(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;

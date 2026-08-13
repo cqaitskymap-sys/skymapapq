@@ -47,6 +47,7 @@ const navItems: NavItem[] = [
       { label: 'Designation Master', href: '/admin/designations', icon: BadgeCheck },
       { label: 'Company / Site Master', href: '/admin/company-site', icon: Factory },
       { label: 'Product Master', href: '/admin/products', icon: FlaskConical },
+      { label: 'Equipment Master', href: '/admin/equipment', icon: Wrench },
       { label: 'Parameter Master', href: '/admin/parameters', icon: SlidersHorizontal },
       { label: 'Workflow Configuration', href: '/admin/workflows', icon: GitBranch },
       { label: 'Approval Matrix', href: '/admin/approval-matrix', icon: CheckSquare },
@@ -168,12 +169,12 @@ const navItems: NavItem[] = [
     matchPrefix: '/dashboard/master',
     children: [
       { label: 'Product Master', href: '/admin/products', icon: FlaskConical },
+      { label: 'Equipment Master', href: '/admin/equipment', icon: Wrench },
       { label: 'Material Master', href: '/dashboard/master/materials', icon: Beaker },
       { label: 'Vendor Master', href: '/qms/vendors', icon: TruckIcon },
     ],
   },
   { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
-  { label: 'AI Analytics', href: '/dashboard/ai-analytics', icon: Brain },
   { label: 'Notifications', href: '/dashboard/notifications', icon: Bell },
 ];
 

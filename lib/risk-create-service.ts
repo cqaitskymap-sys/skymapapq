@@ -8,7 +8,6 @@ import {
   RISK_CONTROLS_COLLECTION,
   buildRiskAssessmentId,
   calculateRiskAssessment,
-  generateRiskNumber,
   type RiskControlRecord,
 } from '@/lib/cpv-risk-assessment-records';
 import { fetchRiskAssessmentRecords } from '@/lib/cpv-risk-assessment-service';
@@ -19,7 +18,6 @@ import { normalizeRole } from '@/lib/permissions';
 import {
   RISK_CREATE_MODULE,
   RISK_REGISTER_COLLECTION,
-  buildRiskNumberFallback,
   calculateResidualRisk,
   computeRiskCreateAutoRules,
   getRiskSourceLookupConfig,
@@ -180,8 +178,7 @@ export async function fetchRiskCreateOwners(): Promise<RiskOwnerOption[]> {
 }
 
 export async function generateRiskNumberPreview(): Promise<string> {
-  const year = new Date().getFullYear();
-  if (!isFirebaseConfigured()) return buildRiskNumberFallback(year, 1);
+  if (!isFirebaseConfigured()) return '';
   try {
     const result = await generateDocumentNumber('RISK', 'Risk Assessment', {
       date: new Date(),
@@ -191,19 +188,7 @@ export async function generateRiskNumberPreview(): Promise<string> {
   } catch (e) {
     console.error('generateRiskNumberPreview document numbering', e);
   }
-  try {
-    const records = await fetchRiskAssessmentRecords(500);
-    const prefix = `RISK/${year}/`;
-    const seqs = records
-      .map((r) => r.riskNumber)
-      .filter((n) => n.startsWith(prefix))
-      .map((n) => parseInt(n.split('/').pop() || '0', 10))
-      .filter((n) => Number.isFinite(n));
-    const next = seqs.length ? Math.max(...seqs) + 1 : records.length + 1;
-    return buildRiskNumberFallback(year, next);
-  } catch {
-    return buildRiskNumberFallback(year, 1);
-  }
+  return '';
 }
 
 export async function lookupRiskSourceReference(
@@ -545,15 +530,13 @@ export async function saveRiskAssessmentDraft(
     ? existingRecords.find((r) => r.id === draftId)?.riskNumber
     : undefined;
   if (!riskNumber) {
-    try {
-      const result = await generateDocumentNumber('RISK', 'Risk Assessment', {
-        date: new Date(),
-        increment: false,
-      });
-      riskNumber = result.number || undefined;
-    } catch { /* fallback below */ }
+    const result = await generateDocumentNumber('RISK', 'Risk Assessment', {
+      date: new Date(),
+      increment: false,
+    });
+    riskNumber = result.number || undefined;
   }
-  if (!riskNumber) riskNumber = generateRiskNumber(existingRecords.length);
+  if (!riskNumber) throw new Error('Risk numbering backend configuration is not available.');
 
   const payload = await buildRiskPayload(input, actor, riskNumber, 'Draft');
 
@@ -602,15 +585,13 @@ export async function submitRiskAssessmentCreate(
     : undefined;
 
   if (!riskNumber) {
-    try {
-      const result = await generateDocumentNumber('RISK', 'Risk Assessment', {
-        date: new Date(),
-        increment: true,
-      });
-      riskNumber = result.number || undefined;
-    } catch { /* fallback */ }
+    const result = await generateDocumentNumber('RISK', 'Risk Assessment', {
+      date: new Date(),
+      increment: true,
+    });
+    riskNumber = result.number || undefined;
   }
-  if (!riskNumber) riskNumber = generateRiskNumber(existingRecords.length);
+  if (!riskNumber) throw new Error('Risk numbering backend configuration is not available.');
 
   const payload = await buildRiskPayload(input, actor, riskNumber, 'Under Review');
 

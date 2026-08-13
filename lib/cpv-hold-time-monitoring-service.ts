@@ -26,7 +26,6 @@ import {
   evaluateHoldTimeStatus,
   evaluateHoldTimeRisk,
   evaluateStorageExcursion,
-  defaultAllowedForStage,
   type HoldTimeMonitoringFormData,
   type HoldTimeMonitoringRecord,
 } from '@/lib/cpv-hold-time-monitoring';
@@ -169,8 +168,8 @@ function normalizeHoldTimeRecord(raw: Record<string, unknown>): HoldTimeMonitori
 
 export { buildHoldTimeComputedFields };
 
-export async function fetchHoldTimeMaster(stage: string): Promise<{ allowed: number; unit: string }> {
-  if (!isFirebaseConfigured()) return defaultAllowedForStage(stage);
+export async function fetchHoldTimeMaster(stage: string): Promise<{ allowed: number; unit: string } | null> {
+  if (!isFirebaseConfigured()) return null;
   try {
     const snap = await getDocs(query(
       collection(getFirebaseFirestore(), HOLD_TIME_MASTER_COLLECTION),
@@ -183,11 +182,11 @@ export async function fetchHoldTimeMaster(stage: string): Promise<{ allowed: num
         where('stage', '==', stage),
         limit(1),
       ));
-      if (snap2.empty) return defaultAllowedForStage(stage);
+      if (snap2.empty) return null;
       const d = snap2.docs[0].data();
       return {
-        allowed: num(d.allowedHoldTime ?? d.allowed_hold_time ?? d.allowedTime, defaultAllowedForStage(stage).allowed),
-        unit: str(d.holdTimeUnit || d.unit, defaultAllowedForStage(stage).unit),
+        allowed: num(d.allowedHoldTime ?? d.allowed_hold_time ?? d.allowedTime),
+        unit: str(d.holdTimeUnit || d.unit, 'Hours'),
       };
     }
     const d = snap.docs[0].data();
@@ -196,7 +195,7 @@ export async function fetchHoldTimeMaster(stage: string): Promise<{ allowed: num
       unit: str(d.holdTimeUnit || d.unit, 'Hours'),
     };
   } catch {
-    return defaultAllowedForStage(stage);
+    return null;
   }
 }
 

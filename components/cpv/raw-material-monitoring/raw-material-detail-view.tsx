@@ -186,7 +186,7 @@ export function RawMaterialDetailView({ id }: { id: string }) {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-4">
-        <KpiCard label="Used Qty" value={`${record.usedQuantity} ${record.unit}`} tone="blue" />
+        <KpiCard label="Issue Qty" value={`${record.usedQuantity} ${record.unit}`} tone="blue" />
         <KpiCard label="Compliance" value={record.complianceStatus} tone={record.complianceStatus === 'Complies' ? 'green' : 'red'} />
         <KpiCard label="Risk Level" value={record.riskLevel} tone={record.riskLevel === 'Low' ? 'green' : 'red'} />
         <KpiCard label="OOS Ref" value={record.linkedOosNumber || '—'} tone="red" />

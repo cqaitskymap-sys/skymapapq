@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/contexts/auth-context';
 import { normalizeRole } from '@/lib/permissions';
-import { fetchWatermarkDashboardData, seedDefaultTemplates } from '@/lib/watermark-service';
+import { fetchWatermarkDashboardData } from '@/lib/watermark-service';
 import type {
   WatermarkTemplateRecord, WatermarkRuleRecord, WatermarkHistoryRecord,
   DocumentWatermarkRecord, WatermarkKpis, WatermarkCharts, WatermarkFilters, WatermarkActor,
@@ -31,7 +31,6 @@ export function useWatermarkManagement(initialFilters?: WatermarkFilters) {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [seeded, setSeeded] = useState(false);
 
   const actor: WatermarkActor = useMemo(() => ({
     id: user?.uid || 'anonymous',
@@ -51,10 +50,6 @@ export function useWatermarkManagement(initialFilters?: WatermarkFilters) {
         setMetrics(emptyWatermarkKpis()); setCharts(emptyWatermarkCharts());
         return;
       }
-      if (!seeded && canManageWatermarkTemplates(role)) {
-        await seedDefaultTemplates(actor);
-        setSeeded(true);
-      }
       const appliedFilters = deptOnly && actor.department
         ? { ...filters, department_only: actor.department }
         : filters;
@@ -71,7 +66,7 @@ export function useWatermarkManagement(initialFilters?: WatermarkFilters) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [filters, role, deptOnly, actor, seeded]);
+  }, [filters, role, deptOnly, actor]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 

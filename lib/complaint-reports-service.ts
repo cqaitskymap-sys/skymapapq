@@ -169,28 +169,12 @@ export async function exportComplaintReport(
   exportType: 'PDF' | 'Excel' | 'CSV',
   actor: ComplaintReportActor,
 ): Promise<{ fileUrl: string; error?: string }> {
-  const placeholderUrl = `/api/exports/complaint-reports/${report.id}/${exportType.toLowerCase()}`;
-  const fileName = `${report.report_number.replace(/\//g, '-')}.${exportType === 'Excel' ? 'xlsx' : exportType === 'PDF' ? 'pdf' : 'csv'}`;
-  if (isFirebaseConfigured() && report.id !== 'preview') {
-    try {
-      await updateDoc(doc(getFirebaseFirestore(), COMPLAINT_COLLECTIONS.reports, report.id), {
-        export_type: exportType,
-        file_url: placeholderUrl,
-        file_name: fileName,
-        report_status: 'Exported',
-        updated_at: nowIso(),
-      });
-    } catch (e) {
-      console.error('exportComplaintReport update', e);
-    }
-  }
-  const action = exportType === 'PDF' ? 'Exported PDF' : exportType === 'Excel' ? 'Exported Excel' : 'Exported CSV';
-  await audit(actor, action, report.id, `${report.report_number} — ${exportType} placeholder`, undefined, { fileName, placeholderUrl });
-  return { fileUrl: placeholderUrl };
+  await audit(actor, `${exportType} Export Blocked`, report.id, `${report.report_number} — backend export is not configured`);
+  throw new Error('Complaint report export backend is not configured.');
 }
 
 export async function logComplaintReportDownloaded(actor: ComplaintReportActor, reportId: string, reportNumber: string) {
-  await audit(actor, 'Complaint Report Downloaded', reportId, `Download placeholder — ${reportNumber}`);
+  await audit(actor, 'Complaint Report Download Blocked', reportId, `Backend export download unavailable — ${reportNumber}`);
 }
 
 export async function fetchComplaintReportProductOptions(): Promise<string[]> {

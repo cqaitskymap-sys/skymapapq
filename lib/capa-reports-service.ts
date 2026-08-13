@@ -233,7 +233,8 @@ export async function scheduleCapaReport(
     critical_only: form.critical_only,
   };
   const analytics = await previewCapaReport(filters);
-  const payload = mapCapaReportToRecord(form, analytics, actor, generateCapaReportNumber(new Date().getFullYear(), 0));
+  const existingCount = (await fetchCapaReportRecords()).length;
+  const payload = mapCapaReportToRecord(form, analytics, actor, generateCapaReportNumber(new Date().getFullYear(), existingCount));
   const nextRun = new Date();
   if (frequency === 'weekly') nextRun.setDate(nextRun.getDate() + 7);
   else if (frequency === 'monthly') nextRun.setMonth(nextRun.getMonth() + 1);
@@ -268,28 +269,8 @@ export async function exportCapaReport(
   exportType: 'PDF' | 'Excel' | 'CSV',
   actor: CapaReportActor,
 ): Promise<{ fileUrl: string; error?: string }> {
-  const placeholderUrl = `/api/exports/capa-reports/${report.id}/${exportType.toLowerCase()}`;
-  const fileName = `${report.report_number.replace(/\//g, '-')}.${exportType === 'Excel' ? 'xlsx' : exportType === 'PDF' ? 'pdf' : 'csv'}`;
-  if (isFirebaseConfigured()) {
-    try {
-      await updateDoc(doc(getFirebaseFirestore(), CAPA_COLLECTIONS.reports, report.id), {
-        export_type: exportType,
-        file_url: placeholderUrl,
-        file_name: fileName,
-        report_status: 'Exported',
-        updated_at: nowIso(),
-      });
-    } catch (e) {
-      console.error('exportCapaReport update', e);
-    }
-  }
-  const actionMap = {
-    PDF: 'PDF exported',
-    Excel: 'Excel exported',
-    CSV: 'CSV exported',
-  } as const;
-  await audit(actor, actionMap[exportType], report.id, `${report.report_number} — ${exportType} placeholder`, undefined, { fileName, placeholderUrl });
-  return { fileUrl: placeholderUrl };
+  await audit(actor, `${exportType} export blocked`, report.id, `${report.report_number} — backend export is not configured`);
+  throw new Error('CAPA report export backend is not configured.');
 }
 
 export async function logCapaReportPrinted(actor: CapaReportActor, reportId: string, reportNumber: string) {
@@ -297,7 +278,7 @@ export async function logCapaReportPrinted(actor: CapaReportActor, reportId: str
 }
 
 export async function logCapaReportDownloaded(actor: CapaReportActor, reportId: string, reportNumber: string) {
-  await audit(actor, 'report exported', reportId, `Download placeholder — ${reportNumber}`);
+  await audit(actor, 'report download blocked', reportId, `Backend export download unavailable — ${reportNumber}`);
 }
 
 export async function fetchCapaReportProductOptions(): Promise<string[]> {

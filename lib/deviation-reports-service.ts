@@ -156,28 +156,12 @@ export async function exportDeviationReport(
   exportType: 'PDF' | 'Excel' | 'CSV',
   actor: ReportActor,
 ): Promise<{ fileUrl: string; error?: string }> {
-  const placeholderUrl = `/api/exports/deviation-reports/${report.id}/${exportType.toLowerCase()}`;
-  const fileName = `${report.report_number.replace(/\//g, '-')}.${exportType === 'Excel' ? 'xlsx' : exportType === 'PDF' ? 'pdf' : 'csv'}`;
-  if (isFirebaseConfigured()) {
-    try {
-      await updateDoc(doc(getFirebaseFirestore(), DEVIATION_COLLECTIONS.reports, report.id), {
-        export_type: exportType,
-        file_url: placeholderUrl,
-        file_name: fileName,
-        report_status: 'Exported',
-        updated_at: nowIso(),
-      });
-    } catch (e) {
-      console.error('exportDeviationReport update', e);
-    }
-  }
-  const action = exportType === 'PDF' ? 'exported PDF' : exportType === 'Excel' ? 'exported Excel' : 'exported CSV';
-  await audit(actor, action, report.id, `${report.report_number} — ${exportType} placeholder`, undefined, { fileName, placeholderUrl });
-  return { fileUrl: placeholderUrl };
+  await audit(actor, `${exportType} export blocked`, report.id, `${report.report_number} — backend export is not configured`);
+  throw new Error('Deviation report export backend is not configured.');
 }
 
 export async function logReportDownloaded(actor: ReportActor, reportId: string, reportNumber: string) {
-  await audit(actor, 'downloaded', reportId, `Download placeholder — ${reportNumber}`);
+  await audit(actor, 'download blocked', reportId, `Backend export download unavailable — ${reportNumber}`);
 }
 
 export async function fetchReportProductOptions(): Promise<string[]> {

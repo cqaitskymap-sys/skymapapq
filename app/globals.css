@@ -454,4 +454,272 @@
     width: 100%;
     opacity: 0.65;
   }
+
+  .skymap-toast,
+  .skymap-toast::after,
+  .skymap-toast [data-icon] {
+    animation: none !important;
+  }
+}
+
+/* ── Skymap stylish toasts (Sonner) ─────────────────────────────── */
+[data-sonner-toaster] {
+  --width: min(24rem, calc(100vw - 2rem));
+  font-family: var(--font-inter);
+}
+
+[data-sonner-toast].skymap-toast {
+  position: relative;
+  overflow: hidden;
+  gap: 0.75rem;
+  align-items: flex-start;
+  width: var(--width);
+  padding: 0.95rem 1rem 1.05rem 1rem !important;
+  border-radius: 0.9rem !important;
+  border: 1px solid hsl(var(--border) / 0.85) !important;
+  background:
+    linear-gradient(
+      135deg,
+      hsl(var(--card) / 0.94) 0%,
+      hsl(var(--card) / 0.88) 100%
+    ) !important;
+  color: hsl(var(--foreground)) !important;
+  box-shadow:
+    0 18px 40px -18px hsl(215 25% 12% / 0.28),
+    0 8px 16px -10px hsl(213 94% 37% / 0.18),
+    inset 0 1px 0 hsl(0 0% 100% / 0.55) !important;
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  animation: skymap-toast-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.dark [data-sonner-toast].skymap-toast {
+  border-color: hsl(var(--border) / 0.9) !important;
+  background:
+    linear-gradient(
+      135deg,
+      hsl(var(--card) / 0.92) 0%,
+      hsl(218 28% 14% / 0.9) 100%
+    ) !important;
+  box-shadow:
+    0 22px 44px -18px hsl(0 0% 0% / 0.55),
+    0 8px 18px -10px hsl(213 94% 55% / 0.22),
+    inset 0 1px 0 hsl(0 0% 100% / 0.06) !important;
+}
+
+[data-sonner-toast].skymap-toast::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3.5px;
+  border-radius: 999px;
+  background: hsl(var(--primary));
+  box-shadow: 0 0 12px hsl(var(--primary) / 0.45);
+}
+
+[data-sonner-toast].skymap-toast::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2.5px;
+  transform-origin: left center;
+  background: linear-gradient(
+    90deg,
+    hsl(var(--primary)),
+    hsl(var(--primary) / 0.25)
+  );
+  animation: skymap-toast-progress var(--toast-duration, 4200ms) linear forwards;
+  opacity: 0.9;
+}
+
+[data-sonner-toast].skymap-toast[data-swiped='true'] {
+  animation: none;
+}
+
+[data-sonner-toast].skymap-toast [data-icon] {
+  margin-top: 0.1rem;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.65rem;
+  background: hsl(var(--primary) / 0.1);
+  color: hsl(var(--primary));
+  animation: skymap-toast-icon 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+[data-sonner-toast].skymap-toast [data-content] {
+  gap: 0.15rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.skymap-toast-title {
+  font-size: 0.875rem !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.01em;
+  line-height: 1.35 !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.skymap-toast-description {
+  font-size: 0.8rem !important;
+  line-height: 1.4 !important;
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.skymap-toast-close {
+  position: absolute !important;
+  top: 0.55rem !important;
+  right: 0.55rem !important;
+  width: 1.5rem !important;
+  height: 1.5rem !important;
+  border-radius: 999px !important;
+  border: 1px solid hsl(var(--border) / 0.9) !important;
+  background: hsl(var(--background) / 0.75) !important;
+  color: hsl(var(--muted-foreground)) !important;
+  opacity: 0;
+  transform: scale(0.92);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    color 160ms ease,
+    background 160ms ease !important;
+}
+
+[data-sonner-toast].skymap-toast:hover .skymap-toast-close,
+[data-sonner-toast].skymap-toast:focus-within .skymap-toast-close {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.skymap-toast-close:hover {
+  color: hsl(var(--foreground)) !important;
+  background: hsl(var(--muted)) !important;
+}
+
+.skymap-toast-action {
+  margin-top: 0.15rem;
+  border-radius: 0.55rem !important;
+  background: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+  font-weight: 600 !important;
+  box-shadow: 0 6px 14px -8px hsl(var(--primary) / 0.7);
+}
+
+.skymap-toast-cancel {
+  margin-top: 0.15rem;
+  border-radius: 0.55rem !important;
+  background: hsl(var(--muted)) !important;
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+/* Type accents */
+[data-sonner-toast].skymap-toast-success::before,
+[data-sonner-toast].skymap-toast-success::after {
+  background: linear-gradient(180deg, hsl(var(--success)), hsl(142 71% 45%));
+}
+[data-sonner-toast].skymap-toast-success::after {
+  background: linear-gradient(90deg, hsl(var(--success)), hsl(var(--success) / 0.2));
+}
+[data-sonner-toast].skymap-toast-success [data-icon] {
+  background: hsl(var(--success) / 0.12);
+  color: hsl(var(--success));
+}
+
+[data-sonner-toast].skymap-toast-error::before,
+[data-sonner-toast].skymap-toast-error::after {
+  background: linear-gradient(180deg, hsl(var(--destructive)), hsl(0 84% 55%));
+}
+[data-sonner-toast].skymap-toast-error::after {
+  background: linear-gradient(90deg, hsl(var(--destructive)), hsl(var(--destructive) / 0.2));
+}
+[data-sonner-toast].skymap-toast-error [data-icon] {
+  background: hsl(var(--destructive) / 0.12);
+  color: hsl(var(--destructive));
+}
+
+[data-sonner-toast].skymap-toast-warning::before,
+[data-sonner-toast].skymap-toast-warning::after {
+  background: linear-gradient(180deg, hsl(var(--warning)), hsl(38 92% 45%));
+}
+[data-sonner-toast].skymap-toast-warning::after {
+  background: linear-gradient(90deg, hsl(var(--warning)), hsl(var(--warning) / 0.2));
+}
+[data-sonner-toast].skymap-toast-warning [data-icon] {
+  background: hsl(var(--warning) / 0.14);
+  color: hsl(38 92% 38%);
+}
+
+.dark [data-sonner-toast].skymap-toast-warning [data-icon] {
+  color: hsl(var(--warning));
+}
+
+[data-sonner-toast].skymap-toast-info::before,
+[data-sonner-toast].skymap-toast-info::after {
+  background: linear-gradient(180deg, hsl(var(--primary)), hsl(213 94% 48%));
+}
+[data-sonner-toast].skymap-toast-info::after {
+  background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--primary) / 0.2));
+}
+[data-sonner-toast].skymap-toast-info [data-icon] {
+  background: hsl(var(--primary) / 0.12);
+  color: hsl(var(--primary));
+}
+
+[data-sonner-toast].skymap-toast-loading [data-icon] {
+  background: hsl(var(--primary) / 0.1);
+  color: hsl(var(--primary));
+}
+
+@keyframes skymap-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.96);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes skymap-toast-icon {
+  from {
+    opacity: 0;
+    transform: scale(0.7) rotate(-8deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+@keyframes skymap-toast-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+[data-sonner-toast].skymap-toast:hover::after,
+[data-sonner-toast].skymap-toast:focus-within::after {
+  animation-play-state: paused;
+}
+
+@media (max-width: 640px) {
+  [data-sonner-toast].skymap-toast {
+    padding: 0.85rem 0.9rem 0.95rem !important;
+    border-radius: 0.8rem !important;
+  }
+
+  .skymap-toast-close {
+    opacity: 1;
+    transform: scale(1);
+  }
 }

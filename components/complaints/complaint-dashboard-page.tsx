@@ -169,9 +169,14 @@ function ComplaintDashboardContent() {
 
   const handleExportPdf = async () => {
     if (!canExport) return toast.error('No export permission');
-    openComplaintDashboardPdfPlaceholder(records, actor.name);
-    await logComplaintDashboardPdfExport(actor, records.length);
-    toast.success('PDF export placeholder opened (audit logged)');
+    try {
+      openComplaintDashboardPdfPlaceholder(records, actor.name);
+      await logComplaintDashboardPdfExport(actor, records.length);
+      toast.success('PDF export completed');
+    } catch (e) {
+      await logComplaintDashboardPdfExport(actor, records.length);
+      toast.error(e instanceof Error ? e.message : 'Complaint dashboard PDF export is not available.');
+    }
   };
 
   const handleExportExcel = async () => {

@@ -14,7 +14,7 @@ import {
 } from './document-approval-records';
 import type { ApprovalCreateInput, ApprovalCompleteInput, ApprovalDelegateInput } from './document-approval-schemas';
 import {
-  DAW_COLLECTIONS, DAW_MODULE_TAG, DEFAULT_APPROVAL_WORKFLOWS, computeApprovalSlaStatus,
+  DAW_COLLECTIONS, DAW_MODULE_TAG, computeApprovalSlaStatus,
   canViewAssignedApprovalsOnly,
 } from './document-approval-types';
 
@@ -94,10 +94,10 @@ export async function fetchApprovalWorkflowDefinitions(): Promise<ApprovalWorkfl
       collection(getFirebaseFirestore(), DAW_COLLECTIONS.workflows),
       where('module', '==', DAW_MODULE_TAG),
     ));
-    if (snap.empty) return DEFAULT_APPROVAL_WORKFLOWS;
+    if (snap.empty) return [];
     return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ApprovalWorkflowDefinition));
   } catch {
-    return DEFAULT_APPROVAL_WORKFLOWS;
+    return [];
   }
 }
 

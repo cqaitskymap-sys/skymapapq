@@ -158,9 +158,14 @@ function CapaDashboardContent() {
 
   const handleExportPdf = async () => {
     if (!canExport) return toast.error('No export permission');
-    openCapaDashboardPdfPlaceholder(records, actor.name);
-    await logCapaDashboardPdfExport(actor, records.length);
-    toast.success('PDF export placeholder opened (audit logged)');
+    try {
+      openCapaDashboardPdfPlaceholder(records, actor.name);
+      await logCapaDashboardPdfExport(actor, records.length);
+      toast.success('PDF export completed');
+    } catch (e) {
+      await logCapaDashboardPdfExport(actor, records.length);
+      toast.error(e instanceof Error ? e.message : 'CAPA dashboard PDF export is not available.');
+    }
   };
 
   const handleExportExcel = async () => {

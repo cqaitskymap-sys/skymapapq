@@ -6,7 +6,6 @@ import { generateDocumentNumber } from '@/lib/admin/document-numbering-service';
 import { getFirebaseFirestore, getFirebaseStorage, isFirebaseConfigured } from '@/lib/firebase';
 import {
   COMPLAINT_CREATE_MODULE,
-  buildComplaintNumberFallback,
   computeComplaintAutoRules,
   deriveRiskLevel,
   type ComplaintBatchOption,
@@ -93,37 +92,14 @@ function applyAutoRulesToInput(input: ComplaintCreateInput): ComplaintCreateInpu
 }
 
 export async function previewComplaintNumber(): Promise<string> {
-  const year = new Date().getFullYear();
-  if (!isFirebaseConfigured()) return buildComplaintNumberFallback(year, 1);
+  if (!isFirebaseConfigured()) return '';
   try {
     const result = await generateDocumentNumber('CMP', 'Market Complaint', { increment: false });
     if (result.number) return result.number;
   } catch (e) {
     console.error('previewComplaintNumber document numbering', e);
   }
-  try {
-    const prefix = `CMP/${year}/`;
-    const snap = await getDocs(query(
-      collection(getFirebaseFirestore(), COMPLAINT_COLLECTIONS.records),
-      where('complaint_number', '>=', prefix),
-      where('complaint_number', '<=', `${prefix}\uf8ff`),
-      orderBy('complaint_number', 'desc'),
-      limit(1),
-    ));
-    if (!snap.empty) {
-      const last = String(snap.docs[0].data().complaint_number || '');
-      const seq = parseInt(last.split('/').pop() || '0', 10) + 1;
-      return buildComplaintNumberFallback(year, seq);
-    }
-  } catch {
-    try {
-      const snap = await getDocs(collection(getFirebaseFirestore(), COMPLAINT_COLLECTIONS.records));
-      return buildComplaintNumberFallback(year, snap.size + 1);
-    } catch {
-      return buildComplaintNumberFallback(year, 1);
-    }
-  }
-  return buildComplaintNumberFallback(year, 1);
+  return '';
 }
 
 export async function fetchComplaintCustomerOptions(): Promise<ComplaintCustomerOption[]> {

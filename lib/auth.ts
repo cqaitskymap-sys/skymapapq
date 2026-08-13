@@ -126,40 +126,24 @@ export async function signIn(email: string, password: string): Promise<User> {
           created_at: nowIso(),
           updated_at: nowIso(),
         };
+        // Client rules only allow self-create as pending viewer; user master writes go via Cloud Functions.
         await setDoc(profileRef, {
           ...profile,
           requested_role: 'viewer',
           access_status: 'pending',
         });
-        await setDoc(doc(db, USERS_COLLECTION, result.user.uid), {
-          ...profile,
-          createdAt: nowIso(),
-          updatedAt: nowIso(),
-          status: 'active',
-          isDeleted: false,
-        }).catch(() => undefined);
       } else {
-        const existing = profileSnap.data() as Profile;
-        const role = resolveLoginRole(existing.role);
-        const updates: Record<string, string> = {
+        // Self-update may only touch last_login / updated_at (+ contact fields). Role changes are admin-only.
+        await updateDoc(profileRef, {
           last_login: nowIso(),
           updated_at: nowIso(),
-        };
-        if (role !== existing.role) {
-          updates.role = role;
-        }
-        await updateDoc(profileRef, updates).catch(() => undefined);
-        if (role !== existing.role) {
-          await updateDoc(doc(db, USERS_COLLECTION, result.user.uid), {
-            role,
-            updatedAt: nowIso(),
-          }).catch(() => undefined);
-        }
+        }).catch(() => undefined);
       }
 
       const profile = await getUserProfile(result.user.uid);
       const accessStatus = (profile as (Profile & { access_status?: string }) | null)?.access_status;
-      if (!profile?.is_active || accessStatus === 'pending') {
+      const blockedStatuses = ['pending', 'disabled', 'locked', 'retired', 'rejected'];
+      if (!profile?.is_active || blockedStatuses.includes(accessStatus || '')) {
         await firebaseSignOut(auth);
         throw new Error('This account is inactive or awaiting administrator approval.');
       }

@@ -36,6 +36,59 @@ export function canModifyTargetUser(
   return { allowed: true };
 }
 
+const USER_UPDATE_FIELDS = [
+  'employeeId', 'employeeCode', 'firstName', 'middleName', 'lastName',
+  'fullName', 'email', 'mobileNumber', 'alternateMobile', 'username',
+  'profilePhoto', 'gender', 'dateOfBirth', 'department', 'designation', 'role',
+  'reportingManager', 'managerId', 'businessUnit', 'siteId', 'siteName',
+  'location', 'shift', 'employmentType', 'joiningDate', 'remarks',
+  'userStatus', 'status', 'statusBeforeLock', 'accountLocked', 'isDeleted',
+  'passwordResetRequired', 'twoFactorEnabled',
+] as const;
+
+const GENDER_VALUES = ['', 'Female', 'Male', 'Non-binary', 'Prefer not to say'] as const;
+const EMPLOYMENT_VALUES = ['Permanent', 'Contract', 'Temporary', 'Consultant', 'Vendor', 'Intern'] as const;
+
+function asText(value: unknown): string {
+  return value == null ? '' : String(value).trim();
+}
+
+function asDateInput(value: unknown): string {
+  if (value == null || value === '') return '';
+  if (typeof value === 'object' && value && 'toDate' in value && typeof (value as { toDate: () => Date }).toDate === 'function') {
+    return (value as { toDate: () => Date }).toDate().toISOString().slice(0, 10);
+  }
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw.slice(0, 10);
+  const usDate = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (usDate) {
+    const [, month, day, year] = usDate;
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  const parsed = Date.parse(raw);
+  return Number.isNaN(parsed) ? '' : new Date(parsed).toISOString().slice(0, 10);
+}
+
+function asLastLogin(value: unknown): string | null {
+  if (value == null || value === '') return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value && 'toDate' in value && typeof (value as { toDate: () => Date }).toDate === 'function') {
+    return (value as { toDate: () => Date }).toDate().toISOString();
+  }
+  return null;
+}
+
+function callableErrorMessage(error: unknown, fallback: string): string {
+  const err = error as { message?: string; code?: string };
+  return (err.message || fallback)
+    .replace(/^FirebaseError:\s*/i, '')
+    .replace(/^Firebase:\s*/i, '')
+    .replace(/\s*\(functions\/[\w-]+\)\.?$/i, '')
+    .replace(/^internal\s*/i, '')
+    .trim() || fallback;
+}
+
 function normalizeStatus(value: unknown, isDeleted?: boolean): AdminUser['userStatus'] {
   if (isDeleted) return 'Inactive';
   const normalized = String(value || '').trim().toLowerCase();
@@ -48,21 +101,48 @@ function normalizeStatus(value: unknown, isDeleted?: boolean): AdminUser['userSt
 
 export function normalizeAdminUser(user: AdminUser): AdminUser {
   const legacy = user as AdminUser & Record<string, unknown>;
-  const userStatus = normalizeStatus(user.userStatus || user.status, user.isDeleted);
+  const userStatus = normalizeStatus(user.userStatus || user.status, user.isDeleted ?? undefined);
+  const gender = asText(user.gender);
+  const employmentType = asText(user.employmentType);
   return {
     ...user,
-    employeeId: user.employeeId || String(legacy.employee_id || '') || user.userId || user.id || '',
-    fullName: user.fullName || String(legacy.full_name || '') || user.email || user.userId || 'Unnamed user',
-    email: user.email || '',
-    mobileNumber: user.mobileNumber || String(legacy.phone || ''),
-    profilePhoto: user.profilePhoto || String(legacy.avatar_url || ''),
-    department: user.department || '',
-    designation: user.designation || '',
-    role: user.role || 'viewer',
+    employeeId: asText(user.employeeId) || asText(legacy.employee_id) || user.userId || user.id || '',
+    employeeCode: asText(user.employeeCode),
+    firstName: asText(user.firstName),
+    middleName: asText(user.middleName),
+    lastName: asText(user.lastName),
+    fullName: asText(user.fullName) || asText(legacy.full_name) || asText(user.email) || user.userId || 'Unnamed user',
+    email: asText(user.email),
+    mobileNumber: asText(user.mobileNumber) || asText(legacy.phone),
+    alternateMobile: asText(user.alternateMobile),
+    username: asText(user.username),
+    profilePhoto: asText(user.profilePhoto) || asText(legacy.avatar_url),
+    gender: (GENDER_VALUES as readonly string[]).includes(gender)
+      ? gender as AdminUser['gender']
+      : '',
+    dateOfBirth: asDateInput(user.dateOfBirth),
+    department: asText(user.department),
+    designation: asText(user.designation),
+    role: asText(user.role) || 'viewer',
+    reportingManager: asText(user.reportingManager),
+    managerId: asText(user.managerId),
+    businessUnit: asText(user.businessUnit),
+    siteId: asText(user.siteId),
+    siteName: asText(user.siteName),
+    location: asText(user.location),
+    shift: asText(user.shift),
+    employmentType: (EMPLOYMENT_VALUES as readonly string[]).includes(employmentType)
+      ? employmentType as AdminUser['employmentType']
+      : 'Permanent',
+    joiningDate: asDateInput(user.joiningDate),
+    remarks: asText(user.remarks),
     userStatus,
     status: userStatus === 'Active' ? 'Active' : 'Inactive',
     accountLocked: Boolean(user.accountLocked || userStatus === 'Locked'),
-    lastLogin: user.lastLogin || String(legacy.last_login || '') || null,
+    passwordResetRequired: Boolean(user.passwordResetRequired),
+    twoFactorEnabled: Boolean(user.twoFactorEnabled),
+    lastLogin: asLastLogin(user.lastLogin ?? legacy.last_login),
+    emailVerified: Boolean(user.emailVerified),
     authUid: user.authUid || (legacy.full_name ? user.id : undefined),
   };
 }
@@ -245,10 +325,8 @@ export async function createSystemUser(
 
     return { user: created, error: null };
   } catch (e) {
-    const message = (e as Error).message
-      .replace(/^Firebase:\s*/i, '')
-      .replace(/^internal\s*/i, '');
-    return { user: null, error: message || 'Unable to create user' };
+    const message = callableErrorMessage(e, 'Unable to create user');
+    return { user: null, error: message };
   }
 }
 
@@ -268,10 +346,13 @@ export async function updateSystemUser(
     ) {
       return { user: null, error: 'Only a Super Admin can change user-specific permissions' };
     }
-    updates = Object.entries(updates).reduce<Partial<AdminUser>>((changed, [key, value]) => {
-      const field = key as keyof AdminUser;
-      if (JSON.stringify(value) !== JSON.stringify(existing[field])) {
-        (changed as Record<string, unknown>)[key] = value;
+    const incoming = updates;
+    updates = USER_UPDATE_FIELDS.reduce<Partial<AdminUser>>((changed, key) => {
+      if (!Object.prototype.hasOwnProperty.call(incoming, key)) return changed;
+      const nextValue = incoming[key];
+      const previousValue = existing[key];
+      if (JSON.stringify(nextValue ?? '') !== JSON.stringify(previousValue ?? '')) {
+        (changed as Record<string, unknown>)[key] = nextValue;
       }
       return changed;
     }, {});
@@ -325,7 +406,7 @@ export async function updateSystemUser(
 
     return { user: record, error: null };
   } catch (e) {
-    return { user: null, error: (e as Error).message };
+    return { user: null, error: callableErrorMessage(e, 'Unable to update user') };
   }
 }
 

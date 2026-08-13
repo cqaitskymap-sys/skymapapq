@@ -110,6 +110,7 @@ export async function fetchOosInvestigators(): Promise<OosInvestigatorOption[]> 
 export async function generateOosNumberForDepartment(department: string): Promise<string> {
   const dept = departmentCode(department);
   const year = new Date().getFullYear();
+  if (!isFirebaseConfigured()) return '';
   // Preview uses Firestore sequence locally. Calling generateAdminDocumentNumber here
   // only triggers browser CORS when the Cloud Function is not deployed (billing).
   const prefix = `OOS/${dept}/${year}/`;
@@ -131,7 +132,7 @@ export async function generateOosNumberForDepartment(department: string): Promis
   } catch (e) {
     console.error('generateOosNumberForDepartment', e);
   }
-  return `${prefix}0001`;
+  return '';
 }
 
 export async function fetchCqaPrefill(sourceId: string): Promise<OosSourcePrefill | null> {
@@ -353,23 +354,6 @@ export async function uploadOosCreateAttachmentPlaceholder(
   fileName: string,
   actor: OosCreateActor,
 ): Promise<{ id: string; file_name: string }> {
-  const id = `placeholder-${Date.now()}`;
-  try {
-    if (isFirebaseConfigured()) {
-      await addDoc(collection(getFirebaseFirestore(), OOS_COLLECTIONS.attachments), {
-        oos_id: oosId,
-        file_name: fileName,
-        file_url: '',
-        file_type: 'placeholder',
-        uploaded_by: actor.id,
-        uploaded_by_name: actor.name,
-        uploaded_at: nowIso(),
-        is_placeholder: true,
-      });
-    }
-  } catch (e) {
-    console.error('uploadOosCreateAttachmentPlaceholder', e);
-  }
-  await logOosCreateAudit('attachment placeholder added', actor, oosId, fileName);
-  return { id, file_name: fileName };
+  await logOosCreateAudit('attachment upload blocked', actor, oosId, fileName);
+  throw new Error('OOS attachment upload backend is not implemented. Configure real file upload first.');
 }

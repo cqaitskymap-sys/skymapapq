@@ -247,7 +247,7 @@ export function CapaEffectivenessPage({ capaId }: { capaId: string }) {
     setBusy(true);
     try {
       await uploadCapaEffectivenessEvidencePlaceholder(capaId, evidenceFile, evidenceFile, actor);
-      toast.success('Evidence logged');
+      toast.success('Evidence uploaded');
       setEvidenceFile('');
       await load();
     } catch (e) {

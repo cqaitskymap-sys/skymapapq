@@ -8,7 +8,6 @@ import {
   Cog,
   Database,
   BarChart3,
-  Brain,
   Bell,
   Settings,
 } from 'lucide-react';
@@ -137,19 +136,6 @@ export const LAUNCHER_MODULES: LauncherModule[] = [
     iconBg: 'bg-sky-50 text-sky-600 dark:bg-sky-950/50 dark:text-sky-400',
     navGroupLabel: 'Reports',
     keywords: ['reports', 'analytics', 'kpi', 'dashboard'],
-    submoduleCount: 1,
-  },
-  {
-    id: 'ai-analytics',
-    name: 'AI Analytics',
-    description: 'Predictive insights, anomaly detection & smart recommendations',
-    href: '/dashboard/ai-analytics',
-    icon: Brain,
-    emoji: '🤖',
-    color: 'from-fuchsia-500 to-pink-500',
-    iconBg: 'bg-fuchsia-50 text-fuchsia-600 dark:bg-fuchsia-950/50 dark:text-fuchsia-400',
-    navGroupLabel: 'AI Analytics',
-    keywords: ['ai', 'analytics', 'predictive', 'machine learning'],
     submoduleCount: 1,
   },
   {

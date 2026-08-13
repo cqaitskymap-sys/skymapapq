@@ -69,11 +69,75 @@ service cloud.firestore {
     }
 
     function isEngineeringRole() {
-      return getProfileRole() in ['super_admin', 'admin', 'engineering_manager', 'engineering_executive', 'engineering'];
+      return getProfileRole() in [
+        'super_admin', 'admin', 'engineering_manager', 'engineering_executive',
+        'engineering', 'maintenance'
+      ];
+    }
+
+    // Equipment Management module collections (QMS + Admin master).
+    function isEquipmentCollection(name) {
+      return name in [
+        'equipment_master', 'equipment_records', 'calibration_records',
+        'pm_records', 'breakdown_records', 'equipment_status_history',
+        'equipment_attachments'
+      ];
+    }
+
+    function canManageEquipmentData() {
+      return isAuthenticated() && getProfileRole() in [
+        'super_admin', 'admin', 'head_qa', 'qa_manager',
+        'engineering_manager', 'engineering_executive', 'engineering', 'maintenance'
+      ];
+    }
+
+    // QMS Environmental & Utility Monitoring (client-side module; distinct from CPV *_monitoring).
+    function isMonitoringCollection(name) {
+      return name in [
+        'monitoring_area_master', 'monitoring_environmental', 'monitoring_utility',
+        'monitoring_excursions', 'monitoring_trends', 'monitoring_attachments'
+      ];
+    }
+
+    function canManageMonitoringData() {
+      return isAuthenticated() && getProfileRole() in [
+        'super_admin', 'admin', 'head_qa', 'qa_manager',
+        'engineering', 'maintenance', 'qc_manager', 'production_manager'
+      ];
     }
 
     function isWarehouseRole() {
       return getProfileRole() in ['super_admin', 'admin', 'warehouse_manager', 'warehouse_executive', 'warehouse'];
+    }
+
+    // QMS Warehouse Traceability module collections.
+    function isWarehouseMgmtCollection(name) {
+      return name in [
+        'material_receipts', 'qc_sampling', 'material_release', 'material_dispensing',
+        'inventory_stock', 'finished_goods', 'material_traceability', 'warehouse_attachments'
+      ];
+    }
+
+    function canManageWarehouseData() {
+      return isAuthenticated() && getProfileRole() in [
+        'super_admin', 'admin', 'head_qa', 'qa_manager',
+        'warehouse_manager', 'warehouse_executive', 'warehouse',
+        'qc_manager', 'production_manager'
+      ];
+    }
+
+    function isEbmrCollection(name) {
+      return name.matches('ebmr_.*');
+    }
+
+    function canManageEbmrData() {
+      return isAuthenticated() && getProfileRole() in [
+        'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive', 'qa',
+        'qc_manager', 'qc_executive', 'qc',
+        'production_manager', 'production_executive', 'production',
+        'warehouse_manager', 'warehouse_executive', 'warehouse',
+        'engineering_manager', 'engineering_executive', 'engineering'
+      ];
     }
 
     function isRegulatoryRole() {
@@ -120,6 +184,7 @@ service cloud.firestore {
     function isRegisteredCollection(name) {
       return isCpvOperationalCollection(name)
         || isPqrOperationalCollection(name)
+        || isEbmrCollection(name)
         || name in [
           'users', 'roles', 'permissions', 'user_permissions', 'products', 'batches',
           'cpv_reviews', 'cpp_parameters', 'cpp_results',
@@ -185,6 +250,12 @@ service cloud.firestore {
           'vendor_reviews',
           'validation_records', 'csv_systems',
           'equipment_master', 'equipment_records', 'calibration_records',
+          'pm_records', 'breakdown_records', 'equipment_status_history',
+          'equipment_attachments',
+          'monitoring_area_master', 'monitoring_environmental', 'monitoring_utility',
+          'monitoring_excursions', 'monitoring_trends', 'monitoring_attachments',
+          'material_receipts', 'qc_sampling', 'material_release', 'material_dispensing',
+          'inventory_stock', 'finished_goods', 'material_traceability', 'warehouse_attachments',
           'monitoring_records', 'warehouse_materials', 'warehouse_records',
           'ebmr_records', 'notifications',
           'material_master', 'packaging_material_master',
@@ -219,7 +290,7 @@ service cloud.firestore {
           'super_admin', 'admin', 'head_qa', 'qa_manager', 'qa_executive', 'qa',
           'qc_manager', 'qc_executive', 'qc', 'production_manager',
           'production_executive', 'production', 'engineering_manager',
-          'engineering_executive', 'engineering', 'warehouse_manager',
+          'engineering_executive', 'engineering', 'maintenance', 'warehouse_manager',
           'warehouse_executive', 'warehouse', 'regulatory_affairs', 'regulatory',
           'auditor', 'viewer', 'it_administrator'
         ]
@@ -253,7 +324,11 @@ service cloud.firestore {
           'batches', 'cpp_parameters', 'cpp_results', 'ebmr_records',
           'oos_phase2', 'oos_impact_assessment'
         ])
+        || (canManageEbmrData() && isEbmrCollection(name))
         || (isEngineeringRole() && name in ['equipment_master', 'equipment_records', 'calibration_records', 'validation_records', 'csv_systems', 'monitoring_records'])
+        || (canManageEquipmentData() && isEquipmentCollection(name))
+        || (canManageMonitoringData() && isMonitoringCollection(name))
+        || (canManageWarehouseData() && isWarehouseMgmtCollection(name))
         || (isWarehouseRole() && name in ['warehouse_materials', 'warehouse_records', 'material_master', 'recall_distribution', 'recall_recovery'])
         || (isRegulatoryRole() && name in ['change_controls', 'change_control', 'recalls', 'recall_records', 'recall_regulatory_notifications', 'documents', 'dms_documents', 'document_revisions', 'document_versions', 'document_approvals', 'document_distribution', 'distribution_lists', 'distribution_groups', 'document_acknowledgements', 'read_confirmations', 'document_attachments', 'document_lifecycle', 'document_reviews', 'review_workflows', 'review_steps', 'review_comments', 'review_checklists', 'approval_delegations', 'approval_escalations', 'approval_comments', 'electronic_signatures', 'document_effective_dates', 'periodic_reviews', 'review_schedules', 'review_decisions', 'document_archives', 'document_archive', 'archive_jobs', 'archive_policies', 'archive_requests', 'archive_restoration_requests', 'archive_locations', 'retention_policies', 'retention_schedules', 'retention_reviews', 'retention_events', 'disposal_requests', 'disposal_approvals', 'disposal_certificates', 'legal_holds', 'regulatory_holds', 'external_documents', 'external_document_versions', 'external_document_reviews', 'external_document_distribution', 'external_document_sources', 'external_document_categories', 'supplier_documents', 'regulatory_documents', 'standards_documents', 'safety_documents', 'linked_internal_documents', 'print_requests', 'printed_documents', 'print_copies', 'print_locations', 'print_distribution', 'print_reconciliation', 'print_returns', 'print_destruction', 'watermark_templates', 'watermark_rules', 'watermark_history', 'document_watermarks', 'audit_events', 'audit_exports', 'audit_filters', 'document_obsolete', 'sop_master', 'sop_versions', 'sop_reviews', 'sop_approvals', 'sop_training_links', 'sop_distribution', 'sop_acknowledgements', 'sop_periodic_reviews', 'sop_archive', 'sop_management', 'work_instructions', 'wi_versions', 'wi_reviews', 'wi_approvals', 'wi_training_links', 'wi_distribution', 'wi_acknowledgements', 'wi_periodic_reviews', 'wi_archive', 'forms_templates', 'form_versions', 'form_reviews', 'form_approvals', 'form_distribution', 'form_acknowledgements', 'form_periodic_reviews', 'form_archive', 'production_lines', 'pqr_records'])
         || (isNotReadOnly() && isCpvOperationalCollection(name))

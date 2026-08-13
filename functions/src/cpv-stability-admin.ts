@@ -3,8 +3,8 @@
  * All mutations are authorized here so client code is read-only for Firestore writes.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type DocumentData, type Firestore, type WriteBatch } from 'firebase-admin/firestore';
+import { type DocumentData, type Firestore, type WriteBatch } from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
 
 const STUDIES = 'stability_studies';
 const SCHEDULES = 'stability_schedules';
@@ -30,7 +30,6 @@ const INTERVALS_BY_STUDY_TYPE: Record<string, string[]> = {
   'In-use Stability': ['Initial', '1 Month', '2 Month', '3 Month', '6 Month'],
 };
 
-function init() { if (!getApps().length) initializeApp(); }
 function required(value: unknown, field: string, max = 2000) {
   if (typeof value !== 'string' || !value.trim()) throw new HttpsError('invalid-argument', `${field} is required`);
   const result = value.trim();
@@ -65,8 +64,7 @@ function validateEnum(value: string, options: readonly string[], field: string) 
 }
 async function context(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  init();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const profile = (await firestore.collection('profiles').doc(request.auth.uid).get()).data();
   return { firestore, profile, uid: request.auth.uid, name: String(profile?.full_name || profile?.email || request.auth.uid), role: String(profile?.role || '') };
 }

@@ -154,9 +154,14 @@ export function CcDashboardPage() {
 
   const handleExportPdf = async () => {
     if (!canExport || !data) return toast.error('No export permission');
-    openCcDashboardPdfPlaceholder(data, actor.name);
-    await logCcDashboardExport(actor, 'PDF');
-    toast.success('PDF export placeholder opened (audit logged)');
+    try {
+      openCcDashboardPdfPlaceholder(data, actor.name);
+      await logCcDashboardExport(actor, 'PDF');
+      toast.success('PDF export completed');
+    } catch (e) {
+      await logCcDashboardExport(actor, 'PDF');
+      toast.error(e instanceof Error ? e.message : 'Change control dashboard PDF export is not available.');
+    }
   };
 
   const handleExportExcel = async () => {

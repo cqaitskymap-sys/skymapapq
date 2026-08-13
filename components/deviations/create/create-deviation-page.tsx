@@ -167,7 +167,10 @@ function CreateDeviationInner() {
   useEffect(() => {
     const dept = watchAll.department;
     if (!dept) return;
-    void generateDeviationNumberForDepartment(dept).then(setPreviewNumber);
+    void generateDeviationNumberForDepartment(dept).then((preview) => {
+      setPreviewNumber(preview);
+      if (!preview) toast.error('Deviation numbering is not available from backend configuration.');
+    });
   }, [watchAll.department]);
 
   useEffect(() => {

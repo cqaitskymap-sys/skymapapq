@@ -11,7 +11,6 @@ import {
   type CapaDashboardMetrics, type CapaActor, isCapaClosed, requiresHeadQaApproval,
 } from './capa-types';
 import { generateDocumentNumber } from '@/lib/admin/document-numbering-service';
-import { buildCapaNumberFallback } from './capa-create-records';
 import { computeExtendedCapaDashboardMetrics } from './capa-dashboard-records';
 import type { CapaCreateInput } from './capa-schemas';
 
@@ -48,9 +47,8 @@ async function notify(title: string, message: string, capaId: string, userId: st
 }
 
 export async function generateCapaNumber(): Promise<string> {
-  const year = new Date().getFullYear();
   if (!isFirebaseConfigured()) {
-    return buildCapaNumberFallback(year, 1);
+    throw new Error('Firebase is not configured.');
   }
   try {
     const result = await generateDocumentNumber('CAPA', 'Corrective Action', {
@@ -61,29 +59,7 @@ export async function generateCapaNumber(): Promise<string> {
   } catch (e) {
     console.error('generateCapaNumber document numbering', e);
   }
-  try {
-    const prefix = `CAPA/QA/${year}/`;
-    const snap = await getDocs(query(
-      collection(getFirebaseFirestore(), CAPA_COLLECTIONS.records),
-      where('capa_number', '>=', prefix),
-      where('capa_number', '<=', `${prefix}\uf8ff`),
-      orderBy('capa_number', 'desc'),
-      limit(1),
-    ));
-    if (!snap.empty) {
-      const last = String(snap.docs[0].data().capa_number || '');
-      const seq = parseInt(last.split('/').pop() || '0', 10) + 1;
-      return buildCapaNumberFallback(year, seq);
-    }
-  } catch {
-    try {
-      const all = await getDocs(collection(getFirebaseFirestore(), CAPA_COLLECTIONS.records));
-      return buildCapaNumberFallback(year, all.size + 1);
-    } catch {
-      return buildCapaNumberFallback(year, 1);
-    }
-  }
-  return buildCapaNumberFallback(year, 1);
+  throw new Error('Unable to generate CAPA number from backend configuration.');
 }
 
 async function resolveSourceLinks(
@@ -306,10 +282,10 @@ export async function listCapas(filters?: CapaFilters): Promise<CapaRecord[]> {
     if (filters?.search) {
       const s = filters.search.toLowerCase();
       records = records.filter((r) =>
-        r.capa_number.toLowerCase().includes(s)
-        || r.capa_title.toLowerCase().includes(s)
-        || r.product_name.toLowerCase().includes(s)
-        || r.batch_number.toLowerCase().includes(s),
+        (r.capa_number || '').toLowerCase().includes(s)
+        || (r.capa_title || '').toLowerCase().includes(s)
+        || (r.product_name || '').toLowerCase().includes(s)
+        || (r.batch_number || '').toLowerCase().includes(s),
       );
     }
     if (filters?.due_this_week) {

@@ -14,7 +14,6 @@ import {
   type ComplaintActor, isComplaintClosed, isSafetyCategory,
 } from './complaint-types';
 import { computeComplaintDashboardMetrics } from './complaint-dashboard-records';
-import { buildComplaintNumberFallback } from './complaint-create-records';
 import type { ComplaintCreateInput } from './complaint-schemas';
 
 function now() { return new Date().toISOString(); }
@@ -41,38 +40,16 @@ async function notify(title: string, message: string, recordId: string, roles: s
 }
 
 export async function generateComplaintNumber(): Promise<string> {
-  const year = new Date().getFullYear();
-  if (isFirebaseConfigured()) {
-    try {
-      const result = await generateDocumentNumber('CMP', 'Market Complaint', { increment: true });
-      if (result.number) return result.number;
-    } catch (e) {
-      console.error('generateComplaintNumber document numbering', e);
-    }
+  if (!isFirebaseConfigured()) {
+    throw new Error('Firebase is not configured.');
   }
-  const prefix = `CMP/${year}/`;
   try {
-    const snap = await getDocs(query(
-      collection(getFirebaseFirestore(), COMPLAINT_COLLECTIONS.records),
-      where('complaint_number', '>=', prefix),
-      where('complaint_number', '<=', `${prefix}\uf8ff`),
-      orderBy('complaint_number', 'desc'),
-      limit(1),
-    ));
-    if (!snap.empty) {
-      const last = String(snap.docs[0].data().complaint_number || '');
-      const seq = parseInt(last.split('/').pop() || '0', 10) + 1;
-      return buildComplaintNumberFallback(year, seq);
-    }
-  } catch {
-    try {
-      const all = await getDocs(collection(getFirebaseFirestore(), COMPLAINT_COLLECTIONS.records));
-      return buildComplaintNumberFallback(year, all.size + 1);
-    } catch {
-      return buildComplaintNumberFallback(year, 1);
-    }
+    const result = await generateDocumentNumber('CMP', 'Market Complaint', { increment: true });
+    if (result.number) return result.number;
+  } catch (e) {
+    console.error('generateComplaintNumber document numbering', e);
   }
-  return buildComplaintNumberFallback(year, 1);
+  throw new Error('Unable to generate Complaint number from backend configuration.');
 }
 
 async function linkBatch(batchNumber: string) {

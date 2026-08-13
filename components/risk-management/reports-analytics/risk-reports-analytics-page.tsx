@@ -12,7 +12,6 @@ import {
   RISK_REPORT_TYPES,
   canExportRiskReportType,
   canGenerateRiskReportType,
-  exportRiskReportCsv,
   reportStatusColor,
   riskReportFormSchema,
   type RiskReportAnalyticsResult,
@@ -30,7 +29,7 @@ import {
   previewRiskReport,
   scheduleRiskReport,
 } from '@/lib/risk-reports-service';
-import { downloadCsv, printPage } from '@/lib/export-utils';
+import { printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 import { EmptyState } from '@/components/admin/dashboard/empty-state';
@@ -263,21 +262,17 @@ export function RiskReportsAnalyticsPage({ defaultTab = 'generator' }: RiskRepor
     if (!canExportRiskReportType(role, reportType)) return toast.error('No export permission for this report type');
     if (!analytics && !savedReport) return toast.error('Generate or preview a report first');
     const report = buildPreviewReport();
-    const filterSummary = buildFilterSummary(formData);
 
-    if (type === 'PDF') {
-      openRiskReportPdfHtml(report, actor.name, filterSummary);
+    try {
       await exportRiskReport(report, type, actor);
-      await logRiskReportPrinted(actor, report.id || 'preview', report.report_number);
-      toast.success('PDF export — print dialog opened');
-    } else {
-      const { headers, rows } = exportRiskReportCsv(analytics?.previewRows ?? report.preview_rows ?? []);
-      const ext = type === 'Excel' ? 'csv' : 'csv';
-      downloadCsv(`${report.report_number.replace(/\//g, '-')}.${ext}`, headers, rows);
-      await exportRiskReport(report, type, actor);
-      toast.success(`${type} export downloaded (audit logged)`);
+      if (type === 'PDF') {
+        await logRiskReportPrinted(actor, report.id || 'preview', report.report_number);
+      }
+      toast.success(`${type} export requested via backend`);
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Risk report export is not available.');
     }
-    await refresh();
   };
 
   const previewColumns = useMemo(() => RISK_PREVIEW_COLUMNS.map((c) => ({

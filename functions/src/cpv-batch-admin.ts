@@ -3,12 +3,8 @@
  * CF-only writes, status transitions, dual audit, e-sign for release/reject/hold/archive.
  */
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore, type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
-
-function initializeAdmin() {
-  if (getApps().length === 0) initializeApp();
-}
+import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
+import { getAdminFirestore } from './admin-app';
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -122,8 +118,7 @@ function assertReleaser(actor: DocumentData | undefined, role: string) {
 
 async function resolveActor(request: { auth?: { uid: string } | null }) {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
-  initializeAdmin();
-  const firestore = getFirestore();
+  const firestore = getAdminFirestore();
   const snap = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = snap.data();
   return {
@@ -416,7 +411,17 @@ function sanitizePayload(data: Record<string, unknown>, existing?: DocumentData)
     ),
     mfrNumber: optionalString(data.mfrNumber ?? existing?.mfrNumber, 'MFR', 80),
     bmrNumber: optionalString(data.bmrNumber ?? existing?.bmrNumber, 'BMR', 80),
-    bprNumber: optionalString(data.bprNumber ?? existing?.bprNumber, 'BPR', 80),
+    bprNumber: (() => {
+      const raw = data.bprNumbers ?? data.bprNumber ?? existing?.bprNumber;
+      if (Array.isArray(raw)) {
+        return optionalString(
+          (raw as unknown[]).map((v) => String(v ?? '').trim()).filter(Boolean).join(', '),
+          'BPR',
+          500,
+        );
+      }
+      return optionalString(raw, 'BPR', 500);
+    })(),
     semiFinishedBatchNumber: optionalString(
       data.semiFinishedBatchNumber ?? existing?.semiFinishedBatchNumber,
       'SF batch',

@@ -15,7 +15,7 @@ import {
 } from './document-review-records';
 import type { ReviewCreateInput, ReviewCompleteInput } from './document-review-schemas';
 import {
-  DRW_COLLECTIONS, DEFAULT_WORKFLOWS, DEFAULT_CHECKLIST, computeSlaStatus,
+  DRW_COLLECTIONS, DEFAULT_CHECKLIST, computeSlaStatus,
   canViewAssignedOnly,
 } from './document-review-types';
 
@@ -83,10 +83,10 @@ async function listAllReviews(): Promise<DocumentReviewRecord[]> {
 export async function fetchWorkflowDefinitions(): Promise<ReviewWorkflowDefinition[]> {
   try {
     const snap = await getDocs(collection(getFirebaseFirestore(), DRW_COLLECTIONS.workflows));
-    if (snap.empty) return DEFAULT_WORKFLOWS;
+    if (snap.empty) return [];
     return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ReviewWorkflowDefinition));
   } catch {
-    return DEFAULT_WORKFLOWS;
+    return [];
   }
 }
 
