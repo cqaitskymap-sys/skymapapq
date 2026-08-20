@@ -2,7 +2,7 @@
 
 Enterprise pharmaceutical Quality Management System for Skymap Pharmaceuticals — GMP, FDA 21 CFR Part 11, and WHO aligned.
 
-**Developed by:** Satyajit Patri
+**Developed by:** Satyajit Patri from Odisha
 
 ## Stack
 

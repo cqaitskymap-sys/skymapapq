@@ -158,3 +158,48 @@ export async function polishQmsReportTexts(input: {
     usedAi: result.usedAi,
   };
 }
+
+export async function askGuideQuestion(input: {
+  question: string;
+  pathname: string;
+  focusedField?: string;
+  fields?: Array<{ label: string; required: boolean; control: string; hint: string }>;
+  history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+}): Promise<{ text: string; usedAi: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/ai/guide-ask', {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify({
+        question: input.question,
+        pathname: input.pathname,
+        focusedField: input.focusedField || '',
+        fields: input.fields || [],
+        history: input.history || [],
+      }),
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      text?: string;
+      usedAi?: boolean;
+      error?: string;
+    };
+    if (!res.ok) {
+      return {
+        text: json.error || `Could not answer (${res.status})`,
+        usedAi: false,
+        error: json.error || `Guide ask failed (${res.status})`,
+      };
+    }
+    return {
+      text: json.text || 'No answer returned.',
+      usedAi: Boolean(json.usedAi),
+      error: json.error,
+    };
+  } catch (e) {
+    return {
+      text: e instanceof Error ? e.message : 'Guide ask request failed.',
+      usedAi: false,
+      error: e instanceof Error ? e.message : 'Guide ask request failed.',
+    };
+  }
+}

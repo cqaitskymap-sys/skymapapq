@@ -9,10 +9,18 @@ import {
   RefreshCw,
   ClipboardList,
   FileBarChart,
+  Compass,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const QUICK_ACTIONS = [
+  {
+    label: 'How to use SKYMAP',
+    href: '/dashboard/help',
+    icon: Compass,
+    iconBg: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40 dark:text-indigo-400',
+    color: 'hover:border-indigo-200 hover:bg-indigo-50/80 dark:hover:bg-indigo-950/30',
+  },
   {
     label: 'Create Batch',
     href: '/cpv/batch-registration',
@@ -63,7 +71,7 @@ export function QuickActions() {
       <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
         Quick Actions
       </h2>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
         {QUICK_ACTIONS.map((action, index) => (
           <motion.div
             key={action.label}

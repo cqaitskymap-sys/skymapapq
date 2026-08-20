@@ -141,6 +141,9 @@ export default function SignupPage() {
               Already have an account?{' '}
               <Link href="/auth/login" className="text-blue-400 hover:text-blue-300">Sign In</Link>
             </p>
+            <p className="text-center text-slate-500/80 text-xs mt-4">
+              Developed by Satyajit Patri from Odisha
+            </p>
           </CardContent>
         </Card>
       </div>

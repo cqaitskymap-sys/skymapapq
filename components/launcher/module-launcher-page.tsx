@@ -2,6 +2,8 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import Link from 'next/link';
+import { Compass } from 'lucide-react';
 import { LauncherHeader } from '@/components/launcher/Header';
 import { SearchBar } from '@/components/launcher/SearchBar';
 import { StatsCards } from '@/components/launcher/StatsCards';
@@ -9,7 +11,17 @@ import { ModuleGrid } from '@/components/launcher/ModuleGrid';
 import { QuickActions } from '@/components/launcher/QuickActions';
 import { RecentModules } from '@/components/launcher/RecentModules';
 import { LAUNCHER_MODULES } from '@/lib/launcher/module-definitions';
-import { addRecentModule } from '@/lib/launcher/recent-modules';
+import { requestOpenUserGuide } from '@/lib/user-guide';
+import { Button } from '@/components/ui/button';
+import {
+  addRecentModule,
+  getFavoriteModules,
+  setFavoriteModules,
+  toggleFavoriteModule,
+  DEFAULT_FAVORITE_MODULES,
+  MAX_FAVORITE_MODULES,
+} from '@/lib/launcher/recent-modules';
+import { toast } from 'sonner';
 import { useLauncherStats } from '@/hooks/use-launcher-stats';
 import { useAuth } from '@/contexts/auth-context';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -29,9 +41,14 @@ function getTimeGreeting(date: Date): string {
 export function ModuleLauncherPage() {
   const [search, setSearch] = useState('');
   const [now, setNow] = useState(() => new Date());
+  const [favoriteIds, setFavoriteIds] = useState<string[]>(DEFAULT_FAVORITE_MODULES);
   const stats = useLauncherStats();
   const { profile } = useAuth();
   const { canAccessModule } = usePermissions();
+
+  useEffect(() => {
+    setFavoriteIds(getFavoriteModules());
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 30_000);
@@ -49,24 +66,39 @@ export function ModuleLauncherPage() {
     minute: '2-digit',
   });
 
-  const visibleModules = useMemo(() => {
+  const accessibleModules = useMemo(() => {
     return LAUNCHER_MODULES.filter((mod) => {
-      if (mod.permissionModules?.length) {
-        const hasAccess = mod.permissionModules.some((m) => canAccessModule(m));
-        if (!hasAccess) return false;
-      }
-      if (!search.trim()) return true;
-      const q = search.toLowerCase();
-      return (
+      if (!mod.permissionModules?.length) return true;
+      return mod.permissionModules.some((m) => canAccessModule(m));
+    });
+  }, [canAccessModule]);
+
+  const visibleModules = useMemo(() => {
+    if (!search.trim()) return accessibleModules;
+    const q = search.toLowerCase();
+    return accessibleModules.filter(
+      (mod) =>
         mod.name.toLowerCase().includes(q)
         || mod.description.toLowerCase().includes(q)
-        || mod.keywords.some((k) => k.includes(q))
-      );
-    });
-  }, [search, canAccessModule]);
+        || mod.useWhen.toLowerCase().includes(q)
+        || mod.keywords.some((k) => k.includes(q)),
+    );
+  }, [search, accessibleModules]);
 
   const handleModuleOpen = (moduleId: string) => {
     addRecentModule(moduleId);
+  };
+
+  const handleToggleFavorite = (moduleId: string) => {
+    if (!favoriteIds.includes(moduleId) && favoriteIds.length >= MAX_FAVORITE_MODULES) {
+      toast.error(`You can pin up to ${MAX_FAVORITE_MODULES} favorite modules`);
+      return;
+    }
+    setFavoriteIds(toggleFavoriteModule(moduleId));
+  };
+
+  const handleSetFavorites = (moduleIds: string[]) => {
+    setFavoriteIds(setFavoriteModules(moduleIds));
   };
 
   return (
@@ -130,11 +162,35 @@ export function ModuleLauncherPage() {
         </motion.section>
 
         <section className="mb-8">
+          <div className="flex flex-col gap-3 rounded-2xl border border-[#2563EB]/20 bg-white/80 p-4 shadow-sm dark:bg-card/80 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#2563EB]/10 text-[#2563EB]">
+                <Compass className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold">New here? Follow the A–Z guide</h2>
+                <p className="text-sm text-muted-foreground">
+                  Learn which module to open, how to complete each step, and what happens next.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 sm:shrink-0">
+              <Button variant="outline" size="sm" onClick={() => requestOpenUserGuide()}>
+                Explain this screen
+              </Button>
+              <Button asChild size="sm">
+                <Link href="/dashboard/help">Open full guide</Link>
+              </Button>
+            </div>
+          </div>
+        </section>
+
+        <section className="mb-8">
           <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-lg font-semibold tracking-tight text-foreground">Modules</h2>
               <p className="text-sm text-muted-foreground">
-                Select a module to begin — {visibleModules.length} available
+                Tap a tile to begin. Each card says when to use that module.
               </p>
             </div>
             <SearchBar
@@ -143,14 +199,28 @@ export function ModuleLauncherPage() {
               className="sm:max-w-xs lg:hidden"
             />
           </div>
-          <ModuleGrid modules={visibleModules} onModuleOpen={handleModuleOpen} />
+          <ModuleGrid
+            modules={visibleModules}
+            onModuleOpen={handleModuleOpen}
+            favoriteIds={favoriteIds}
+            onToggleFavorite={handleToggleFavorite}
+          />
         </section>
 
         <div className="mb-8">
-          <RecentModules onModuleOpen={handleModuleOpen} />
+          <RecentModules
+            onModuleOpen={handleModuleOpen}
+            favoriteIds={favoriteIds}
+            accessibleModules={accessibleModules}
+            onSetFavorites={handleSetFavorites}
+          />
         </div>
 
         <QuickActions />
+
+        <p className="mt-10 pb-2 text-center text-xs text-muted-foreground">
+          Developed by Satyajit Patri from Odisha
+        </p>
       </main>
     </div>
   );

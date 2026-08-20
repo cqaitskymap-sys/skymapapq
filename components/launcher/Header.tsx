@@ -91,8 +91,14 @@ export function LauncherHeader({ searchQuery = '', onSearchChange }: LauncherHea
 
           <NotificationBell />
 
-          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl" asChild>
-            <Link href="/dashboard/help" aria-label="Help">
+          <Button variant="outline" size="sm" className="hidden h-9 rounded-xl sm:inline-flex" asChild>
+            <Link href="/dashboard/help">
+              <CircleHelp className="mr-1.5 h-4 w-4" />
+              How to use
+            </Link>
+          </Button>
+          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl sm:hidden" asChild>
+            <Link href="/dashboard/help" aria-label="How to use SKYMAP">
               <CircleHelp className="h-4 w-4" />
             </Link>
           </Button>

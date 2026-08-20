@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -7,11 +8,12 @@ import {
   FlaskConical, Package, SlidersHorizontal, GitBranch, CheckSquare, Hash,
   FileSearch, PenLine, Bell, Database, Settings, PanelLeftClose,
   PanelLeftOpen, ChevronRight, ShieldCheck, LogIn, UserCheck, KeyRound,
-  Mail, Blocks, FileUp, HardDrive, Cloud, Activity, LayoutGrid, Wrench,
+  Mail, Blocks, FileUp, HardDrive, Cloud, Activity, LayoutGrid, Wrench, Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { ADMIN_NAV_ITEMS } from '@/lib/admin/constants';
 import { useAdminPermissions } from '@/hooks/use-admin-permissions';
 import {
@@ -37,6 +39,7 @@ interface AdminSidebarProps {
 export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
   const pathname = usePathname();
   const { role } = useAdminPermissions();
+  const [navQuery, setNavQuery] = useState('');
 
   const isActive = (href: string) => {
     if (href === '/admin') {
@@ -123,12 +126,17 @@ export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
     ['/dashboard/admin/firebase-status', canViewSystemSettings],
     ['/dashboard/admin/system-health', canViewSystemSettings],
   ];
-  const filteredNav = ADMIN_NAV_ITEMS.filter((item) => {
-    const accessRule = routeAccess.find(([prefix]) =>
-      item.href === prefix || item.href.startsWith(`${prefix}/`),
-    );
-    return accessRule ? accessRule[1](role) : true;
-  });
+  const filteredNav = useMemo(() => {
+    const allowed = ADMIN_NAV_ITEMS.filter((item) => {
+      const accessRule = routeAccess.find(([prefix]) =>
+        item.href === prefix || item.href.startsWith(`${prefix}/`),
+      );
+      return accessRule ? accessRule[1](role) : true;
+    });
+    const q = navQuery.trim().toLowerCase();
+    if (!q) return allowed;
+    return allowed.filter((item) => item.label.toLowerCase().includes(q));
+  }, [role, navQuery]);
 
   return (
     <aside
@@ -162,13 +170,26 @@ export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
 
       <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
         {!collapsed && (
-          <Link
-            href="/launcher"
-            className="mb-2 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700 dark:text-slate-300 dark:hover:bg-slate-800"
-          >
-            <LayoutGrid className="h-4 w-4 shrink-0" />
-            All Modules
-          </Link>
+          <>
+            <Link
+              href="/launcher"
+              className="mb-2 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700 dark:text-slate-300 dark:hover:bg-slate-800"
+            >
+              <LayoutGrid className="h-4 w-4 shrink-0" />
+              All Modules
+            </Link>
+            <div className="relative mb-2 px-1">
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="search"
+                value={navQuery}
+                onChange={(event) => setNavQuery(event.target.value)}
+                placeholder="Find a setting…"
+                aria-label="Find a setting in Admin"
+                className="h-8 bg-white pl-8 text-xs dark:bg-slate-900"
+              />
+            </div>
+          </>
         )}
         {filteredNav.map((item) => {
           const Icon = ICON_MAP[item.icon] || Settings;
@@ -196,6 +217,11 @@ export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
             </Link>
           );
         })}
+        {!collapsed && navQuery.trim() && filteredNav.length === 0 && (
+          <p className="px-3 py-4 text-center text-xs text-muted-foreground">
+            No settings match “{navQuery.trim()}”.
+          </p>
+        )}
       </nav>
 
       {!collapsed && (

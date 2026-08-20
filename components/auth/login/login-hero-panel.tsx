@@ -169,6 +169,7 @@ export function LoginHeroPanel() {
         >
           <p className="font-medium text-blue-200/80">Version 2.0</p>
           <p className="mt-1">&copy; 2026 SKYMAP Pharmaceuticals</p>
+          <p className="mt-1">Developed by Satyajit Patri from Odisha</p>
         </motion.div>
       </div>
 

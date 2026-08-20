@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
@@ -22,6 +22,7 @@ import { useModuleConfigurationCatalog } from '@/hooks/use-module-configuration'
 import { navHrefModule } from '@/lib/nav-permissions';
 import { resolveNavGroupFromPath } from '@/lib/launcher/module-scope';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Input } from '@/components/ui/input';
 
 interface NavItem {
   label: string;
@@ -194,6 +195,7 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
     'Continued Process Verification',
     'PQR Management',
   ]);
+  const [navQuery, setNavQuery] = useState('');
 
   const visibleNavItems = navItems
     .map((item) => {
@@ -222,9 +224,26 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
     .filter(Boolean) as NavItem[];
 
   const activeModuleGroup = resolveNavGroupFromPath(pathname);
-  const scopedNavItems = activeModuleGroup
-    ? visibleNavItems.filter((item) => item.label === activeModuleGroup)
-    : [];
+  const scopedNavItems = useMemo(() => {
+    const grouped = activeModuleGroup
+      ? visibleNavItems.filter((item) => item.label === activeModuleGroup)
+      : [];
+    const q = navQuery.trim().toLowerCase();
+    if (!q) return grouped;
+    return grouped
+      .map((item) => {
+        if (!item.children) {
+          return item.label.toLowerCase().includes(q) ? item : null;
+        }
+        if (item.label.toLowerCase().includes(q)) return item;
+        const children = item.children.filter((child) =>
+          child.label.toLowerCase().includes(q),
+        );
+        if (!children.length) return null;
+        return { ...item, children };
+      })
+      .filter(Boolean) as NavItem[];
+  }, [activeModuleGroup, visibleNavItems, navQuery]);
 
   if (permLoading) {
     return (
@@ -301,17 +320,30 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
 
         <nav className="flex-1 overflow-y-auto sidebar-scroll py-3 px-2 space-y-0.5">
           {!collapsed && (
-            <Link
-              href="/launcher"
-              className="mb-2 flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <LayoutGrid className="h-4 w-4" />
-              All Modules
-            </Link>
+            <>
+              <Link
+                href="/launcher"
+                className="mb-2 flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <LayoutGrid className="h-4 w-4" />
+                All Modules
+              </Link>
+              <div className="relative mb-2">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="search"
+                  value={navQuery}
+                  onChange={(event) => setNavQuery(event.target.value)}
+                  placeholder="Find a screen…"
+                  aria-label="Find a screen in this module"
+                  className="h-8 bg-background/70 pl-8 text-xs"
+                />
+              </div>
+            </>
           )}
           {scopedNavItems.map((item) => {
             if (item.children) {
-              const isOpen = openGroups.includes(item.label) || isGroupActive(item);
+                  const isOpen = Boolean(navQuery.trim()) || openGroups.includes(item.label) || isGroupActive(item);
               const hasActiveChild = isGroupActive(item);
 
               if (collapsed) {
@@ -415,6 +447,11 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
               </Link>
             );
           })}
+          {!collapsed && navQuery.trim() && scopedNavItems.length === 0 && (
+            <p className="px-3 py-4 text-center text-xs text-muted-foreground">
+              No screens match “{navQuery.trim()}”. Try another word, or go back to All Modules.
+            </p>
+          )}
         </nav>
 
         <div className="border-t p-3 flex-shrink-0" style={{ borderColor: 'hsl(var(--sidebar-border))' }}>

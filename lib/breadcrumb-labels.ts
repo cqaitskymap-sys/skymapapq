@@ -156,6 +156,8 @@ export const BREADCRUMB_LABELS: Record<string, string> = {
   notifications: 'Notification Settings',
   queue: 'Queue',
   profile: 'Profile',
+  help: 'How to use',
+  support: 'Support',
 };
 
 export function formatBreadcrumbLabel(segment: string, pathname?: string): string {

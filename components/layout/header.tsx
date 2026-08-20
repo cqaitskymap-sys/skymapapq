@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from 'react';
 import {
-  ChevronRight, CircleHelp, LifeBuoy, LogOut, Moon, Search, Settings, Sun,
+  ChevronRight, Compass, CircleHelp, LifeBuoy, LogOut, Moon, Search, Settings, Sun,
 } from 'lucide-react';
 import { NotificationBell } from '@/components/layout/notification-bell';
 import { MobileNav } from '@/components/layout/mobile-nav';
@@ -119,6 +119,28 @@ export function Header() {
           <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
         </Button>
 
+        <Button
+          variant="ghost"
+          size="sm"
+          className="hidden h-8 gap-1.5 px-2 xl:inline-flex"
+          asChild
+        >
+          <Link href="/dashboard/help">
+            <Compass className="h-4 w-4" />
+            How to use
+          </Link>
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 xl:hidden"
+          asChild
+        >
+          <Link href="/dashboard/help" aria-label="How to use SKYMAP">
+            <CircleHelp className="h-4 w-4" />
+          </Link>
+        </Button>
+
         <NotificationBell />
 
         {/* User menu */}
@@ -146,7 +168,7 @@ export function Header() {
               <Link href="/dashboard/profile"><Settings className="h-4 w-4 mr-2" />Profile & Settings</Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
-              <Link href="/dashboard/help"><CircleHelp className="h-4 w-4 mr-2" />Help Center</Link>
+              <Link href="/dashboard/help"><CircleHelp className="h-4 w-4 mr-2" />How to use (A–Z guide)</Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <Link href="/dashboard/support"><LifeBuoy className="h-4 w-4 mr-2" />Support</Link>

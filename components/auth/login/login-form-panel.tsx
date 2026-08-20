@@ -102,7 +102,7 @@ function RippleLoginButton({
           Signing in...
         </>
       ) : (
-        'Login'
+        'Sign in'
       )}
     </Button>
   );
@@ -155,7 +155,7 @@ export function LoginFormPanel() {
 
     const { error } = await signIn(data.email, data.password);
     if (error) {
-      toast.error('Authentication failed', { description: error.message });
+      toast.error('Could not sign in', { description: error.message || 'Check your email and password, then try again.' });
       setLoading(false);
     } else {
       toast.success('Welcome back!', { description: 'Opening module launcher...' });
@@ -183,9 +183,11 @@ export function LoginFormPanel() {
           <div className="mb-8 text-center">
             <SkymapLogo />
             <h2 className="mt-5 text-2xl font-bold tracking-tight text-slate-900">
-              Welcome Back
+              Sign in to SKYMAP
             </h2>
-            <p className="mt-1.5 text-sm text-slate-500">Sign in to continue</p>
+            <p className="mt-1.5 text-sm text-slate-500">
+              Use the work email your administrator created. After login you will see the module launcher.
+            </p>
           </div>
 
           {!firebaseReady && (
@@ -311,8 +313,9 @@ export function LoginFormPanel() {
           </div>
         </div>
 
-        <p className="mt-6 text-center text-xs text-slate-400 md:hidden">
-          Version 2.0 &middot; &copy; 2026 SKYMAP Pharmaceuticals
+        <p className="mt-6 text-center text-xs text-slate-400">
+          <span className="md:hidden">Version 2.0 &middot; &copy; 2026 SKYMAP Pharmaceuticals</span>
+          <span className="block mt-1">Developed by Satyajit Patri from Odisha</span>
         </p>
       </motion.div>
     </div>

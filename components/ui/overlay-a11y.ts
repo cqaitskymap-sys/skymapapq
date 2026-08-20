@@ -22,7 +22,7 @@ function isInsideClosingDialog(node: EventTarget | null) {
   return node instanceof HTMLElement && Boolean(node.closest('[role="dialog"][data-state="closed"]'));
 }
 
-let closeGuardTimer: ReturnType<typeof setTimeout> | undefined;
+let closeGuardTimer: number | undefined;
 let closeGuardListener: ((event: FocusEvent) => void) | undefined;
 
 /** Drop focus that Select/Combobox restores into a dialog that is already closing. */

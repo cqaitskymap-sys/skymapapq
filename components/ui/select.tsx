@@ -7,13 +7,7 @@ import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { blurActiveElement } from '@/components/ui/overlay-a11y';
 
-/** Non-modal so hideOthers does not aria-hide a parent Sheet/Dialog that still holds the trigger. */
-const Select = ({
-  modal = false,
-  ...props
-}: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Root>) => (
-  <SelectPrimitive.Root modal={modal} {...props} />
-);
+const Select = SelectPrimitive.Root;
 
 const SelectGroup = SelectPrimitive.Group;
 
