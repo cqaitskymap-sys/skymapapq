@@ -1,6 +1,9 @@
+import { isMasterDataPath } from '@/lib/launcher/module-scope';
+
 /** Human-readable breadcrumb labels for pharma modules */
 export const BREADCRUMB_LABELS: Record<string, string> = {
   dashboard: 'Dashboard',
+  manufacturing: 'Manufacturing',
   admin: 'Administration',
   cpv: 'Continued Process Verification',
   pqr: 'Product Quality Review',
@@ -111,26 +114,26 @@ export const BREADCRUMB_LABELS: Record<string, string> = {
   ebmr: 'eBMR',
   batches: 'Batch Registration',
   products: 'Product Master',
-  cpp: 'CPP Monitoring',
-  cqa: 'CQA Monitoring',
-  'raw-materials': 'Raw Material Monitoring',
-  'raw-material-monitoring': 'Raw Material Monitoring',
-  'packing-materials': 'Packing Material Monitoring',
-  'packing-material-monitoring': 'Packing Material Monitoring',
-  utility: 'Utility Monitoring',
-  'utility-monitoring': 'Utility Monitoring',
-  environmental: 'Environmental Monitoring',
-  'environmental-monitoring': 'Environmental Monitoring',
-  yield: 'Yield Monitoring',
-  'yield-monitoring': 'Yield Monitoring',
-  'stability-monitoring': 'Stability Monitoring',
-  'hold-time': 'Hold Time Monitoring',
-  'hold-time-monitoring': 'Hold Time Monitoring',
-  'process-capability': 'Process Capability',
-  'trend-analysis': 'Trend Analysis',
+  cpp: 'Process Parameters (CPP)',
+  cqa: 'Quality Attributes (CQA)',
+  'raw-materials': 'Raw Materials',
+  'raw-material-monitoring': 'Raw Materials',
+  'packing-materials': 'Packing Materials',
+  'packing-material-monitoring': 'Packing Materials',
+  utility: 'Utilities',
+  'utility-monitoring': 'Utilities',
+  environmental: 'Environment',
+  'environmental-monitoring': 'Environment',
+  yield: 'Yield',
+  'yield-monitoring': 'Yield',
+  'stability-monitoring': 'Stability',
+  'hold-time': 'Hold Time',
+  'hold-time-monitoring': 'Hold Time',
+  'process-capability': 'Capability',
+  'trend-analysis': 'Trends',
   'control-charts': 'Control Charts',
-  'statistical-process-control': 'Statistical Process Control',
-  'risk-assessment': 'Risk Assessment',
+  'statistical-process-control': 'Control Charts (SPC)',
+  'risk-assessment': 'Risk',
   'impact-assessment': 'Impact Assessment',
   'risk-management': 'Risk Management',
   fmea: 'FMEA Assessment',
@@ -142,14 +145,14 @@ export const BREADCRUMB_LABELS: Record<string, string> = {
   'mitigation-plan': 'Mitigation Plan',
   'review-monitoring': 'Review & Monitoring',
   'risk-review': 'Review & Monitoring',
-  'annual-review': 'Annual CPV Review',
-  'ai-analytics': 'AI Analytics',
-  'predictive-analytics': 'AI Analytics',
-  configuration: 'CPV Configuration',
-  settings: 'CPV Configuration',
-  'reports-analytics': 'Reports & Analytics',
-  'alert-engine': 'Alert Engine',
-  alerts: 'Alert Engine',
+  'annual-review': 'Annual Review',
+  'ai-analytics': 'AI Insights',
+  'predictive-analytics': 'AI Insights',
+  configuration: 'Settings',
+  settings: 'Settings',
+  'reports-analytics': 'Reports',
+  'alert-engine': 'Alerts',
+  alerts: 'Alerts',
   master: 'Master Data',
   materials: 'Material Master',
   abbreviations: 'Abbreviations',
@@ -161,6 +164,12 @@ export const BREADCRUMB_LABELS: Record<string, string> = {
 };
 
 export function formatBreadcrumbLabel(segment: string, pathname?: string): string {
+  if (pathname && segment === 'admin' && isMasterDataPath(pathname)) {
+    return 'Master Data';
+  }
+  if (pathname && segment === 'equipment' && isMasterDataPath(pathname)) {
+    return 'Equipment Master';
+  }
   if (pathname && segment === 'master' && pathname.includes('/documents/')) {
     return 'Document Master';
   }
@@ -193,6 +202,9 @@ export function formatBreadcrumbLabel(segment: string, pathname?: string): strin
   }
   if (pathname && segment === 'audit-trail' && pathname.includes('/documents/')) {
     return 'Document Audit Trail';
+  }
+  if (pathname && segment === 'batches' && (pathname.startsWith('/dashboard/batches') || pathname.startsWith('/manufacturing'))) {
+    return 'Batch Management';
   }
   if (pathname && (segment === 'create' || segment === 'new')) {
     if (pathname.includes('/change-control/')) return 'Create Change Control';

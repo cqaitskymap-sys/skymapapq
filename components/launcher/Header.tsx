@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import {
-  CircleHelp, LogOut, Moon, Search, Sun,
+  LogOut, Moon, Search, Sun,
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { NotificationBell } from '@/components/layout/notification-bell';
@@ -31,7 +31,7 @@ export function LauncherHeader({ searchQuery = '', onSearchChange }: LauncherHea
 
   return (
     <header className="sticky top-0 z-50 border-b border-border/40 bg-white/75 shadow-[0_1px_0_0_rgba(37,99,235,0.06)] backdrop-blur-xl dark:bg-background/80">
-      <div className="mx-auto flex h-16 max-w-[1600px] items-center gap-3 px-4 sm:gap-4 sm:px-6">
+      <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-2 px-3 sm:h-16 sm:gap-4 sm:px-6">
         {/* Logo & Brand */}
         <Link href="/launcher" className="flex min-w-fit items-center gap-2.5 transition-opacity hover:opacity-90">
           <div className="relative h-8">
@@ -90,18 +90,6 @@ export function LauncherHeader({ searchQuery = '', onSearchChange }: LauncherHea
           </Button>
 
           <NotificationBell />
-
-          <Button variant="outline" size="sm" className="hidden h-9 rounded-xl sm:inline-flex" asChild>
-            <Link href="/dashboard/help">
-              <CircleHelp className="mr-1.5 h-4 w-4" />
-              How to use
-            </Link>
-          </Button>
-          <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl sm:hidden" asChild>
-            <Link href="/dashboard/help" aria-label="How to use SKYMAP">
-              <CircleHelp className="h-4 w-4" />
-            </Link>
-          </Button>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

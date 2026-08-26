@@ -99,10 +99,6 @@ export function ModuleCard({
           <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
             {module.description}
           </p>
-          <p className="mt-2 rounded-lg bg-muted/60 px-2 py-1.5 text-[11px] leading-snug text-foreground/80">
-            <span className="font-semibold text-[#2563EB]">When to use: </span>
-            {module.useWhen}
-          </p>
         </div>
 
         <Link

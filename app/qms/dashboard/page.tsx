@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation';
+import { QmsOverviewPage } from '@/components/qms/qms-overview-page';
 
 export default function QmsDashboardPage() {
-  redirect('/qms');
+  return <QmsOverviewPage />;
 }

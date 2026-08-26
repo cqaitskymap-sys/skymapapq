@@ -172,14 +172,14 @@ export function LoginFormPanel() {
   };
 
   return (
-    <div className="flex flex-1 items-center justify-center bg-gradient-to-br from-slate-50 via-white to-blue-50/40 px-4 py-8 md:px-8 md:w-full lg:w-[40%] lg:py-12 xl:w-[35%]">
+    <div className="flex flex-1 items-center justify-center bg-gradient-to-br from-slate-50 via-white to-blue-50/40 px-4 py-6 md:px-8 md:w-full md:py-8 lg:w-[40%] lg:py-12 xl:w-[35%]">
       <motion.div
         initial={{ opacity: 0, y: 32 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, ease: 'easeOut' }}
         className="w-full max-w-[420px]"
       >
-        <div className="rounded-[24px] border border-white/60 bg-white/70 p-8 shadow-[0_8px_40px_rgba(15,23,42,0.08)] backdrop-blur-2xl md:p-10">
+        <div className="rounded-[24px] border border-white/60 bg-white/70 p-5 shadow-[0_8px_40px_rgba(15,23,42,0.08)] backdrop-blur-2xl xs:p-6 sm:p-8 md:p-10">
           <div className="mb-8 text-center">
             <SkymapLogo />
             <h2 className="mt-5 text-2xl font-bold tracking-tight text-slate-900">
@@ -253,7 +253,7 @@ export function LoginFormPanel() {
               )}
             </div>
 
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Checkbox
                   id="rememberMe"

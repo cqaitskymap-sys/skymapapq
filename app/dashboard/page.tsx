@@ -182,7 +182,7 @@ export default function DashboardPage() {
     return (
       <div className="relative space-y-6">
         <div className="overflow-hidden rounded-3xl border border-border/40 bg-white/80 p-6 shadow-sm backdrop-blur-sm dark:bg-card/80">
-          <h1 className="text-3xl font-bold tracking-tight">Skymap QMS Dashboard</h1>
+          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Skymap QMS Dashboard</h1>
           <p className="mt-1 text-muted-foreground">Loading live metrics from your QMS data...</p>
         </div>
         <LoadingSkeleton rows={2} />
@@ -212,7 +212,7 @@ export default function DashboardPage() {
           aria-hidden
           className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#2563EB] via-sky-400 to-indigo-400"
         />
-        <h1 className="bg-gradient-to-r from-foreground to-[#2563EB] bg-clip-text text-3xl font-bold tracking-tight text-transparent">
+        <h1 className="bg-gradient-to-r from-foreground to-[#2563EB] bg-clip-text text-2xl font-bold tracking-tight text-transparent sm:text-3xl">
           Skymap QMS Dashboard
         </h1>
         <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">
@@ -466,7 +466,7 @@ export default function DashboardPage() {
               </defs>
               <CartesianGrid strokeDasharray="3 3" className="stroke-border" horizontal={false} />
               <XAxis type="number" className="text-xs" domain={[0, 100]} tickLine={false} axisLine={false} />
-              <YAxis dataKey="module" type="category" className="text-xs" width={120} tickLine={false} axisLine={false} />
+              <YAxis dataKey="module" type="category" className="text-xs" width={72} tickLine={false} axisLine={false} />
               <Tooltip contentStyle={tooltipStyle} />
               <Bar dataKey="score" fill="url(#complianceGrad)" radius={[0, 6, 6, 0]} name="Compliance %" />
             </BarChart>
@@ -483,10 +483,10 @@ export default function DashboardPage() {
               {data.recentBatches.map((batch) => (
                 <div
                   key={batch.id}
-                  className="flex items-start justify-between rounded-xl border border-border/40 bg-muted/20 p-3.5 transition-colors hover:border-[#2563EB]/25 hover:bg-[#2563EB]/[0.04]"
+                  className="flex min-w-0 items-start justify-between gap-2 rounded-xl border border-border/40 bg-muted/20 p-3.5 transition-colors hover:border-[#2563EB]/25 hover:bg-[#2563EB]/[0.04]"
                 >
-                  <div className="space-y-1">
-                    <p className="font-mono text-sm font-semibold">{batch.batch_number}</p>
+                  <div className="min-w-0 space-y-1">
+                    <p className="truncate font-mono text-sm font-semibold">{batch.batch_number}</p>
                     <p className="text-xs text-muted-foreground">{batch.product_name}</p>
                   </div>
                   <Badge
@@ -497,7 +497,7 @@ export default function DashboardPage() {
                           ? 'outline'
                           : 'destructive'
                     }
-                    className="rounded-full text-xs capitalize"
+                    className="shrink-0 rounded-full text-xs capitalize"
                   >
                     {batch.status.replace(/_/g, ' ')}
                   </Badge>
@@ -523,10 +523,10 @@ export default function DashboardPage() {
               {data.recentDeviations.map((dev) => (
                 <div
                   key={dev.id}
-                  className="flex items-start justify-between rounded-xl border border-border/40 bg-muted/20 p-3.5 transition-colors hover:border-rose-200 hover:bg-rose-50/40 dark:hover:bg-rose-950/20"
+                  className="flex min-w-0 items-start justify-between gap-2 rounded-xl border border-border/40 bg-muted/20 p-3.5 transition-colors hover:border-rose-200 hover:bg-rose-50/40 dark:hover:bg-rose-950/20"
                 >
-                  <div className="space-y-1">
-                    <p className="font-mono text-sm font-semibold">{dev.deviation_number}</p>
+                  <div className="min-w-0 space-y-1">
+                    <p className="truncate font-mono text-sm font-semibold">{dev.deviation_number}</p>
                     <p className="text-xs text-muted-foreground">{dev.title}</p>
                   </div>
                   <Badge
@@ -537,7 +537,7 @@ export default function DashboardPage() {
                           ? 'outline'
                           : 'secondary'
                     }
-                    className="rounded-full text-xs capitalize"
+                    className="shrink-0 rounded-full text-xs capitalize"
                   >
                     {dev.deviation_type}
                   </Badge>

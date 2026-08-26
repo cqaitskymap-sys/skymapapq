@@ -54,7 +54,17 @@ const PAGE_SIZE = 10;
 
 type StatusAction = { batch: AdminBatch; action: 'release' | 'reject' | 'hold' | 'close' | 'archive' } | null;
 
-export function BatchesListPage() {
+export function BatchesListPage({
+  title = 'Batch Master',
+  description = 'Product batch master for PQR, CPV, CPP, CQA, Deviation, OOS, CAPA, and Stability',
+  basePath = '/admin',
+  sectionLabel = 'Admin',
+}: {
+  title?: string;
+  description?: string;
+  basePath?: string;
+  sectionLabel?: string;
+} = {}) {
   const { user, profile } = useAuth();
   const { role, canDelete } = useAdminPermissions();
   const canEdit = canEditBatches(role);
@@ -384,9 +394,10 @@ export function BatchesListPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Batch Master"
-        description="Product batch master for PQR, CPV, CPP, CQA, Deviation, OOS, CAPA, and Stability"
-        basePath="/admin"
+        title={title}
+        description={description}
+        basePath={basePath}
+        sectionLabel={sectionLabel}
         actions={
           <div className="flex gap-2 flex-wrap">
             <Button variant="outline" size="sm" onClick={handleExport}><Download className="h-4 w-4 mr-1" />Export</Button>

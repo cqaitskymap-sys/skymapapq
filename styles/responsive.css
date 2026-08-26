@@ -1,0 +1,110 @@
+/* Whole-app responsive foundation — phones, tablets, desktops */
+
+html {
+  overflow-x: clip;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  min-width: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: clip;
+}
+
+@supports (padding: env(safe-area-inset-bottom)) {
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+img,
+svg,
+video,
+canvas,
+iframe {
+  max-width: 100%;
+}
+
+main,
+#main-content {
+  min-width: 0;
+}
+
+.overflow-x-auto,
+.overflow-auto,
+.overflow-y-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Stop iOS zooming in when focusing form fields */
+@media (max-width: 640px) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='button']):not([type='submit']):not([type='reset']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/*
+  Module sub-navs (Deviation, CAPA, etc.) use a desktop sidebar.
+  On phones/tablets they become a swipeable chip row so they do not
+  eat the whole viewport height.
+*/
+@media (max-width: 1023px) {
+  nav.w-full.shrink-0 > div.rounded-lg.border {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 0.25rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    padding: 0.5rem;
+  }
+
+  nav.w-full.shrink-0 > div.rounded-lg.border > p:first-child {
+    display: none;
+  }
+
+  nav.w-full.shrink-0 > div.rounded-lg.border > * + * {
+    margin-top: 0 !important;
+  }
+
+  nav.w-full.shrink-0 > div.rounded-lg.border > a {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
+
+.recharts-responsive-container,
+.recharts-wrapper,
+.recharts-surface {
+  max-width: 100%;
+}
+
+.recharts-responsive-container {
+  min-width: 0 !important;
+}
+
+[data-chart] {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Dialogs stay inside the viewport even when pages pass a large max-width */
+[data-radix-dialog-content][role='dialog']:not([data-side]) {
+  width: min(100%, calc(100vw - 1.5rem));
+  max-height: min(90dvh, 56rem);
+}
+
+/* Common search fields in list toolbars fill the row on phones */
+@media (max-width: 640px) {
+  .relative.flex-1.min-w-\[200px\],
+  .relative.flex-1.min-w-\[180px\] {
+    min-width: 0 !important;
+    flex-basis: 100%;
+  }
+}

@@ -34,9 +34,10 @@ const ICON_MAP: Record<string, React.ElementType> = {
 interface AdminSidebarProps {
   collapsed: boolean;
   onToggle: () => void;
+  embedded?: boolean;
 }
 
-export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
+export function AdminSidebar({ collapsed, onToggle, embedded = false }: AdminSidebarProps) {
   const pathname = usePathname();
   const { role } = useAdminPermissions();
   const [navQuery, setNavQuery] = useState('');
@@ -141,8 +142,9 @@ export function AdminSidebar({ collapsed, onToggle }: AdminSidebarProps) {
   return (
     <aside
       className={cn(
-        'hidden h-full flex-col border-r bg-slate-50 transition-all duration-300 dark:bg-slate-950 lg:flex',
-        collapsed ? 'w-[68px]' : 'w-[280px]'
+        'h-full flex-col border-r bg-slate-50 transition-all duration-300 dark:bg-slate-950',
+        embedded ? 'flex w-full' : 'hidden lg:flex',
+        !embedded && (collapsed ? 'w-[68px]' : 'w-[280px]')
       )}
     >
       <div className="h-16 flex items-center justify-between px-4 border-b bg-white dark:bg-slate-900">

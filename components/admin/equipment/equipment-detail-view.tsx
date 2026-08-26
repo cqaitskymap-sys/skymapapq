@@ -102,7 +102,8 @@ export function EquipmentDetailView({ id }: { id: string }) {
       <PageHeader
         title={record.equipment_name}
         description={record.equipment_id}
-        basePath="/admin"
+        basePath="/admin/products"
+        sectionLabel="Master Data"
         actions={
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline">

@@ -50,7 +50,7 @@ const STAT_ITEMS = [
 
 export function StatsCards({ stats }: StatsCardsProps) {
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+    <div className="grid grid-cols-2 gap-2 xs:gap-3 lg:grid-cols-4 lg:gap-4">
       {STAT_ITEMS.map((item, index) => (
         <motion.div
           key={item.key}
@@ -59,7 +59,7 @@ export function StatsCards({ stats }: StatsCardsProps) {
           transition={{ delay: index * 0.08, duration: 0.35 }}
           whileHover={{ y: -2 }}
           className={cn(
-            'group relative overflow-hidden rounded-2xl border border-border/40 bg-white/80 p-4',
+            'group relative overflow-hidden rounded-2xl border border-border/40 bg-white/80 p-3 xs:p-4',
             'shadow-sm backdrop-blur-sm transition-all duration-300',
             'hover:shadow-md ring-1 ring-transparent',
             item.ring,

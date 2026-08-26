@@ -2,8 +2,6 @@
 
 import { useMemo, useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import Link from 'next/link';
-import { Compass } from 'lucide-react';
 import { LauncherHeader } from '@/components/launcher/Header';
 import { SearchBar } from '@/components/launcher/SearchBar';
 import { StatsCards } from '@/components/launcher/StatsCards';
@@ -11,8 +9,6 @@ import { ModuleGrid } from '@/components/launcher/ModuleGrid';
 import { QuickActions } from '@/components/launcher/QuickActions';
 import { RecentModules } from '@/components/launcher/RecentModules';
 import { LAUNCHER_MODULES } from '@/lib/launcher/module-definitions';
-import { requestOpenUserGuide } from '@/lib/user-guide';
-import { Button } from '@/components/ui/button';
 import {
   addRecentModule,
   getFavoriteModules,
@@ -80,7 +76,6 @@ export function ModuleLauncherPage() {
       (mod) =>
         mod.name.toLowerCase().includes(q)
         || mod.description.toLowerCase().includes(q)
-        || mod.useWhen.toLowerCase().includes(q)
         || mod.keywords.some((k) => k.includes(q)),
     );
   }, [search, accessibleModules]);
@@ -102,7 +97,7 @@ export function ModuleLauncherPage() {
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#F4F7FB] dark:bg-background">
+    <div className="relative min-h-dvh overflow-x-clip bg-[#F4F7FB] dark:bg-background">
       {/* Atmospheric background */}
       <div
         aria-hidden
@@ -123,7 +118,7 @@ export function ModuleLauncherPage() {
 
       <LauncherHeader searchQuery={search} onSearchChange={setSearch} />
 
-      <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 sm:py-8">
+      <main className="mx-auto max-w-[1600px] px-3 py-5 xs:px-4 sm:px-6 sm:py-8">
         <motion.section
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
@@ -160,30 +155,6 @@ export function ModuleLauncherPage() {
             </div>
           </div>
         </motion.section>
-
-        <section className="mb-8">
-          <div className="flex flex-col gap-3 rounded-2xl border border-[#2563EB]/20 bg-white/80 p-4 shadow-sm dark:bg-card/80 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#2563EB]/10 text-[#2563EB]">
-                <Compass className="h-5 w-5" />
-              </div>
-              <div>
-                <h2 className="text-sm font-semibold">New here? Follow the A–Z guide</h2>
-                <p className="text-sm text-muted-foreground">
-                  Learn which module to open, how to complete each step, and what happens next.
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-2 sm:shrink-0">
-              <Button variant="outline" size="sm" onClick={() => requestOpenUserGuide()}>
-                Explain this screen
-              </Button>
-              <Button asChild size="sm">
-                <Link href="/dashboard/help">Open full guide</Link>
-              </Button>
-            </div>
-          </div>
-        </section>
 
         <section className="mb-8">
           <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

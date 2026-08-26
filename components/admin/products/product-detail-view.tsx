@@ -139,7 +139,8 @@ export function ProductDetailView({ id }: { id: string }) {
       <PageHeader
         title={product.productName}
         description={product.productId || product.productCode}
-        basePath="/admin"
+        basePath="/admin/products"
+        sectionLabel="Master Data"
         actions={
           canEdit && !product.isDeleted ? (
             <Button asChild className="bg-blue-600 hover:bg-blue-700">

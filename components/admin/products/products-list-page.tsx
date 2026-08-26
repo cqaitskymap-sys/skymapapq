@@ -55,7 +55,17 @@ type ConfirmState = {
   activate: boolean;
 } | null;
 
-export function ProductsListPage() {
+export function ProductsListPage({
+  title = 'Product Master',
+  description = 'Pharma product master for PQR, CPV, Batch, Stability, and QMS modules',
+  basePath = '/admin/products',
+  sectionLabel = 'Master Data',
+}: {
+  title?: string;
+  description?: string;
+  basePath?: string;
+  sectionLabel?: string;
+} = {}) {
   const { user, profile } = useAuth();
   const { role, canDelete } = useAdminPermissions();
   const canEdit = canEditProducts(role);
@@ -252,7 +262,7 @@ export function ProductsListPage() {
   if (loading) {
     return (
       <div>
-        <PageHeader title="Product Master" basePath="/admin" />
+        <PageHeader title="Product Master" basePath="/admin/products" sectionLabel="Master Data" />
         <LoadingSkeleton rows={2} />
       </div>
     );
@@ -287,9 +297,10 @@ export function ProductsListPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Product Master"
-        description="Pharma product master for PQR, CPV, Batch, Stability, and QMS modules"
-        basePath="/admin"
+        title={title}
+        description={description}
+        basePath={basePath}
+        sectionLabel={sectionLabel}
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={handleExport}><Download className="h-4 w-4 mr-1" />Export</Button>

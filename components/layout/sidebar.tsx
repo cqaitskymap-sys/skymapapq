@@ -9,7 +9,7 @@ import {
   RefreshCw, LineChart, Cog, BookOpen, Users, FileText, TruckIcon, ShieldCheck,
   ClipboardCheck,
   Bell, Brain, ClipboardList, BarChart3, ChevronDown, ChevronRight, PanelLeftClose,
-  PanelLeftOpen, LogOut, Settings, UserCircle, PackageSearch, Beaker, Award,
+  PanelLeftOpen, LogOut, Settings, UserCircle, PackageSearch, Beaker,
   AlertCircle, Building2, Activity,   Hash, GitBranch, PenLine, Database, SlidersHorizontal,
   BadgeCheck, Factory, FileSearch, Plus, CheckCircle, FileDown, Search, Link2, Microscope, Calendar, MessageSquare, RotateCcw, Library, Grid3X3, ListChecks, FileSignature, TrendingUp, FileCheck, PlayCircle, Monitor, Sparkles, Server, Code, PenTool, Lock, Wrench, MapPin, Thermometer, Droplets, PackagePlus, ShieldAlert, Boxes,
   CalendarDays, UserCheck, ScrollText, History, Mail, Blocks, FileUp, LayoutGrid,
@@ -20,7 +20,7 @@ import { useAuth } from '@/contexts/auth-context';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useModuleConfigurationCatalog } from '@/hooks/use-module-configuration';
 import { navHrefModule } from '@/lib/nav-permissions';
-import { resolveNavGroupFromPath } from '@/lib/launcher/module-scope';
+import { isMasterDataPath, resolveNavGroupFromPath } from '@/lib/launcher/module-scope';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Input } from '@/components/ui/input';
 
@@ -136,21 +136,12 @@ const navItems: NavItem[] = [
   },
   {
     label: 'Manufacturing',
-    icon: Building2,
+    icon: Factory,
     matchPrefix: '/manufacturing',
     children: [
       { label: 'Dashboard', href: '/manufacturing/dashboard', icon: LayoutDashboard },
       { label: 'Batch Management', href: '/dashboard/batches', icon: Package },
       { label: 'Product Master', href: '/dashboard/products', icon: FlaskConical },
-    ],
-  },
-  {
-    label: 'Regulatory & Compliance',
-    icon: Award,
-    matchPrefix: '/dashboard/audit-trail',
-    children: [
-      { label: 'Audit Trail', href: '/dashboard/audit-trail', icon: FileText },
-      { label: 'Document Management', href: '/qms/documents/master', icon: BookOpen },
     ],
   },
   {
@@ -166,17 +157,16 @@ const navItems: NavItem[] = [
   },
   {
     label: 'Master Data',
-    icon: Settings,
+    icon: Database,
     matchPrefix: '/dashboard/master',
     children: [
       { label: 'Product Master', href: '/admin/products', icon: FlaskConical },
       { label: 'Equipment Master', href: '/admin/equipment', icon: Wrench },
       { label: 'Material Master', href: '/dashboard/master/materials', icon: Beaker },
-      { label: 'Vendor Master', href: '/qms/vendors', icon: TruckIcon },
+      { label: 'Vendor Master', href: '/dashboard/master/vendors', icon: TruckIcon },
     ],
   },
   { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 },
-  { label: 'Notifications', href: '/dashboard/notifications', icon: Bell },
 ];
 
 interface SidebarProps {
@@ -247,7 +237,7 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
 
   if (permLoading) {
     return (
-      <aside className="hidden lg:flex h-screen w-[260px] items-center justify-center sidebar-bg border-r">
+      <aside className="hidden h-dvh w-[260px] items-center justify-center border-r sidebar-bg lg:flex">
         <span className="text-muted-foreground text-sm">Loading menu...</span>
       </aside>
     );
@@ -262,7 +252,9 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
   const isLinkActive = (href?: string) => {
     if (!href) return false;
     if (href === '/dashboard' || href === '/cpv' || href === '/cpv/dashboard' || href === '/admin' || href === '/pqr/dashboard' || href === '/manufacturing/dashboard' || href === '/qms/dashboard') {
-      return pathname === href || (href === '/cpv/dashboard' && pathname === '/cpv');
+      return pathname === href
+        || (href === '/cpv/dashboard' && pathname === '/cpv')
+        || (href === '/qms/dashboard' && pathname === '/qms');
     }
     return pathname === href || pathname.startsWith(href + '/');
   };
@@ -272,7 +264,16 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
       return pathname.startsWith('/pqr') || pathname.startsWith('/dashboard/pqr');
     }
     if (item.label === 'Admin') {
+      if (isMasterDataPath(pathname)) return false;
       return pathname.startsWith('/admin') || pathname.startsWith('/dashboard/admin');
+    }
+    if (item.label === 'Master Data') {
+      return isMasterDataPath(pathname);
+    }
+    if (item.label === 'Manufacturing') {
+      return pathname.startsWith('/manufacturing')
+        || pathname.startsWith('/dashboard/batches')
+        || pathname.startsWith('/dashboard/products');
     }
     if (item.matchPrefix) {
       return pathname === item.matchPrefix || pathname.startsWith(item.matchPrefix + '/');
@@ -294,10 +295,14 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
     );
   };
 
+  const itemsToRender = !collapsed && scopedNavItems.length === 1 && scopedNavItems[0].children?.length
+    ? scopedNavItems[0].children
+    : scopedNavItems;
+
   return (
     <TooltipProvider delayDuration={0}>
       <aside className={cn(
-        'h-screen flex-col sidebar-bg border-r transition-all duration-300 ease-in-out flex-shrink-0 border-r',
+        'h-dvh flex-col sidebar-bg border-r transition-all duration-300 ease-in-out flex-shrink-0',
         embedded ? 'flex w-full' : 'hidden lg:flex',
         !embedded && (collapsed ? 'w-[64px]' : 'w-[260px]')
       )} style={{ borderColor: 'hsl(var(--sidebar-border))' }}>
@@ -341,7 +346,7 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
               </div>
             </>
           )}
-          {scopedNavItems.map((item) => {
+          {itemsToRender.map((item) => {
             if (item.children) {
                   const isOpen = Boolean(navQuery.trim()) || openGroups.includes(item.label) || isGroupActive(item);
               const hasActiveChild = isGroupActive(item);

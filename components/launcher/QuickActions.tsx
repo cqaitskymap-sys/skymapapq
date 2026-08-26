@@ -71,7 +71,7 @@ export function QuickActions() {
       <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
         Quick Actions
       </h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
         {QUICK_ACTIONS.map((action, index) => (
           <motion.div
             key={action.label}
@@ -97,7 +97,7 @@ export function QuickActions() {
               >
                 <action.icon className="h-5 w-5" />
               </div>
-              <span className="text-xs font-medium leading-tight text-foreground">
+          <span className="text-xs font-medium leading-tight text-foreground">
                 {action.label}
               </span>
             </Link>

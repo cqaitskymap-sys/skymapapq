@@ -9,9 +9,16 @@ interface PageHeaderProps {
   description?: string;
   actions?: ReactNode;
   basePath?: string;
+  sectionLabel?: string;
 }
 
-export function PageHeader({ title, description, actions, basePath = '/admin' }: PageHeaderProps) {
+export function PageHeader({
+  title,
+  description,
+  actions,
+  basePath = '/admin',
+  sectionLabel = 'Admin',
+}: PageHeaderProps) {
   return (
     <div className="space-y-4 mb-6">
       <nav className="flex items-center gap-1.5 text-sm text-muted-foreground">
@@ -20,13 +27,7 @@ export function PageHeader({ title, description, actions, basePath = '/admin' }:
           Dashboard
         </Link>
         <ChevronRight className="h-3.5 w-3.5" />
-        <Link href={basePath} className="hover:text-blue-600">Admin</Link>
-        {basePath !== '/admin' && (
-          <>
-            <ChevronRight className="h-3.5 w-3.5" />
-            <span className="text-slate-900 dark:text-slate-100 font-medium">Overview</span>
-          </>
-        )}
+        <Link href={basePath} className="hover:text-blue-600">{sectionLabel}</Link>
       </nav>
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>

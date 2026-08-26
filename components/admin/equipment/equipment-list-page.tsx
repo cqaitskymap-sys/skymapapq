@@ -132,7 +132,7 @@ export function EquipmentListPage() {
   if (loading) {
     return (
       <div>
-        <PageHeader title="Equipment Master" basePath="/admin" />
+        <PageHeader title="Equipment Master" basePath="/admin/products" sectionLabel="Master Data" />
         <LoadingSkeleton rows={2} />
       </div>
     );
@@ -145,7 +145,8 @@ export function EquipmentListPage() {
       <PageHeader
         title="Equipment Master"
         description="Central equipment register with name, ID, qualification status, and manufacturing line"
-        basePath="/admin"
+        basePath="/admin/products"
+        sectionLabel="Master Data"
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={handleExport}>

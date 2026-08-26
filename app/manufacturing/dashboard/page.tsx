@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation';
+import { ManufacturingDashboardPage } from '@/components/manufacturing/manufacturing-dashboard-page';
 
-export default function ManufacturingDashboardPage() {
-  redirect('/dashboard/batches');
+export default function ManufacturingDashboardRoutePage() {
+  return <ManufacturingDashboardPage />;
 }

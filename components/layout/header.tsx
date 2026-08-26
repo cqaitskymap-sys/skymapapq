@@ -2,14 +2,13 @@
 
 import { FormEvent, useState } from 'react';
 import {
-  ChevronRight, Compass, CircleHelp, LifeBuoy, LogOut, Moon, Search, Settings, Sun,
+  ChevronRight, CircleHelp, LifeBuoy, LogOut, Moon, Search, Settings, Sun,
 } from 'lucide-react';
 import { NotificationBell } from '@/components/layout/notification-bell';
 import { MobileNav } from '@/components/layout/mobile-nav';
 import { useTheme } from 'next-themes';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/contexts/auth-context';
 import { usePathname, useRouter } from 'next/navigation';
@@ -17,6 +16,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { cn } from '@/lib/utils';
 import { formatBreadcrumbLabel } from '@/lib/breadcrumb-labels';
+import { isMasterDataPath } from '@/lib/launcher/module-scope';
 
 function getBreadcrumbs(pathname: string) {
   const parts = pathname.split('/').filter(Boolean);
@@ -25,7 +25,10 @@ function getBreadcrumbs(pathname: string) {
   for (const part of parts) {
     path += `/${part}`;
     if (path === '/dashboard') continue;
-    crumbs.push({ label: formatBreadcrumbLabel(part, pathname), href: path });
+    const href = (path === '/admin' || path === '/dashboard/admin') && isMasterDataPath(pathname)
+      ? '/admin/products'
+      : path;
+    crumbs.push({ label: formatBreadcrumbLabel(part, pathname), href });
   }
   return crumbs;
 }
@@ -56,23 +59,23 @@ export function Header() {
   };
 
   return (
-    <header className="h-16 border-b bg-background/95 backdrop-blur-sm flex items-center px-4 gap-4 sticky top-0 z-30">
+    <header className="sticky top-0 z-30 flex h-14 min-h-14 items-center gap-2 border-b bg-background/95 px-2 backdrop-blur-sm xs:gap-3 xs:px-3 sm:h-16 sm:min-h-16 sm:px-4 sm:gap-4">
       <MobileNav />
       {/* Company Logo & Name */}
-      <div className="flex items-center gap-2 min-w-fit">
-        <div className="relative h-8">
+      <div className="flex min-w-0 items-center gap-2">
+        <div className="relative h-7 shrink-0 sm:h-8">
           <Image
             src="/logo-1.png"
             alt="Skymap Logo"
             width={298}
             height={143}
-            className="h-8 w-auto object-contain"
+            className="h-7 w-auto object-contain sm:h-8"
             priority
           />
         </div>
-        <div className="flex flex-col leading-none">
-          <span className="font-bold text-sm bg-gradient-to-r from-blue-600 to-green-500 bg-clip-text text-transparent">SKYMAP</span>
-          <span className="text-xs text-muted-foreground">Pharmaceuticals</span>
+        <div className="hidden min-w-0 flex-col leading-none xs:flex">
+          <span className="bg-gradient-to-r from-blue-600 to-green-500 bg-clip-text text-sm font-bold text-transparent">SKYMAP</span>
+          <span className="hidden text-xs text-muted-foreground sm:block">Pharmaceuticals</span>
         </div>
       </div>
 
@@ -80,21 +83,21 @@ export function Header() {
       <div className="hidden md:block w-px h-6 bg-border" />
 
       {/* Breadcrumb */}
-      <nav aria-label="Breadcrumb" className="hidden md:flex items-center gap-1 text-sm text-muted-foreground flex-1">
+      <nav aria-label="Breadcrumb" className="hidden min-w-0 flex-1 items-center gap-1 overflow-hidden text-sm text-muted-foreground md:flex">
         {crumbs.map((crumb, i) => (
-          <span key={`${crumb.href}-${i}`} className="flex items-center gap-1">
-            {i > 0 && <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />}
+          <span key={`${crumb.href}-${i}`} className="flex min-w-0 items-center gap-1">
+            {i > 0 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />}
             {i === crumbs.length - 1 ? (
-              <span className="text-foreground font-medium">{crumb.label}</span>
+              <span className="truncate font-medium text-foreground">{crumb.label}</span>
             ) : (
-              <Link href={crumb.href} className="hover:text-foreground transition-colors">{crumb.label}</Link>
+              <Link href={crumb.href} className="truncate transition-colors hover:text-foreground">{crumb.label}</Link>
             )}
           </span>
         ))}
       </nav>
 
       {/* Search */}
-      <form onSubmit={submitSearch} role="search" className="relative hidden lg:block w-64">
+      <form onSubmit={submitSearch} role="search" className="relative hidden w-48 lg:block xl:w-64">
         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
         <Input
           type="search"
@@ -107,7 +110,7 @@ export function Header() {
       </form>
 
       {/* Right actions */}
-      <div className="flex items-center gap-2 ml-auto md:ml-0">
+      <div className="ml-auto flex shrink-0 items-center gap-1 xs:gap-2 md:ml-0">
         <Button
           variant="ghost"
           size="icon"
@@ -119,28 +122,6 @@ export function Header() {
           <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
         </Button>
 
-        <Button
-          variant="ghost"
-          size="sm"
-          className="hidden h-8 gap-1.5 px-2 xl:inline-flex"
-          asChild
-        >
-          <Link href="/dashboard/help">
-            <Compass className="h-4 w-4" />
-            How to use
-          </Link>
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 xl:hidden"
-          asChild
-        >
-          <Link href="/dashboard/help" aria-label="How to use SKYMAP">
-            <CircleHelp className="h-4 w-4" />
-          </Link>
-        </Button>
-
         <NotificationBell />
 
         {/* User menu */}
@@ -150,7 +131,7 @@ export function Header() {
               <div className="w-6 h-6 bg-primary/10 rounded-full flex items-center justify-center text-xs font-bold text-primary">
                 {(profile?.full_name || 'DU').charAt(0).toUpperCase()}
               </div>
-              <span className="hidden md:block max-w-[120px] truncate">{profile?.full_name || 'User'}</span>
+              <span className="hidden max-w-[120px] truncate lg:block">{profile?.full_name || 'User'}</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
