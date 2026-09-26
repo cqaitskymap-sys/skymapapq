@@ -349,7 +349,7 @@ export function PackingMonitoringPage() {
     const p = products.find((x) => x.id === productId);
     if (!p) return;
     setForm((f) => ({ ...f, cpvProductId: productId, productName: p.productName, productCode: p.productCode }));
-    const batches = await fetchPmBatchesForProduct(p.productName);
+    const batches = await fetchPmBatchesForProduct(p.productName, p.id);
     setFormBatches(batches);
     if (batchQuery && batches.some((b) => b.batchNumber === batchQuery)) {
       setForm((f) => ({ ...f, batchNumber: batchQuery }));
@@ -1037,7 +1037,7 @@ export function PackingMonitoringPage() {
               <Select value={bulkProductId} onValueChange={async (v) => {
                 setBulkProductId(v);
                 const p = products.find((x) => x.id === v);
-                if (p) setFormBatches(await fetchPmBatchesForProduct(p.productName));
+                if (p) setFormBatches(await fetchPmBatchesForProduct(p.productName, p.id));
               }}>
                 <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                 <SelectContent>{products.map((p) => <SelectItem key={p.id} value={p.id}>{p.productName}</SelectItem>)}</SelectContent>

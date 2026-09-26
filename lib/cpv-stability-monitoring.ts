@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { RESULT_TYPES } from '@/lib/admin/constants';
+import { inOuterSpecificationBand } from '@/lib/cpv';
 
 export const STABILITY_STUDIES_COLLECTION = 'stability_studies';
 export const STABILITY_SCHEDULES_COLLECTION = 'stability_schedules';
@@ -58,7 +59,7 @@ export const DEFAULT_STABILITY_LIMITS: Record<string, {
   Colour: { target: 0, lower: 0, upper: 1, unit: '', resultType: 'Complies/Does Not Comply' },
   Clarity: { target: 0, lower: 0, upper: 1, unit: '', resultType: 'Complies/Does Not Comply' },
   pH: { target: 7.0, lower: 6.8, upper: 7.2, unit: '', resultType: 'Numeric', alertLow: 6.85, alertHigh: 7.15 },
-  Assay: { target: 100, lower: 90, upper: 110, unit: '%', resultType: 'Numeric', alertLow: 92, alertHigh: 108, actionLow: 88, actionHigh: 112 },
+  Assay: { target: 100, lower: 90, upper: 110, unit: '%', resultType: 'Numeric', alertLow: 92, alertHigh: 108, actionLow: 91, actionHigh: 109 },
   'Related Substances': { target: 0, lower: 0, upper: 2, unit: '%', resultType: 'Numeric', alertHigh: 1.5, actionHigh: 1.8 },
   Sterility: { target: 0, lower: 0, upper: 1, unit: '', resultType: 'Pass/Fail' },
   'Bacterial Endotoxin': { target: 0.5, lower: 0, upper: 1, unit: 'EU/mL', resultType: 'Numeric', alertHigh: 0.8, actionHigh: 0.9 },
@@ -241,10 +242,19 @@ export function intervalToMonths(interval: string): number {
   return match ? parseInt(match[1], 10) : 0;
 }
 
+function localCalendarDate(date = new Date()): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export function addMonthsToDate(dateStr: string, months: number): string {
-  const d = new Date(dateStr);
-  d.setMonth(d.getMonth() + months);
-  return d.toISOString().split('T')[0];
+  const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return dateStr.slice(0, 10);
+  const dt = new Date(y, m - 1, d, 12, 0, 0, 0);
+  dt.setMonth(dt.getMonth() + months);
+  return localCalendarDate(dt);
 }
 
 export function buildStabilityStudyNumber(batchNumber: string, studyType: string): string {
@@ -290,13 +300,8 @@ export function evaluateStabilityStatus(
   if (Number.isFinite(actionHigh) && num > Number(actionHigh)) return 'Action';
   if (Number.isFinite(alertLow) && num < Number(alertLow)) return 'OOT';
   if (Number.isFinite(alertHigh) && num > Number(alertHigh)) return 'OOT';
-  if (!Number.isFinite(alertLow) && !Number.isFinite(alertHigh)) {
-    const range = upper - lower;
-    if (range > 0) {
-      const innerLow = lower + range * 0.1;
-      const innerHigh = upper - range * 0.1;
-      if (num < innerLow || num > innerHigh) return 'OOT';
-    }
+  if (!Number.isFinite(alertLow) && !Number.isFinite(alertHigh) && inOuterSpecificationBand(num, lower, upper)) {
+    return 'OOT';
   }
   return 'Complies';
 }
@@ -335,11 +340,11 @@ export function computeScheduleStatus(
   if (cancelled) return 'Cancelled';
   if (resultEntryStatus === 'Completed') return 'Testing Completed';
   if (actualPullDate) return 'Pulled';
-  const today = new Date().toISOString().split('T')[0];
+  const today = localCalendarDate();
   if (dueDate && dueDate < today) return 'Missed';
   if (dueDate) {
-    const due = new Date(dueDate);
-    const now = new Date(today);
+    const due = new Date(`${dueDate.slice(0, 10)}T12:00:00`);
+    const now = new Date(`${today}T12:00:00`);
     const diffDays = (due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
     if (diffDays <= 7 && diffDays >= 0) return 'Due Soon';
   }

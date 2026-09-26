@@ -337,7 +337,16 @@ export function ConfigurationPage() {
       return;
     }
     const schema = getListSchema(listSection);
-    const parsed = schema.parse(values);
+    if (!schema) {
+      toast.error('This configuration section cannot be saved from the list editor.');
+      return;
+    }
+    const parsedResult = schema.safeParse(values);
+    if (!parsedResult.success) {
+      toast.error(parsedResult.error.issues[0]?.message || 'Check the form values and try again.');
+      return;
+    }
+    const parsed = parsedResult.data;
     const col = LIST_COLS[listSection as keyof typeof LIST_COLS];
     setSaving(true);
     const result = editingListId

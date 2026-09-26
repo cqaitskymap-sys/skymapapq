@@ -594,7 +594,7 @@ export function inferAlertFromRecord(
   const batchNumber = String(record.batchNumber || record.batchNo || record.batch_number || '');
   const parameterName = String(record.parameterName || record.testParameter || record.parameter_name || record.stage || '');
 
-  if (['alert', 'action', 'oot', 'oos', 'excursion', 'exceeded', 'not capable', 'out of control', 'fail'].some((s) => status.includes(s))) {
+  if (['alert', 'action', 'oot', 'oos', 'excursion', 'exceeded', 'not capable', 'out of control', 'fail', 'does not comply'].some((s) => status.includes(s))) {
     const isOos = status.includes('oos') || status.includes('fail');
     const isCritical = riskLevel === 'Critical' || moduleName === 'Environmental Monitoring';
     return {

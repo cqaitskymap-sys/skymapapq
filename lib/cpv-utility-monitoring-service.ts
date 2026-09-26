@@ -12,7 +12,7 @@ import { fetchParameters, normalizeParameter } from '@/lib/admin/parameter-servi
 import type { Parameter } from '@/lib/admin/schemas';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
 import { isCpvProductOperational } from '@/lib/cpv-product-master';
-import { fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
+import { clientBatchErrorForProduct, fetchCpvBatches, filterCpvBatchesForProduct } from '@/lib/cpv-batch-registration-service';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { listEquipment } from '@/lib/equipment-mgmt-service';
 import {
@@ -194,9 +194,8 @@ export async function fetchUtilityRecordById(id: string): Promise<UtilityMonitor
   return all.find((r) => r.id === id) ?? null;
 }
 
-export async function fetchUtilityBatchesForProduct(productName: string) {
-  const batches = await fetchCpvBatches();
-  return batches.filter((b) => b.productName === productName || b.productCode === productName);
+export async function fetchUtilityBatchesForProduct(productName: string, cpvProductId = '') {
+  return filterCpvBatchesForProduct(await fetchCpvBatches(), productName, cpvProductId);
 }
 
 export async function fetchUtilityParameters(utilityType?: string): Promise<Parameter[]> {
@@ -280,6 +279,8 @@ export async function createUtilityRecord(
     if (product && !isCpvProductOperational(product.cpvStatus)) {
       return { result: null, error: 'Selected CPV product is not operational for utility entry.' };
     }
+    const batchError = await clientBatchErrorForProduct(data.productName, data.cpvProductId, data.batchNumber);
+    if (batchError) return { result: null, error: batchError };
     if (qaOverride && options?.esignConfirmed !== true) {
       return { result: null, error: 'Electronic signature confirmation required for QA override.' };
     }

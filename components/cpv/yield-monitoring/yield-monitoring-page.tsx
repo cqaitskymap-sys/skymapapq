@@ -205,7 +205,7 @@ export function YieldMonitoringPage() {
     const p = products.find((x) => x.id === productId);
     if (!p) return;
     setForm((f) => ({ ...f, cpvProductId: productId, productName: p.productName, productCode: p.productCode }));
-    setFormBatches(await fetchYieldBatchesForProduct(p.productName));
+    setFormBatches(await fetchYieldBatchesForProduct(p.productName, p.id));
   };
 
   const onBatchChange = (batchNumber: string) => {
@@ -317,7 +317,7 @@ export function YieldMonitoringPage() {
   const openBulk = async () => {
     if (!products[0]) return;
     setBulkProductId(products[0].id);
-    setFormBatches(await fetchYieldBatchesForProduct(products[0].productName));
+    setFormBatches(await fetchYieldBatchesForProduct(products[0].productName, products[0].id));
     const configuredRows = (await Promise.all(YIELD_STAGES.map(async (stage) => {
       const limits = (await fetchYieldStageLimits(stage)) || DEFAULT_YIELD_LIMITS[stage];
       if (!limits) return null;
@@ -613,7 +613,7 @@ export function YieldMonitoringPage() {
             <Select value={bulkProductId} onValueChange={async (v) => {
               setBulkProductId(v);
               const p = products.find((x) => x.id === v);
-              if (p) setFormBatches(await fetchYieldBatchesForProduct(p.productName));
+              if (p) setFormBatches(await fetchYieldBatchesForProduct(p.productName, p.id));
             }}>
               <SelectTrigger><SelectValue placeholder="Product" /></SelectTrigger>
               <SelectContent>{products.map((p) => <SelectItem key={p.id} value={p.id}>{p.productName}</SelectItem>)}</SelectContent>

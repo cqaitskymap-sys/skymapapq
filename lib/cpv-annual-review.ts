@@ -271,8 +271,8 @@ export function buildAnnualCpvSnapshot(input: AnnualCpvReviewInput): AnnualCpvSn
   const cppStats = countCppCqa(cppYear);
   const cqaStats = countCppCqa(cqaYear);
   const allCpv = [...cppYear, ...cqaYear];
-  const oot = allCpv.filter((r) => r.status === 'OOT').length;
-  const oos = allCpv.filter((r) => r.status === 'OOS').length;
+  const oot = allCpv.filter((r) => displayCpvStatus(r.status || '') === 'OOT').length;
+  const oos = allCpv.filter((r) => displayCpvStatus(r.status || '') === 'OOS').length;
 
   const grouped = new Map<string, Array<CppRecord | CqaRecord>>();
   allCpv.forEach((record) => {
@@ -280,10 +280,14 @@ export function buildAnnualCpvSnapshot(input: AnnualCpvReviewInput): AnnualCpvSn
     grouped.set(key, [...(grouped.get(key) || []), record]);
   });
 
+  const inlineCapability: Array<{ cp: number; pp: number }> = [];
   const capabilityItems: AnnualCpvCapabilityItem[] = Array.from(grouped.entries())
     .map(([key, records]) => {
       const [source, parameter] = key.split('::') as ['CPP' | 'CQA', string];
       const cap = calculateCapability(records.map((r) => r.observedValue), records[0].lsl, records[0].usl);
+      if (cap.count >= 2 && cap.status !== 'Insufficient Data') {
+        inlineCapability.push({ cp: cap.cp, pp: cap.pp });
+      }
       return {
         parameter,
         source,
@@ -314,6 +318,19 @@ export function buildAnnualCpvSnapshot(input: AnnualCpvReviewInput): AnnualCpvSn
   const capAvgPpk = validCapsFromRecords.length
     ? validCapsFromRecords.reduce((s, r) => s + Number(r.ppk || 0), 0) / validCapsFromRecords.length
     : averagePpk;
+  const meanPresent = (rows: Record<string, unknown>[], key: string, fallback: number) => {
+    const vals = rows.map((r) => Number(r[key])).filter((n) => Number.isFinite(n) && n !== 0);
+    if (!vals.length) return fallback;
+    return vals.reduce((s, n) => s + n, 0) / vals.length;
+  };
+  const inlineCp = inlineCapability.length
+    ? inlineCapability.reduce((s, r) => s + r.cp, 0) / inlineCapability.length
+    : 0;
+  const inlinePp = inlineCapability.length
+    ? inlineCapability.reduce((s, r) => s + r.pp, 0) / inlineCapability.length
+    : 0;
+  const capAvgCp = meanPresent(validCapsFromRecords, 'cp', inlineCp);
+  const capAvgPp = meanPresent(validCapsFromRecords, 'pp', inlinePp);
 
   const trendAnalysisRows = (input.trendAnalysis || []).filter((r) =>
     inPeriod(String(r.generatedDate || r.generated_date || r.reviewPeriodTo || r.createdAt || ''))
@@ -408,9 +425,9 @@ export function buildAnnualCpvSnapshot(input: AnnualCpvReviewInput): AnnualCpvSn
     repeatedOot: (oot + trendAnalysisStats.oot) >= 3,
     repeatedDeviation: deviations.length >= 5,
     sterilityEndotoxinFailure,
-    averageCp: Number((capAvgCpk * 0.98).toFixed(3)),
+    averageCp: Number(capAvgCp.toFixed(3)),
     averageCpk: Number(capAvgCpk.toFixed(3)),
-    averagePp: Number((capAvgPpk * 0.98).toFixed(3)),
+    averagePp: Number(capAvgPp.toFixed(3)),
     averagePpk: Number(capAvgPpk.toFixed(3)),
   });
 

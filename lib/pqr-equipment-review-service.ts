@@ -7,6 +7,7 @@ import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
 import { EQUIPMENT_COLLECTIONS } from '@/lib/equipment-mgmt-types';
 import type { PqrOption } from '@/lib/pqr-batch-review-records';
 import { fetchPqrOptions } from '@/lib/pqr-batch-review-service';
+import { fetchCpvBatches, filterCpvBatchesForProduct } from '@/lib/cpv-batch-registration-service';
 import {
   PQR_EQUIPMENT_REVIEW_COLLECTIONS, PQR_EQUIPMENT_REVIEW_MODULE,
   computeEquipmentCompliance, computeEquipmentSummary, generateEquipmentNarrative,
@@ -133,6 +134,14 @@ async function commitInChunks(rows: Array<Omit<PqrEquipmentReviewRecord, 'id'>>,
 
 /** Resolve batch numbers for the PQR from pqr_batch_review, else fall back to batch master by product + period. */
 async function getBatchNumbersForPqr(pqr: PqrOption): Promise<string[]> {
+  if (pqr.id.startsWith('cpv:')) {
+    const batches = filterCpvBatchesForProduct(
+      await fetchCpvBatches(),
+      pqr.productName,
+      pqr.id.slice(4),
+    );
+    return batches.map((b) => b.batchNumber).filter(Boolean);
+  }
   try {
     const batchReview = await getDocs(query(
       collection(getFirebaseFirestore(), PQR_EQUIPMENT_REVIEW_COLLECTIONS.batchReview),
@@ -399,6 +408,7 @@ function mapToEquipmentReviewRecord(
   const partial: Partial<PqrEquipmentReviewRecord> = {
     equipmentReviewId: buildEquipmentReviewId(eqId || docId),
     pqrId: pqr.id,
+    cpvProductId: pqr.id.startsWith('cpv:') ? pqr.id.slice(4) : '',
     pqrNumber: pqr.pqrNumber,
     product: pqr.productName,
     productCode: pqr.productCode,
@@ -619,6 +629,7 @@ function formToRecordFields(
   const batchNumber = data.batchNumber.trim();
   return {
     pqrId: pqr.id,
+    cpvProductId: pqr.id.startsWith('cpv:') ? pqr.id.slice(4) : '',
     pqrNumber: pqr.pqrNumber,
     product: data.product.trim(),
     productCode: data.productCode || pqr.productCode,
@@ -680,12 +691,16 @@ export async function createEquipmentReviewRecord(
 ): Promise<{ id?: string; error?: string }> {
   if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
   if (data.productCode && pqr.productCode && data.productCode !== pqr.productCode) {
-    return { error: 'Equipment product code must match the selected PQR product.' };
+    return { error: pqr.id.startsWith('cpv:')
+      ? 'Equipment product code must match the selected CPV product.'
+      : 'Equipment product code must match the selected PQR product.' };
   }
   try {
     const existing = await fetchEquipmentReviewRecords(pqr.id);
     if (existing.some((r) => r.equipmentId.toLowerCase() === data.equipmentId.trim().toLowerCase())) {
-      return { error: 'Equipment already reviewed under this PQR.' };
+      return { error: pqr.id.startsWith('cpv:')
+        ? 'Equipment already reviewed for this CPV product.'
+        : 'Equipment already reviewed under this PQR.' };
     }
     const ts = nowIso();
     const fields = formToRecordFields(pqr, data);

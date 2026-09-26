@@ -5,6 +5,7 @@
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
 import { getAdminFirestore } from './admin-app';
+import { assertCpvBatchForProduct } from './cpv-batch-guard';
 
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
@@ -492,8 +493,10 @@ export const createAdminEnvironmentalRecord = onCall({ timeoutSeconds: 60 }, asy
       throw new HttpsError('failed-precondition', 'Electronic signature required for QA override');
     }
   }
-  await assertOperationalProduct(firestore, requiredString(data.cpvProductId, 'CPV product', 120));
+  const cpvProductId = requiredString(data.cpvProductId, 'CPV product', 120);
+  await assertOperationalProduct(firestore, cpvProductId);
   const payload = sanitizePayload(data);
+  await assertCpvBatchForProduct(firestore, cpvProductId, payload.batchNumber);
   if (await findDuplicate(
     firestore,
     payload.batchNumber,
@@ -819,8 +822,10 @@ export const bulkCreateAdminEnvironmentalRecords = onCall({ timeoutSeconds: 120 
 
   for (const row of rows) {
     try {
-      await assertOperationalProduct(firestore, requiredString(row.cpvProductId, 'CPV product', 120));
+      const cpvProductId = requiredString(row.cpvProductId, 'CPV product', 120);
+      await assertOperationalProduct(firestore, cpvProductId);
       const payload = sanitizePayload(row);
+      await assertCpvBatchForProduct(firestore, cpvProductId, payload.batchNumber);
       if (await findDuplicate(
         firestore,
         payload.batchNumber,

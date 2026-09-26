@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { inOuterSpecificationBand } from '@/lib/cpv';
 
 export const YIELD_MONITORING_COLLECTION = 'yield_monitoring';
 export const YIELD_LEGACY_COLLECTIONS = ['cpv_yield_monitoring', 'cpv_yield'] as const;
@@ -183,13 +184,8 @@ export function evaluateYieldStatus(
   if (actionHigh != null && Number.isFinite(actionHigh) && yieldPct > actionHigh) return 'Action';
   if (alertLow != null && Number.isFinite(alertLow) && yieldPct < alertLow) return 'Alert';
   if (alertHigh != null && Number.isFinite(alertHigh) && yieldPct > alertHigh) return 'Alert';
-  if (alertLow == null && alertHigh == null) {
-    const range = upperLimit - lowerLimit;
-    if (range > 0) {
-      const bandLow = lowerLimit + range * 0.1;
-      const bandHigh = upperLimit - range * 0.1;
-      if (yieldPct < bandLow || yieldPct > bandHigh) return 'OOT';
-    }
+  if (alertLow == null && alertHigh == null && inOuterSpecificationBand(yieldPct, lowerLimit, upperLimit)) {
+    return 'OOT';
   }
   return 'Complies';
 }
@@ -198,15 +194,15 @@ export function evaluateYieldRisk(
   record: Pick<YieldMonitoringRecord, 'yieldStage' | 'yieldPercentage' | 'variancePercentage' | 'status' | 'targetYield'> & {
     scrapQuantity?: number;
     wasteQuantity?: number;
+    theoreticalQuantity?: number;
   },
   lowYieldBatchCount: number,
 ): string {
   if (lowYieldBatchCount >= 3) return 'Critical';
   const scrap = Number(record.scrapQuantity || 0);
   const waste = Number(record.wasteQuantity || 0);
-  if (scrap > 0 && record.yieldPercentage > 0 && (scrap / Math.max(record.yieldPercentage, 1)) > 5) {
-    return 'High';
-  }
+  const theoretical = Number(record.theoreticalQuantity || 0);
+  if (theoretical > 0 && scrap / theoretical >= 0.05) return 'High';
   if (waste > 0 && record.status === 'OOS') return 'High';
 
   const variance = Math.abs(record.variancePercentage);

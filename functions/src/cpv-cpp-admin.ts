@@ -5,6 +5,7 @@
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
 import { getAdminFirestore } from './admin-app';
+import { assertCpvBatchForProduct } from './cpv-batch-guard';
 
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
@@ -411,9 +412,11 @@ export const createAdminCppResult = onCall({ timeoutSeconds: 60 }, async (reques
   const data = (request.data || {}) as Record<string, unknown>;
   const reason = requiredReason(data.changeReason);
   const autoDeviation = data.autoDeviation !== false;
-  await assertOperationalProduct(firestore, requiredString(data.cpvProductId, 'CPV product', 120));
+  const cpvProductId = requiredString(data.cpvProductId, 'CPV product', 120);
+  await assertOperationalProduct(firestore, cpvProductId);
 
   const payload = sanitizePayload(data);
+  await assertCpvBatchForProduct(firestore, cpvProductId, payload.batchNumber);
   if (await findDuplicate(firestore, payload.batchNumber, payload.parameterCode)) {
     throw new HttpsError('already-exists', 'CPP result already exists for this batch and parameter');
   }
@@ -672,8 +675,10 @@ export const bulkCreateAdminCppResults = onCall({ timeoutSeconds: 120 }, async (
 
   for (const row of rows) {
     try {
-      await assertOperationalProduct(firestore, requiredString(row.cpvProductId, 'CPV product', 120));
+      const cpvProductId = requiredString(row.cpvProductId, 'CPV product', 120);
+      await assertOperationalProduct(firestore, cpvProductId);
       const payload = sanitizePayload(row);
+      await assertCpvBatchForProduct(firestore, cpvProductId, payload.batchNumber);
       if (await findDuplicate(firestore, payload.batchNumber, payload.parameterCode)) {
         errors.push(`${payload.parameterName}: duplicate`);
         continue;

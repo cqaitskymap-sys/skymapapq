@@ -114,7 +114,7 @@ export const RISK_LEVELS = ['Low', 'Medium', 'High', 'Critical'] as const;
 const requiredText = z.string().trim().min(1, 'Required');
 
 export const riskAssessmentFormSchema = z.object({
-  cpvProductId: z.string().trim().optional().default(''),
+  cpvProductId: z.string().trim().min(1, 'CPV product is required'),
   productName: requiredText,
   productCode: z.string().trim().optional().default(''),
   productVersion: z.string().trim().optional().default(''),

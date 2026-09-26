@@ -159,6 +159,7 @@ export interface CpvAnnualReviewRecord extends Record<string, unknown> {
   id: string;
   cpvReviewId: string;
   cpvReviewNumber: string;
+  cpvProductId: string;
   productName: string;
   productCode: string;
   productFamily: string;
@@ -233,6 +234,7 @@ export interface CpvReviewListSummary {
 const requiredText = z.string().trim().min(1, 'Required');
 
 export const cpvReviewFormSchema = z.object({
+  cpvProductId: requiredText,
   productName: requiredText,
   productCode: z.string().trim().optional().default(''),
   productFamily: z.string().trim().optional().default(''),
@@ -297,7 +299,7 @@ export function enrichCpvReviewMetrics(partial: Partial<CpvReviewMetrics>): CpvR
   const averageCp = Number(partial.averageCp || averageCpk);
   const averagePp = Number(partial.averagePp || averagePpk);
   const sigmaLevel = averageCpk > 0
-    ? Math.round(Math.min(6, Math.max(0, 0.5 + averageCpk * 1.5)) * 100) / 100
+    ? Math.round(Math.min(6, Math.max(0, averageCpk * 3)) * 100) / 100
     : Number(partial.sigmaLevel || 0);
   const overallCompliancePct = Math.round(((cpp + cqa) / 2) * 10) / 10;
 

@@ -340,7 +340,7 @@ export function detectNelsonRuleViolations(values: number[]): { rule: string; in
     const current = v >= mean ? 'above' : 'below';
     if (current === side) run.push(i);
     else { run = [i]; side = current; }
-    if (run.length >= 9) violations.push({ rule: 'Nelson 2', indices: [...run] });
+    if (run.length === 9) violations.push({ rule: 'Nelson 2', indices: [...run] });
   });
   return violations;
 }
@@ -750,16 +750,17 @@ export function goldenBatchComparison(
     arr.push(v);
     byBatch.set(b, arr);
   });
+  if (byBatch.size < 2) return null;
   let goldenBatch = '';
-  let goldenMean = -Infinity;
+  let bestScore = -Infinity;
+  let bestMean = -Infinity;
   byBatch.forEach((vals, batch) => {
-    const m = vals.reduce((s, v) => s + v, 0) / vals.length;
-    // Prefer lowest variance then mean closest to overall mean — use highest mean stability proxy: lowest CV
-    const mean = m;
+    const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
     const sd = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
     const score = sd === 0 ? Infinity : 1 / (sd / Math.abs(mean || 1));
-    if (score > goldenMean || (score === goldenMean && mean > goldenMean)) {
-      goldenMean = mean;
+    if (score > bestScore || (score === bestScore && mean > bestMean)) {
+      bestScore = score;
+      bestMean = mean;
       goldenBatch = batch;
     }
   });

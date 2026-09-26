@@ -1,4 +1,4 @@
-import { calculateCapability, type CppRecord, type CqaRecord, type RiskRecord, type CpvStatus } from './cpv';
+import { calculateCapability, displayCpvStatus, type CppRecord, type CqaRecord, type RiskRecord, type CpvStatus } from './cpv';
 
 export interface CpvDashboardFilters {
   product?: string;
@@ -92,11 +92,16 @@ export function uniqueBatches(cpp: CppRecord[], cqa: CqaRecord[], batches: Recor
 }
 
 export function countByStatus(records: Array<{ status?: string }>) {
-  return {
-    complies: records.filter((r) => r.status === 'Complies').length,
-    oot: records.filter((r) => r.status === 'OOT').length,
-    oos: records.filter((r) => r.status === 'OOS').length,
-  };
+  let complies = 0;
+  let oot = 0;
+  let oos = 0;
+  records.forEach((r) => {
+    const display = displayCpvStatus(r.status || '');
+    if (display === 'Pass') complies += 1;
+    else if (display === 'OOT') oot += 1;
+    else oos += 1;
+  });
+  return { complies, oot, oos };
 }
 
 export function computeCapabilityAverages(cpp: CppRecord[], cqa: CqaRecord[]) {

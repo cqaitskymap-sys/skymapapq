@@ -284,7 +284,7 @@ export function UtilityMonitoringPage() {
     if (!p) return;
     setForm((f) => ({ ...f, cpvProductId: productId, productName: p.productName, productCode: p.productCode }));
     const [batches, params] = await Promise.all([
-      fetchUtilityBatchesForProduct(p.productName),
+      fetchUtilityBatchesForProduct(p.productName, p.id),
       fetchUtilityParameters(form.utilityType),
     ]);
     setFormBatches(batches);
@@ -470,7 +470,7 @@ export function UtilityMonitoringPage() {
     if (!preselectId) return;
     setBulkProductId(preselectId);
     const p = products.find((x) => x.id === preselectId);
-    if (p) setFormBatches(await fetchUtilityBatchesForProduct(p.productName));
+    if (p) setFormBatches(await fetchUtilityBatchesForProduct(p.productName, p.id));
     const params = await fetchUtilityParameters(bulkUtilityType);
     setBulkRows(params.slice(0, 8).map((param) => ({ param, observed: '', remarks: '' })));
     if (systems[0]) {
@@ -873,7 +873,7 @@ export function UtilityMonitoringPage() {
             <Select value={bulkProductId} onValueChange={async (v) => {
               setBulkProductId(v);
               const p = products.find((x) => x.id === v);
-              if (p) setFormBatches(await fetchUtilityBatchesForProduct(p.productName));
+              if (p) setFormBatches(await fetchUtilityBatchesForProduct(p.productName, p.id));
             }}>
               <SelectTrigger><SelectValue placeholder="Product" /></SelectTrigger>
               <SelectContent>{products.map((p) => <SelectItem key={p.id} value={p.id}>{p.productName}</SelectItem>)}</SelectContent>

@@ -244,6 +244,7 @@ export function AnnualReviewPage() {
     if (!snapshot || !selectedProduct) return;
     if (changeReason.trim().length < 5) return toast.error('Change reason must be at least 5 characters');
     const { result, error: err } = await createCpvReview({
+      cpvProductId: selectedProduct.id,
       productName: selectedProduct.productName,
       productCode: selectedProduct.productCode,
       productFamily: selectedProduct.productFamily || '',

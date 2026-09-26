@@ -12,7 +12,7 @@ import { fetchParameters, normalizeParameter } from '@/lib/admin/parameter-servi
 import type { Parameter } from '@/lib/admin/schemas';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
 import { isCpvProductOperational } from '@/lib/cpv-product-master';
-import { fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
+import { clientBatchErrorForProduct, fetchCpvBatches, filterCpvBatchesForProduct } from '@/lib/cpv-batch-registration-service';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
 import { listAreas } from '@/lib/monitoring-mgmt-service';
@@ -201,9 +201,8 @@ export async function fetchEnvironmentalRecordById(id: string): Promise<Environm
   return all.find((r) => r.id === id) ?? null;
 }
 
-export async function fetchEmBatchesForProduct(productName: string) {
-  const batches = await fetchCpvBatches();
-  return batches.filter((b) => b.productName === productName || b.productCode === productName);
+export async function fetchEmBatchesForProduct(productName: string, cpvProductId = '') {
+  return filterCpvBatchesForProduct(await fetchCpvBatches(), productName, cpvProductId);
 }
 
 export async function fetchEnvironmentalParameters(monitoringType?: string): Promise<Parameter[]> {
@@ -296,6 +295,8 @@ export async function createEnvironmentalRecord(
     if (product && !isCpvProductOperational(product.cpvStatus)) {
       return { result: null, error: 'Selected CPV product is not operational for environmental entry.' };
     }
+    const batchError = await clientBatchErrorForProduct(data.productName, data.cpvProductId, data.batchNumber);
+    if (batchError) return { result: null, error: batchError };
     if (qaOverride && options?.esignConfirmed !== true) {
       return { result: null, error: 'Electronic signature confirmation required for QA override.' };
     }

@@ -272,7 +272,7 @@ export function CppMonitoringPage() {
     const stage = form.processStage || CPP_PROCESS_STAGES[0];
     const area = form.processArea || '';
     const [batches, params] = await Promise.all([
-      fetchCppBatchesForProduct(p.productName),
+      fetchCppBatchesForProduct(p.productName, productId),
       resolveFormParameters(p.productName, productId, stage, area),
     ]);
     setFormBatches(batches);
@@ -500,7 +500,7 @@ export function CppMonitoringPage() {
   const saveBulk = async () => {
     const p = products.find((x) => x.id === bulkProductId);
     if (!p || !bulkBatchId) { toast.error('Select product and batch'); return; }
-    const batch = formBatches.find((b) => b.id === bulkBatchId) || (await fetchCppBatchesForProduct(p.productName)).find((b) => b.id === bulkBatchId);
+    const batch = formBatches.find((b) => b.id === bulkBatchId) || (await fetchCppBatchesForProduct(p.productName, p.id)).find((b) => b.id === bulkBatchId);
     if (!batch) { toast.error('Invalid batch'); return; }
     const rows: CppResultFormData[] = bulkRows.filter((r) => r.observed).map((row) => {
       if (isBmrCppOption(row.param)) {
@@ -885,7 +885,7 @@ export function CppMonitoringPage() {
                 setBulkProductId(v);
                 const p = products.find((x) => x.id === v);
                 if (p) {
-                  const batches = await fetchCppBatchesForProduct(p.productName);
+                  const batches = await fetchCppBatchesForProduct(p.productName, p.id);
                   setFormBatches(batches);
                   const params = await resolveFormParameters(p.productName, v, bulkStage, bulkArea);
                   setBulkRows(params.map((param) => ({ param, observed: '', remarks: '' })));

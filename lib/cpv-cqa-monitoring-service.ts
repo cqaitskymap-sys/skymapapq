@@ -220,9 +220,12 @@ export async function fetchCqaParametersForProduct(
   }
 }
 
-export async function fetchCqaBatchesForProduct(productName: string) {
+export async function fetchCqaBatchesForProduct(productName: string, cpvProductId = '') {
   const batches = await fetchCpvBatches();
-  return batches.filter((b) => b.productName === productName || b.productCode === productName);
+  return batches.filter((b) => {
+    if (cpvProductId && b.cpvProductId) return b.cpvProductId === cpvProductId;
+    return b.productName === productName || b.productCode === productName;
+  });
 }
 
 export async function createCqaResult(
@@ -239,9 +242,9 @@ export async function createCqaResult(
     if (product && !isCpvProductOperational(product.cpvStatus)) {
       return { result: null, error: 'Selected CPV product is not operational for CQA entry.' };
     }
-    const batches = await fetchCqaBatchesForProduct(data.productName);
+    const batches = await fetchCqaBatchesForProduct(data.productName, data.cpvProductId);
     const batchMatch = batches.find((b) => b.batchNumber === data.batchNumber);
-    if (batches.length && !batchMatch) return { result: null, error: 'Batch does not belong to selected product.' };
+    if (!batchMatch) return { result: null, error: 'Batch does not belong to selected product.' };
     if (batchMatch && ['Cancelled', 'Closed', 'Rejected', 'Archived'].includes(batchMatch.batchStatus)) {
       return { result: null, error: 'Closed, rejected, or archived batch — entry not allowed.' };
     }

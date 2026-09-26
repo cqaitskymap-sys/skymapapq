@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CRITICALITY_OPTIONS, RESULT_TYPES } from '@/lib/admin/constants';
+import { inOuterSpecificationBand } from '@/lib/cpv';
 
 export const CQA_RESULTS_COLLECTION = 'cqa_results';
 export const CQA_LEGACY_COLLECTION = 'cpv_cqa';
@@ -197,11 +198,7 @@ export function evaluateCqaStatus(
   if (actionHigh != null && Number.isFinite(actionHigh) && num > actionHigh) return 'Action';
   if (alertLow != null && Number.isFinite(alertLow) && num < alertLow) return 'Alert';
   if (alertHigh != null && Number.isFinite(alertHigh) && num > alertHigh) return 'Alert';
-  // Legacy OOT band when alert limits unset (outer 10% of specification range)
-  if (alertLow == null && alertHigh == null && usl > lsl) {
-    const band = 0.1 * (usl - lsl);
-    if (num < lsl + band || num > usl - band) return 'OOT';
-  }
+  if (alertLow == null && alertHigh == null && inOuterSpecificationBand(num, lsl, usl)) return 'OOT';
   return 'Complies';
 }
 

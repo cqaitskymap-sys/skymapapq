@@ -6,7 +6,9 @@ import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from
 import { uploadTextToStorage } from '@/lib/storage-text-upload';
 import { getRecord, getRecords } from '@/lib/firestore';
 import { listCpvRecords } from '@/lib/cpv-service';
-import { CPV_COLLECTIONS, CppRecord, CqaRecord, RiskRecord } from '@/lib/cpv';
+import { fetchCppResults } from '@/lib/cpv-cpp-monitoring-service';
+import { fetchCqaResults } from '@/lib/cpv-cqa-monitoring-service';
+import { CPV_COLLECTIONS, RiskRecord, toLegacyCppRecord, toLegacyCqaRecord } from '@/lib/cpv';
 import { fetchStabilityResults } from '@/lib/cpv-stability-monitoring-service';
 import { fetchHoldTimeRecords } from '@/lib/cpv-hold-time-monitoring-service';
 import { fetchProcessCapabilityRecords } from '@/lib/cpv-process-capability-service';
@@ -144,6 +146,7 @@ export function normalizeCpvReviewRecord(raw: Record<string, unknown>): CpvAnnua
     id: str(raw.id),
     cpvReviewId: str(raw.cpvReviewId || raw.cpv_review_id, buildCpvReviewId(str(raw.productCode))),
     cpvReviewNumber: str(raw.cpvReviewNumber || raw.cpv_review_number || raw.documentNumber, 'CPV/DRAFT/0001'),
+    cpvProductId: str(raw.cpvProductId || raw.cpv_product_id),
     productName: str(raw.productName || raw.product_name, snap.productFilter || 'All Products'),
     productCode: str(raw.productCode || raw.product_code),
     productFamily: str(raw.productFamily || raw.product_family),
@@ -248,8 +251,8 @@ export async function loadAnnualReviewSourceData(
       rawMaterialResults, packingMaterialResults, utilityResults,
       environmentalResults, yieldResults,
     ] = await Promise.all([
-      listCpvRecords<CppRecord>(CPV_COLLECTIONS.cpp, 1000),
-      listCpvRecords<CqaRecord>(CPV_COLLECTIONS.cqa, 1000),
+      fetchCppResults(1000).then((rows) => rows.map((r) => toLegacyCppRecord(r as unknown as Record<string, unknown>))),
+      fetchCqaResults(1000).then((rows) => rows.map((r) => toLegacyCqaRecord(r as unknown as Record<string, unknown>))),
       listCpvRecords<RiskRecord>(CPV_COLLECTIONS.risk, 500),
       fetchRiskAssessmentRecords(500),
       readFirstAvailable(['deviations']),
@@ -257,7 +260,7 @@ export async function loadAnnualReviewSourceData(
       readFirstAvailable(['capa_records', 'capa']),
       readFirstAvailable(['change_controls', 'change_control']),
       fetchCpvBatches().catch(() => readFirstAvailable(['cpv_batches', 'batches', 'pqr_batches'])),
-      readFirstAvailable(['equipment', 'equipment_qualification', 'equipment_records']),
+      readFirstAvailable(['pqr_equipment_review', 'equipment', 'equipment_qualification', 'equipment_records']),
       fetchStabilityResults(1000),
       fetchHoldTimeRecords(1000),
       fetchProcessCapabilityRecords(500),
@@ -636,6 +639,7 @@ export async function getAnnualCpvDocumentsByYear(year: number): Promise<AnnualC
 export async function saveAnnualCpvDraft(
   input: {
     reviewYear: number;
+    cpvProductId: string;
     productName?: string;
     snapshot: AnnualCpvSnapshot;
     conclusion?: string;
@@ -657,9 +661,11 @@ export async function saveAnnualCpvDraft(
       return toAnnualCpvDocument(result || existing);
     }
   }
+  if (!input.cpvProductId?.trim()) throw new Error('CPV product is required.');
   const existing = await fetchCpvReviewRecords();
   const yearCount = existing.filter((r) => r.reviewYear === input.reviewYear).length;
   const { result, error } = await createCpvReview({
+    cpvProductId: input.cpvProductId,
     productName: input.productName || 'All Products',
     productCode: '',
     productFamily: '',

@@ -143,14 +143,14 @@ function normalizeCpp(raw: Record<string, unknown>): CppRecord {
   return {
     id: str(raw.id),
     productName: str(raw.productName || raw.product_name || raw.product),
-    batchNo: str(raw.batchNo || raw.batch_no || raw.batch_number),
-    manufacturingDate: str(raw.manufacturingDate || raw.manufacturing_date || raw.testDate),
+    batchNo: str(raw.batchNo || raw.batchNumber || raw.batch_no || raw.batch_number),
+    manufacturingDate: str(raw.manufacturingDate || raw.manufacturing_date || raw.observationDateTime || raw.testDate),
     processStage: str(raw.processStage || raw.process_stage, 'Process'),
     parameterName: str(raw.parameterName || raw.parameter_name || raw.parameter),
     observedValue: num(raw.observedValue ?? raw.observed_value ?? raw.result),
     targetValue: num(raw.targetValue ?? raw.target_value ?? raw.target),
-    lsl: num(raw.lsl ?? raw.lower_limit),
-    usl: num(raw.usl ?? raw.upper_limit),
+    lsl: num(raw.lsl ?? raw.lowerLimit ?? raw.lower_limit),
+    usl: num(raw.usl ?? raw.upperLimit ?? raw.upper_limit),
     unit: str(raw.unit, ''),
     recordedBy: str(raw.recordedBy || raw.recorded_by, 'System'),
     reviewedBy: str(raw.reviewedBy || raw.reviewed_by),
@@ -165,13 +165,13 @@ function normalizeCqa(raw: Record<string, unknown>): CqaRecord {
   return {
     id: str(raw.id),
     productName: str(raw.productName || raw.product_name || raw.product),
-    batchNo: str(raw.batchNo || raw.batch_no || raw.batch_number),
+    batchNo: str(raw.batchNo || raw.batchNumber || raw.batch_no || raw.batch_number),
     testDate: str(raw.testDate || raw.test_date || raw.createdAt),
-    testParameter: str(raw.testParameter || raw.test_parameter || raw.parameter_name || raw.parameter),
-    observedValue: num(raw.observedValue ?? raw.observed_value ?? raw.result),
-    target: num(raw.target ?? raw.target_value),
-    lsl: num(raw.lsl ?? raw.lower_limit),
-    usl: num(raw.usl ?? raw.upper_limit),
+    testParameter: str(raw.testParameter || raw.test_parameter || raw.parameterName || raw.parameter_name || raw.parameter),
+    observedValue: num(raw.observedValue ?? raw.observedResult ?? raw.observed_value ?? raw.result),
+    target: num(raw.target ?? raw.targetValue ?? raw.target_value),
+    lsl: num(raw.lsl ?? raw.lowerLimit ?? raw.lower_limit),
+    usl: num(raw.usl ?? raw.upperLimit ?? raw.upper_limit),
     unit: str(raw.unit, ''),
     recordedBy: str(raw.recordedBy || raw.recorded_by, 'System'),
     reviewedBy: str(raw.reviewedBy || raw.reviewed_by),
@@ -182,14 +182,14 @@ function normalizeCqa(raw: Record<string, unknown>): CqaRecord {
 }
 
 function normalizeRisk(raw: Record<string, unknown>): RiskRecord {
-  const severity = num(raw.severity, 1);
-  const occurrence = num(raw.occurrence ?? raw.likelihood, 1);
-  const detectability = num(raw.detectability ?? raw.detection, 1);
+  const severity = num(raw.severity ?? raw.severityScore, 1);
+  const occurrence = num(raw.occurrence ?? raw.occurrenceScore ?? raw.likelihood, 1);
+  const detectability = num(raw.detectability ?? raw.detectionScore ?? raw.detection, 1);
   return {
     id: str(raw.id),
     productName: str(raw.productName || raw.product_name || raw.product),
-    batchNo: str(raw.batchNo || raw.batch_no || ''),
-    factor: str(raw.factor || raw.risk_factor, 'Process'),
+    batchNo: str(raw.batchNo || raw.batchNumber || raw.batch_no || ''),
+    factor: str(raw.factor || raw.failureMode || raw.riskSource || raw.risk_factor, 'Process'),
     riskDescription: str(raw.riskDescription || raw.risk_description || raw.description),
     severity,
     occurrence,
@@ -197,7 +197,7 @@ function normalizeRisk(raw: Record<string, unknown>): RiskRecord {
     mitigation: str(raw.mitigation, ''),
     owner: str(raw.owner, 'Unassigned'),
     dueDate: str(raw.dueDate || raw.due_date, ''),
-    rpn: num(raw.rpn, severity * occurrence * detectability),
+    rpn: num(raw.rpn ?? raw.rpnScore, severity * occurrence * detectability),
     riskLevel: (str(raw.riskLevel || raw.risk_level, 'Low') as RiskRecord['riskLevel']),
     status: str(raw.status, 'Open'),
     createdAt: str(raw.createdAt || raw.created_at),

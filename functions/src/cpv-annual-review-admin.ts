@@ -6,6 +6,7 @@
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
 import { getAdminFirestore } from './admin-app';
+import { assertOperationalCpvProduct } from './cpv-batch-guard';
 
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
@@ -440,6 +441,7 @@ function sanitizeForm(data: Record<string, unknown>, existing?: DocumentData) {
     throw new HttpsError('invalid-argument', 'Review period end must be on or after start date');
   }
   return {
+    cpvProductId: optionalString(data.cpvProductId ?? existing?.cpvProductId, 'CPV product', 120),
     productName,
     productCode: optionalString(data.productCode ?? existing?.productCode, 'Product code', 80),
     productFamily: optionalString(data.productFamily ?? existing?.productFamily, 'Product family', 120),
@@ -506,7 +508,12 @@ export const createAdminCpvAnnualReview = onCall({ timeoutSeconds: 120 }, async 
   assertCreate(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
   const reason = requiredReason(data.changeReason);
+  const cpvProductId = requiredString(data.cpvProductId, 'CPV product', 120);
+  const product = await assertOperationalCpvProduct(firestore, cpvProductId);
   const form = sanitizeForm(data);
+  form.cpvProductId = cpvProductId;
+  form.productName = String(product.productName || form.productName);
+  form.productCode = String(product.productCode || form.productCode);
   const snapshot = (data.snapshot && typeof data.snapshot === 'object')
     ? data.snapshot as Record<string, unknown>
     : {};

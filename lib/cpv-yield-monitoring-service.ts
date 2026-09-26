@@ -12,7 +12,7 @@ import { fetchParameters, normalizeParameter } from '@/lib/admin/parameter-servi
 import type { Parameter } from '@/lib/admin/schemas';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
 import { isCpvProductOperational } from '@/lib/cpv-product-master';
-import { fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
+import { clientBatchErrorForProduct, fetchCpvBatches, filterCpvBatchesForProduct } from '@/lib/cpv-batch-registration-service';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
 import {
@@ -236,9 +236,8 @@ export async function fetchYieldRecordById(id: string): Promise<YieldMonitoringR
   return all.find((r) => r.id === id) ?? null;
 }
 
-export async function fetchYieldBatchesForProduct(productName: string) {
-  const batches = await fetchCpvBatches();
-  return batches.filter((b) => b.productName === productName || b.productCode === productName);
+export async function fetchYieldBatchesForProduct(productName: string, cpvProductId = '') {
+  return filterCpvBatchesForProduct(await fetchCpvBatches(), productName, cpvProductId);
 }
 
 export async function fetchYieldStageParameters(stage?: string): Promise<Parameter[]> {
@@ -295,6 +294,8 @@ export async function createYieldRecord(
     if (product && !isCpvProductOperational(product.cpvStatus)) {
       return { result: null, error: 'Selected CPV product is not operational for yield entry.' };
     }
+    const batchError = await clientBatchErrorForProduct(data.productName, data.cpvProductId, data.batchNumber);
+    if (batchError) return { result: null, error: batchError };
     if (!qaOverride && data.actualQuantity > data.theoreticalQuantity) {
       return { result: null, error: 'Actual quantity cannot exceed theoretical quantity without QA override.' };
     }

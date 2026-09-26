@@ -35,6 +35,9 @@ import {
 } from '@/lib/pqr-equipment-review-service';
 import { fetchProducts } from '@/lib/admin/product-service';
 import { fetchBatches } from '@/lib/admin/batch-service';
+import { fetchCpvProducts } from '@/lib/cpv-product-master-service';
+import { isCpvProductOperational } from '@/lib/cpv-product-master';
+import { fetchCpvBatches, filterCpvBatchesForProduct } from '@/lib/cpv-batch-registration-service';
 import { listSelectableEquipment } from '@/lib/equipment-mgmt-service';
 import type { EquipmentRecord } from '@/lib/equipment-mgmt-types';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
@@ -136,6 +139,36 @@ export function EquipmentReviewPage() {
     setError(null);
     try {
       if (!isFirebaseConfigured()) { setError('Firebase is not configured.'); return; }
+      if (isCpvContext) {
+        const products = (await fetchCpvProducts()).filter((p) => isCpvProductOperational(p.cpvStatus));
+        const year = new Date().getFullYear();
+        const opts: PqrOption[] = products.map((p) => ({
+          id: `cpv:${p.id}`,
+          pqrNumber: p.productCode || p.productName,
+          productName: p.productName,
+          productCode: p.productCode,
+          genericName: p.genericName || '',
+          strength: p.strength || '',
+          dosageForm: p.dosageForm || '',
+          reviewPeriodFrom: '',
+          reviewPeriodTo: '',
+          reviewYear: year,
+          status: p.cpvStatus,
+        }));
+        setPqrs(opts);
+        setProductNames(products.map((p) => p.productName).filter(Boolean).sort((a, b) => a.localeCompare(b)));
+        const batches = await fetchCpvBatches();
+        const map: Record<string, string[]> = {};
+        products.forEach((p) => {
+          const numbers = filterCpvBatchesForProduct(batches, p.productName, p.id)
+            .map((b) => b.batchNumber)
+            .filter(Boolean);
+          if (p.productName) map[p.productName] = numbers;
+        });
+        setBatchByProduct(map);
+        if (!selectedPqrId && opts.length) setSelectedPqrId(opts[0].id);
+        return;
+      }
       const opts = await fetchPqrOptions();
       setPqrs(opts);
       const fromUrl = searchParams?.get('pqrId') || '';
@@ -155,9 +188,9 @@ export function EquipmentReviewPage() {
         setSelectedPqrId(nextId);
         syncPqrIdToUrl(nextId);
       }
-    } catch { setError('Failed to load PQR records.'); }
+    } catch { setError(isCpvContext ? 'Failed to load CPV products.' : 'Failed to load PQR records.'); }
     finally { setLoading(false); }
-  }, [selectedPqrId, searchParams, syncPqrIdToUrl]);
+  }, [selectedPqrId, searchParams, syncPqrIdToUrl, isCpvContext]);
 
   const loadRecords = useCallback(async (pqrId: string, pqr?: PqrOption | null) => {
     if (!pqrId) return;
@@ -185,6 +218,7 @@ export function EquipmentReviewPage() {
 
   useEffect(() => {
     const loadProductMaster = async () => {
+      if (isCpvContext) return;
       try {
         const products = await fetchProducts();
         setProductNames(
@@ -199,7 +233,7 @@ export function EquipmentReviewPage() {
       }
     };
     void loadProductMaster();
-  }, []);
+  }, [isCpvContext]);
 
   useEffect(() => {
     const loadEquipmentMaster = async () => {
@@ -215,6 +249,7 @@ export function EquipmentReviewPage() {
 
   useEffect(() => {
     const loadBatches = async () => {
+      if (isCpvContext) return;
       try {
         const rows = await fetchBatches();
         const map: Record<string, string[]> = {};
@@ -232,7 +267,7 @@ export function EquipmentReviewPage() {
       }
     };
     void loadBatches();
-  }, []);
+  }, [isCpvContext]);
 
   useEffect(() => {
     if (selectedPqrId) {
@@ -402,7 +437,7 @@ export function EquipmentReviewPage() {
         <CpvPageHeader
           title="Equipment Review"
           description={isCpvContext
-            ? 'Review qualification, calibration, and performance of equipment used for CPV batches. Select the linked PQR that covers the verification period.'
+            ? 'Review qualification, calibration, and performance of equipment used for the selected CPV product and its batches.'
             : 'Review qualification, calibration, maintenance and performance of equipment used during the PQR period'}
           trail={isCpvContext
             ? [
@@ -476,7 +511,7 @@ export function EquipmentReviewPage() {
           <CardContent className="pt-6">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="pqr-select-equipment">{isCpvContext ? 'Linked PQR *' : 'PQR Number *'}</Label>
+                <Label htmlFor="pqr-select-equipment">{isCpvContext ? 'CPV Product *' : 'PQR Number *'}</Label>
                 <Select
                   value={selectedPqrId}
                   onValueChange={(id) => {
@@ -484,7 +519,7 @@ export function EquipmentReviewPage() {
                     syncPqrIdToUrl(id);
                   }}
                 >
-                  <SelectTrigger id="pqr-select-equipment"><SelectValue placeholder={isCpvContext ? 'Select linked PQR...' : 'Select PQR...'} /></SelectTrigger>
+                  <SelectTrigger id="pqr-select-equipment"><SelectValue placeholder={isCpvContext ? 'Select CPV product...' : 'Select PQR...'} /></SelectTrigger>
                   <SelectContent>
                     {pqrs.map((p) => <SelectItem key={p.id} value={p.id}>{p.pqrNumber} — {p.productName}</SelectItem>)}
                   </SelectContent>
@@ -515,7 +550,7 @@ export function EquipmentReviewPage() {
                   )}
                   {selectedPqr.status && (
                     <div>
-                      <Label className="text-muted-foreground">PQR Status</Label>
+                      <Label className="text-muted-foreground">{isCpvContext ? 'CPV Status' : 'PQR Status'}</Label>
                       <p className="text-sm font-medium capitalize">{selectedPqr.status.replace(/_/g, ' ')}</p>
                     </div>
                   )}
@@ -751,7 +786,7 @@ export function EquipmentReviewPage() {
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between">
                     <CardTitle className="text-base">PQR Section Narrative — Equipment Review</CardTitle>
-                    {canManage && (
+                    {canManage && !isCpvContext && (
                       <Button size="sm" onClick={() => void handleSaveSection()} disabled={busy || !narrativeDirty}>
                         <Save className="h-4 w-4 mr-1" />Save to PQR
                       </Button>
@@ -761,7 +796,7 @@ export function EquipmentReviewPage() {
                     <Textarea
                       className="min-h-[140px]"
                       value={narrative}
-                      readOnly={!canManage}
+                      readOnly={!canManage || isCpvContext}
                       aria-label="Equipment review narrative"
                       onChange={(e) => onNarrativeChange(e.target.value)}
                     />
@@ -772,7 +807,7 @@ export function EquipmentReviewPage() {
             </Tabs>
 
             <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-              {sectionNav.prev ? (
+              {!isCpvContext && sectionNav.prev ? (
                 <Button variant="outline" asChild>
                   <Link href={sectionNav.prev.href}><ChevronLeft className="h-4 w-4 mr-1" />{sectionNav.prev.label}</Link>
                 </Button>
@@ -782,12 +817,12 @@ export function EquipmentReviewPage() {
                 <Link className="text-blue-600 hover:underline" href="/qms/equipment/calibration-records">Calibration</Link>
                 <Link className="text-blue-600 hover:underline" href="/qms/equipment/preventive-maintenance">Maintenance</Link>
                 <Link className="text-blue-600 hover:underline" href="/qms/equipment/breakdown">Breakdowns</Link>
-                <Link className="text-blue-600 hover:underline" href={pqrSectionHref('/pqr/dashboard', selectedPqrId)}>PQR Dashboard</Link>
+                <Link className="text-blue-600 hover:underline" href={isCpvContext ? '/cpv/dashboard' : pqrSectionHref('/pqr/dashboard', selectedPqrId)}>{isCpvContext ? 'CPV Dashboard' : 'PQR Dashboard'}</Link>
                 <Link className="text-blue-600 hover:underline" href="/qms/deviation">Deviations</Link>
                 <Link className="text-blue-600 hover:underline" href="/qms/oos">OOS</Link>
                 <Link className="text-blue-600 hover:underline" href="/qms/capa">CAPA</Link>
               </div>
-              {sectionNav.next ? (
+              {!isCpvContext && sectionNav.next ? (
                 <Button variant="outline" asChild>
                   <Link href={sectionNav.next.href}>{sectionNav.next.label}<ChevronRight className="h-4 w-4 ml-1" /></Link>
                 </Button>

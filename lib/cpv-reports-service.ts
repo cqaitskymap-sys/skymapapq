@@ -6,7 +6,9 @@ import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from
 import { uploadTextToStorage } from '@/lib/storage-text-upload';
 import { getRecord, getRecords } from '@/lib/firestore';
 import { listCpvRecords } from '@/lib/cpv-service';
-import { CPV_COLLECTIONS, CppRecord, CqaRecord, RiskRecord, displayCpvStatus } from '@/lib/cpv';
+import { fetchCppResults } from '@/lib/cpv-cpp-monitoring-service';
+import { fetchCqaResults } from '@/lib/cpv-cqa-monitoring-service';
+import { CPV_COLLECTIONS, RiskRecord, displayCpvStatus, toLegacyCppRecord, toLegacyCqaRecord } from '@/lib/cpv';
 import { fetchStabilityResults } from '@/lib/cpv-stability-monitoring-service';
 import { fetchHoldTimeRecords } from '@/lib/cpv-hold-time-monitoring-service';
 import { fetchProcessCapabilityRecords } from '@/lib/cpv-process-capability-service';
@@ -158,8 +160,8 @@ export async function aggregateCpvReportData(filters: CpvReportFilters): Promise
       stability, holdTime, capability, trendAnalysis, spc, cpvReviews,
       trainingRaw, calibrationRaw, maintenanceRaw, supplierRaw, complaintRaw,
     ] = await Promise.all([
-      listCpvRecords<CppRecord>(CPV_COLLECTIONS.cpp, 1000),
-      listCpvRecords<CqaRecord>(CPV_COLLECTIONS.cqa, 1000),
+      fetchCppResults(1000).then((rows) => rows.map((r) => toLegacyCppRecord(r as unknown as Record<string, unknown>))),
+      fetchCqaResults(1000).then((rows) => rows.map((r) => toLegacyCqaRecord(r as unknown as Record<string, unknown>))),
       listCpvRecords<RiskRecord>(CPV_COLLECTIONS.risk, 500),
       fetchRiskAssessmentRecords(500),
       readFirstAvailable(['deviations']),

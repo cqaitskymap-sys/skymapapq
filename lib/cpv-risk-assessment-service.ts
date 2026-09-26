@@ -521,13 +521,14 @@ export async function logRiskExport(actor: RiskAssessmentActor, type: string, co
 }
 
 export async function createAutoRiskFromSignal(
-  input: Parameters<typeof inferRiskFromSignal>[0] & Pick<RiskAssessmentFormData, 'productName' | 'productCode' | 'batchNumber' | 'parameterName' | 'riskOwner' | 'targetCompletionDate'>,
+  input: Parameters<typeof inferRiskFromSignal>[0] & Pick<RiskAssessmentFormData, 'cpvProductId' | 'productName' | 'productCode' | 'batchNumber' | 'parameterName' | 'riskOwner' | 'targetCompletionDate'>,
   actor: RiskAssessmentActor,
   existingCount: number,
 ) {
+  if (!input.cpvProductId?.trim()) return { result: null, error: 'CPV product is required.' };
   const inferred = inferRiskFromSignal(input);
   return createRiskAssessment({
-    cpvProductId: '',
+    cpvProductId: input.cpvProductId,
     productName: input.productName,
     productCode: input.productCode || 'PRD',
     productVersion: '',

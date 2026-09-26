@@ -299,12 +299,29 @@ async function countLinkedMonitoring(
   firestore: Firestore,
   batchNumber: string,
 ): Promise<number> {
+  if (!batchNumber) return 0;
   let count = 0;
-  const cols = ['cpp_results', 'cqa_results', 'yield_monitoring', 'stability_studies'];
+  const cols = [
+    'cpp_results',
+    'cqa_results',
+    'yield_monitoring',
+    'stability_studies',
+    'stability_results',
+    'hold_time_monitoring',
+    'raw_material_monitoring',
+    'packing_material_monitoring',
+    'environmental_monitoring',
+    'utility_monitoring',
+  ];
   for (const col of cols) {
     try {
-      const snap = await firestore.collection(col).where('batchNo', '==', batchNumber).limit(1).get();
-      if (!snap.empty) count += snap.size;
+      const byNumber = await firestore.collection(col).where('batchNumber', '==', batchNumber).limit(1).get();
+      if (!byNumber.empty) {
+        count += 1;
+        continue;
+      }
+      const byNo = await firestore.collection(col).where('batchNo', '==', batchNumber).limit(1).get();
+      if (!byNo.empty) count += 1;
     } catch {
       // ignore missing indexes
     }

@@ -4,11 +4,21 @@ import {
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
 import {
-  CPV_COLLECTIONS, CppRecord, CqaRecord, RiskRecord, YieldRecord, calculateAiRiskScore,
+  CppRecord, CqaRecord, RiskRecord, YieldRecord, calculateAiRiskScore,
+  toLegacyCppRecord, toLegacyCqaRecord, toLegacyRiskRecord, toLegacyYieldRecord,
 } from '@/lib/cpv';
 import { computeCapabilityAverages, countByStatus } from '@/lib/cpv-dashboard';
 import { runCpvAiAnalytics } from '@/lib/cpv-ai-analytics';
-import { listCpvRecords, loadIntegrationSnapshot } from '@/lib/cpv-service';
+import { loadIntegrationSnapshot } from '@/lib/cpv-service';
+import { fetchCppResults } from '@/lib/cpv-cpp-monitoring-service';
+import { fetchCqaResults } from '@/lib/cpv-cqa-monitoring-service';
+import { fetchYieldRecords } from '@/lib/cpv-yield-monitoring-service';
+import { fetchStabilityResults } from '@/lib/cpv-stability-monitoring-service';
+import { fetchUtilityRecords } from '@/lib/cpv-utility-monitoring-service';
+import { fetchEnvironmentalRecords } from '@/lib/cpv-environmental-monitoring-service';
+import { fetchHoldTimeRecords } from '@/lib/cpv-hold-time-monitoring-service';
+import { fetchProcessCapabilityRecords } from '@/lib/cpv-process-capability-service';
+import { fetchRiskAssessmentRecords } from '@/lib/cpv-risk-assessment-service';
 import {
   AI_PREDICTIONS_COLLECTION, AI_RECOMMENDATIONS_COLLECTION, CPV_AI_ANALYTICS_MODULE,
   MIN_HISTORICAL_RECORDS, generatePredictionId, generateRecommendationId,
@@ -108,20 +118,30 @@ async function listCollection<T extends { id?: string; isDeleted?: boolean }>(
 
 export async function loadAiSourceData(product?: string) {
   const [
-    cpp, cqa, yields, stability, utility, environmental, holdTime,
-    capability, risks, integrations,
+    cppRaw, cqaRaw, yieldRaw, stabilityRaw, utility, environmental, holdTime,
+    capability, riskRaw, integrations,
   ] = await Promise.all([
-    listCpvRecords<CppRecord>(CPV_COLLECTIONS.cpp),
-    listCpvRecords<CqaRecord>(CPV_COLLECTIONS.cqa),
-    listCpvRecords<YieldRecord>(CPV_COLLECTIONS.yield),
-    listCpvRecords<Record<string, unknown>>('stability_monitoring'),
-    listCpvRecords<Record<string, unknown>>('utility_monitoring'),
-    listCpvRecords<Record<string, unknown>>('environmental_monitoring'),
-    listCpvRecords<Record<string, unknown>>('hold_time_monitoring'),
-    listCpvRecords<Record<string, unknown>>('process_capability'),
-    listCpvRecords<RiskRecord>(CPV_COLLECTIONS.risk),
+    fetchCppResults(500),
+    fetchCqaResults(500),
+    fetchYieldRecords(500),
+    fetchStabilityResults(500),
+    fetchUtilityRecords(500),
+    fetchEnvironmentalRecords(500),
+    fetchHoldTimeRecords(500),
+    fetchProcessCapabilityRecords(500),
+    fetchRiskAssessmentRecords(500),
     loadIntegrationSnapshot(),
   ]);
+
+  const cpp = cppRaw.map((r) => toLegacyCppRecord(r as unknown as Record<string, unknown>));
+  const cqa = cqaRaw.map((r) => toLegacyCqaRecord(r as unknown as Record<string, unknown>));
+  const yields = yieldRaw.map((r) => toLegacyYieldRecord(r as unknown as Record<string, unknown>));
+  const risks = riskRaw.map((r) => toLegacyRiskRecord(r as unknown as Record<string, unknown>));
+  const stability = (stabilityRaw as unknown as Record<string, unknown>[]).map((r) => ({
+    ...r,
+    productName: String(r.productName || r.product_name || ''),
+    observedValue: r.observedValue ?? r.observedResult ?? r.resultValue,
+  }));
 
   return {
     cpp: filterProduct(cpp, product),

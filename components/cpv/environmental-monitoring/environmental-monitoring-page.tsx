@@ -219,7 +219,7 @@ export function EnvironmentalMonitoringPage() {
     if (!p) return;
     setForm((f) => ({ ...f, cpvProductId: productId, productName: p.productName, productCode: p.productCode }));
     const [batches, params] = await Promise.all([
-      fetchEmBatchesForProduct(p.productName),
+      fetchEmBatchesForProduct(p.productName, p.id),
       fetchEnvironmentalParameters(form.monitoringType),
     ]);
     setFormBatches(batches);
@@ -359,7 +359,7 @@ export function EnvironmentalMonitoringPage() {
     const preselected = products.find((p) => p.productCode === productQuery || p.productName === productQuery) || products[0];
     if (!preselected) return;
     setBulkProductId(preselected.id);
-    setFormBatches(await fetchEmBatchesForProduct(preselected.productName));
+    setFormBatches(await fetchEmBatchesForProduct(preselected.productName, preselected.id));
     const params = await fetchEnvironmentalParameters(bulkMonitoringType);
     setBulkRows(params.slice(0, 8).map((param) => ({ param, observed: '', remarks: '' })));
     if (areas[0]) setBulkAreaId(areas[0].id);
@@ -758,7 +758,7 @@ export function EnvironmentalMonitoringPage() {
             <Select value={bulkProductId} onValueChange={async (v) => {
               setBulkProductId(v);
               const p = products.find((x) => x.id === v);
-              if (p) setFormBatches(await fetchEmBatchesForProduct(p.productName));
+              if (p) setFormBatches(await fetchEmBatchesForProduct(p.productName, p.id));
             }}>
               <SelectTrigger><SelectValue placeholder="Product" /></SelectTrigger>
               <SelectContent>{products.map((p) => <SelectItem key={p.id} value={p.id}>{p.productName}</SelectItem>)}</SelectContent>

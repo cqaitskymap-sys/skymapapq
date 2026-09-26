@@ -5,8 +5,9 @@ import { httpsCallable } from '@/lib/callable';
 import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
 import { shouldSkipRemoteCallablesInLocalDev } from '@/lib/audit-trail';
 import { getRecord, getRecords } from '@/lib/firestore';
-import { listCpvRecords } from '@/lib/cpv-service';
-import { CPV_COLLECTIONS, CppRecord, CqaRecord } from '@/lib/cpv';
+import { fetchCppResults } from '@/lib/cpv-cpp-monitoring-service';
+import { fetchCqaResults } from '@/lib/cpv-cqa-monitoring-service';
+import { toLegacyCppRecord, toLegacyCqaRecord } from '@/lib/cpv';
 import { fetchStabilityResults } from '@/lib/cpv-stability-monitoring-service';
 import { fetchHoldTimeRecords } from '@/lib/cpv-hold-time-monitoring-service';
 import { fetchProcessCapabilityRecords } from '@/lib/cpv-process-capability-service';
@@ -549,11 +550,11 @@ export async function scanAndCreateAlerts(actor: CpvAlertActor): Promise<{ creat
     return { created: 0, error: LOCAL_CALLABLE_SKIP_MESSAGE };
   }
   try {
-    const [existing, rules, cpp, cqa, stability, holdTime, capability, spc, riskAssessment, utility, environmental, yieldRows, rawMaterial, packingMaterial, cpvReviews] = await Promise.all([
+    const [existing, rules, cppRaw, cqaRaw, stability, holdTime, capability, spc, riskAssessment, utility, environmental, yieldRows, rawMaterial, packingMaterial, cpvReviews, trendAnalysis] = await Promise.all([
       fetchCpvAlerts(500),
       fetchAlertRules(),
-      listCpvRecords<CppRecord>(CPV_COLLECTIONS.cpp, 500),
-      listCpvRecords<CqaRecord>(CPV_COLLECTIONS.cqa, 500),
+      fetchCppResults(500),
+      fetchCqaResults(500),
       fetchStabilityResults(300),
       fetchHoldTimeRecords(300),
       fetchProcessCapabilityRecords(300),
@@ -565,10 +566,10 @@ export async function scanAndCreateAlerts(actor: CpvAlertActor): Promise<{ creat
       fetchRawMaterialRecords(300),
       fetchPackingMaterialRecords(300),
       fetchCpvReviewRecords(100),
+      fetchTrendAnalysisRecords(300).catch(() => []),
     ]);
-
-    // Keep trend scan available for future correlation (read path retained).
-    void fetchTrendAnalysisRecords(100).catch(() => []);
+    const cpp = cppRaw.map((r) => toLegacyCppRecord(r as unknown as Record<string, unknown>));
+    const cqa = cqaRaw.map((r) => toLegacyCqaRecord(r as unknown as Record<string, unknown>));
 
     const scans: Array<{ source: AlertSource; records: Record<string, unknown>[]; ruleModule: string }> = [
       { source: 'CPP Monitoring', records: cpp as unknown as Record<string, unknown>[], ruleModule: 'CPP Monitoring' },
@@ -577,6 +578,7 @@ export async function scanAndCreateAlerts(actor: CpvAlertActor): Promise<{ creat
       { source: 'Hold Time Monitoring', records: holdTime as unknown as Record<string, unknown>[], ruleModule: 'Hold Time Monitoring' },
       { source: 'Process Capability', records: capability as unknown as Record<string, unknown>[], ruleModule: 'Process Capability' },
       { source: 'SPC', records: spc as unknown as Record<string, unknown>[], ruleModule: 'SPC' },
+      { source: 'Trend Analysis', records: trendAnalysis as unknown as Record<string, unknown>[], ruleModule: 'Trend Analysis' },
       { source: 'Risk Assessment', records: riskAssessment as unknown as Record<string, unknown>[], ruleModule: 'Risk Assessment' },
       { source: 'Utility Monitoring', records: utility as unknown as Record<string, unknown>[], ruleModule: 'Utility Monitoring' },
       { source: 'Environmental Monitoring', records: environmental as unknown as Record<string, unknown>[], ruleModule: 'Environmental Monitoring' },

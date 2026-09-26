@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { QC_STATUSES, COA_AVAILABLE_OPTIONS } from '@/lib/material-schemas';
+import { inOuterSpecificationBand } from '@/lib/cpv';
 
 export const PACKING_MATERIAL_MONITORING_COLLECTION = 'packing_material_monitoring';
 export const PACKING_MATERIAL_LEGACY_COLLECTION = 'cpv_packing_materials';
@@ -236,12 +237,7 @@ export function evaluateTestResultStatus(
   const num = Number(observed);
   if (!Number.isFinite(num)) return 'Does Not Comply';
   if (num < lower || num > upper) return 'OOS';
-  const range = upper - lower;
-  if (range > 0) {
-    const alertLow = lower + range * 0.1;
-    const alertHigh = upper - range * 0.1;
-    if (num < alertLow || num > alertHigh) return 'OOT';
-  }
+  if (inOuterSpecificationBand(num, lower, upper)) return 'OOT';
   return 'Complies';
 }
 

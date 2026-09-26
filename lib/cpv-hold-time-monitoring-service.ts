@@ -6,7 +6,7 @@ import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from
 import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
 import { isCpvProductOperational } from '@/lib/cpv-product-master';
-import { fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
+import { clientBatchErrorForProduct, fetchCpvBatches, filterCpvBatchesForProduct } from '@/lib/cpv-batch-registration-service';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
 import {
@@ -236,13 +236,8 @@ export async function fetchHoldTimeRecordById(id: string): Promise<HoldTimeMonit
   return all.find((r) => r.id === id) ?? null;
 }
 
-export async function fetchHoldTimeBatchesForProduct(productName: string, productId?: string) {
-  const batches = await fetchCpvBatches();
-  return batches.filter((b) =>
-    b.productName === productName
-    || b.productCode === productName
-    || (productId && b.cpvProductId === productId),
-  );
+export async function fetchHoldTimeBatchesForProduct(productName: string, productId = '') {
+  return filterCpvBatchesForProduct(await fetchCpvBatches(), productName, productId);
 }
 
 export async function createHoldTimeRecord(
@@ -260,6 +255,8 @@ export async function createHoldTimeRecord(
     if (product && !isCpvProductOperational(product.cpvStatus)) {
       return { result: null, error: 'Selected CPV product is not operational for hold time entry.' };
     }
+    const batchError = await clientBatchErrorForProduct(data.productName, data.cpvProductId, data.batchNumber);
+    if (batchError) return { result: null, error: batchError };
     if (qaOverride && options?.esignConfirmed !== true) {
       return { result: null, error: 'Electronic signature confirmation required for QA override.' };
     }

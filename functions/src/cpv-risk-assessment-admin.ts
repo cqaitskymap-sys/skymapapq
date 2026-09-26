@@ -6,6 +6,7 @@
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
 import { getAdminFirestore } from './admin-app';
+import { assertOperationalCpvProduct } from './cpv-batch-guard';
 import { withAiRecommendationOverride } from './ai-recommendation-override';
 
 
@@ -560,10 +561,13 @@ export const createAdminRiskAssessment = onCall({ timeoutSeconds: 60 }, async (r
   const data = (request.data || {}) as Record<string, unknown>;
   const reason = requiredReason(data.changeReason);
 
-  const cpvProductId = optionalString(data.cpvProductId, 'CPV product', 120);
-  if (cpvProductId) await assertOperationalProduct(firestore, cpvProductId);
+  const cpvProductId = requiredString(data.cpvProductId, 'CPV product', 120);
+  const product = await assertOperationalCpvProduct(firestore, cpvProductId);
 
   const meta = sanitizeMeta(data);
+  meta.cpvProductId = cpvProductId;
+  meta.productName = String(product.productName || meta.productName);
+  meta.productCode = String(product.productCode || meta.productCode);
   const riskNumber = await buildRiskNumber(firestore);
   const now = new Date().toISOString();
   const ref = firestore.collection(COLLECTION).doc();

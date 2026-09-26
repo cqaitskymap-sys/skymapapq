@@ -312,9 +312,129 @@ export const PARAMETER_SPECS: Record<string, { target: number; lsl: number; usl:
 };
 
 export function displayCpvStatus(status: CpvStatus | string): 'Pass' | 'OOT' | 'OOS' {
-  if (status === 'Complies' || status === 'Within Limit' || status === 'Pass') return 'Pass';
-  if (status === 'OOT') return 'OOT';
+  const s = String(status || '').trim().toLowerCase();
+  if (!s) return 'OOS';
+  if (s === 'complies' || s === 'within limit' || s === 'pass' || s === 'in control' || s === 'in progress') return 'Pass';
+  if (
+    s === 'oot'
+    || s === 'oot/ool'
+    || s === 'alert'
+    || s === 'action'
+    || s === 'warning'
+    || s === 'near expiry'
+    || s === 'high yield'
+    || s.includes('ool')
+  ) return 'OOT';
+  if (
+    s === 'oos'
+    || s === 'fail'
+    || s === 'does not comply'
+    || s === 'exceeded'
+    || s === 'expired'
+    || s === 'out of control'
+    || s === 'not capable'
+    || s === 'low yield'
+    || s.includes('oos')
+    || s.includes('fail')
+  ) return 'OOS';
   return 'OOS';
+}
+
+function finiteOr(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function textOf(value: unknown, fallback = ''): string {
+  if (value === null || value === undefined || value === '') return fallback;
+  return String(value);
+}
+
+/** Map a CPP monitoring document (cpp_results or legacy cpv_cpp) onto the aggregator record shape. */
+export function toLegacyCppRecord(raw: Record<string, unknown>): CppRecord {
+  return {
+    id: textOf(raw.id),
+    productName: textOf(raw.productName || raw.product_name),
+    batchNo: textOf(raw.batchNumber || raw.batchNo || raw.batch_number),
+    manufacturingDate: textOf(raw.manufacturingDate || raw.observationDateTime || raw.createdAt),
+    processStage: textOf(raw.processStage || raw.process_stage, 'Process'),
+    parameterName: textOf(raw.parameterName || raw.parameter_name),
+    observedValue: finiteOr(raw.observedValue ?? raw.observed_value ?? raw.result),
+    targetValue: finiteOr(raw.targetValue ?? raw.target_value ?? raw.target),
+    lsl: finiteOr(raw.lsl ?? raw.lowerLimit ?? raw.lower_limit),
+    usl: finiteOr(raw.usl ?? raw.upperLimit ?? raw.upper_limit),
+    unit: textOf(raw.unit),
+    recordedBy: textOf(raw.recordedBy || raw.recorded_by, 'System'),
+    reviewedBy: textOf(raw.reviewedBy || raw.reviewed_by),
+    status: textOf(raw.status, 'Complies') as CppRecord['status'],
+    deviationPercent: finiteOr(raw.deviationPercent),
+    createdAt: textOf(raw.createdAt || raw.observationDateTime || raw.manufacturingDate),
+  };
+}
+
+/** Map a CQA monitoring document (cqa_results or legacy cpv_cqa) onto the aggregator record shape. */
+export function toLegacyCqaRecord(raw: Record<string, unknown>): CqaRecord {
+  return {
+    id: textOf(raw.id),
+    productName: textOf(raw.productName || raw.product_name),
+    batchNo: textOf(raw.batchNumber || raw.batchNo || raw.batch_number),
+    testDate: textOf(raw.testDate || raw.test_date || raw.createdAt),
+    testParameter: textOf(raw.testParameter || raw.parameterName || raw.parameter_name),
+    observedValue: finiteOr(raw.observedValue ?? raw.observedResult ?? raw.observed_result ?? raw.result),
+    target: finiteOr(raw.target ?? raw.targetValue ?? raw.target_value),
+    lsl: finiteOr(raw.lsl ?? raw.lowerLimit ?? raw.lower_limit),
+    usl: finiteOr(raw.usl ?? raw.upperLimit ?? raw.upper_limit),
+    unit: textOf(raw.unit),
+    recordedBy: textOf(raw.recordedBy || raw.analyst || raw.recorded_by, 'System'),
+    reviewedBy: textOf(raw.reviewedBy || raw.reviewed_by),
+    status: textOf(raw.status, 'Complies') as CqaRecord['status'],
+    deviationPercent: finiteOr(raw.deviationPercent),
+    createdAt: textOf(raw.createdAt || raw.testDate),
+  };
+}
+
+/** Map yield monitoring onto the legacy yield record used by analytics. */
+export function toLegacyYieldRecord(raw: Record<string, unknown>): YieldRecord {
+  const pct = finiteOr(raw.yieldPercentage ?? raw.observedValue ?? raw.actualYield);
+  return {
+    id: textOf(raw.id),
+    productName: textOf(raw.productName || raw.product_name),
+    batchNo: textOf(raw.batchNumber || raw.batchNo),
+    manufacturingDate: textOf(raw.manufacturingDate || raw.monitoringDate || raw.createdAt),
+    bulkYield: pct,
+    fillingYield: pct,
+    packingYield: pct,
+    lowerLimit: finiteOr(raw.lowerLimit),
+    upperLimit: finiteOr(raw.upperLimit, 100),
+    observedValue: pct,
+    recordedBy: textOf(raw.recordedBy, 'System'),
+    status: textOf(raw.status, 'Complies') as YieldRecord['status'],
+    createdAt: textOf(raw.createdAt),
+  };
+}
+
+/** Map risk assessment (1–10 scores) onto the legacy risk record used by the dashboard. */
+export function toLegacyRiskRecord(raw: Record<string, unknown>): RiskRecord {
+  const severity = finiteOr(raw.severity ?? raw.severityScore, 1);
+  const occurrence = finiteOr(raw.occurrence ?? raw.occurrenceScore ?? raw.likelihood, 1);
+  const detectability = finiteOr(raw.detectability ?? raw.detectionScore ?? raw.detection, 1);
+  return {
+    id: textOf(raw.id),
+    productName: textOf(raw.productName || raw.product_name),
+    batchNo: textOf(raw.batchNumber || raw.batchNo || raw.batch_no),
+    factor: textOf(raw.factor || raw.failureMode || raw.riskSource, 'Process'),
+    riskDescription: textOf(raw.riskDescription || raw.description),
+    severity,
+    occurrence,
+    detectability,
+    mitigation: textOf(raw.mitigation),
+    owner: textOf(raw.owner, 'Unassigned'),
+    dueDate: textOf(raw.dueDate),
+    rpn: finiteOr(raw.rpn ?? raw.rpnScore, severity * occurrence * detectability),
+    riskLevel: textOf(raw.riskLevel, 'Low') as RiskRecord['riskLevel'],
+    status: textOf(raw.riskStatus || raw.status, 'Open'),
+    createdAt: textOf(raw.createdAt),
+  };
 }
 
 
@@ -413,6 +533,19 @@ export const RISK_FACTORS = RISK_SOURCES;
 const round = (value: number, digits = 3) =>
   Number.isFinite(value) ? Number(value.toFixed(digits)) : 0;
 
+/**
+ * Outer 10% of a two-sided specification.
+ * LSL <= 0 is an open lower bound (impurities, particles, endotoxin, conductivity),
+ * so a low result is compliant and must not be flagged as OOT.
+ */
+export function inOuterSpecificationBand(observed: number, lsl: number, usl: number): boolean {
+  if (!Number.isFinite(observed) || !Number.isFinite(lsl) || !Number.isFinite(usl) || usl <= lsl) return false;
+  const band = 0.1 * (usl - lsl);
+  const belowLower = lsl > 0 && observed < lsl + band;
+  const aboveUpper = observed > usl - band;
+  return belowLower || aboveUpper;
+}
+
 export function classifySpecification(
   observed: number,
   target: number,
@@ -420,9 +553,7 @@ export function classifySpecification(
   usl: number,
 ): CpvStatus {
   if (observed < lsl || observed > usl) return 'OOS';
-  const tolerance = usl - lsl;
-  const warningBand = tolerance * 0.1;
-  if (observed <= lsl + warningBand || observed >= usl - warningBand) return 'OOT';
+  if (inOuterSpecificationBand(observed, lsl, usl)) return 'OOT';
   return 'Complies';
 }
 
@@ -466,18 +597,44 @@ export function calculateCapability(values: number[], lsl: number, usl: number):
   const movingRanges = clean.slice(1).map((value, index) => Math.abs(value - clean[index]));
   const averageMovingRange = movingRanges.length
     ? movingRanges.reduce((sum, value) => sum + value, 0) / movingRanges.length
-    : standardDeviation * 1.128;
-  const withinSigma = (averageMovingRange / 1.128) || Number.EPSILON;
-  const overallSigma = standardDeviation || Number.EPSILON;
+    : 0;
+  const withinFromRange = averageMovingRange / 1.128;
+  const withinSigma = withinFromRange > 0 ? withinFromRange : standardDeviation;
+  const overallSigma = standardDeviation;
+
+  if (withinSigma === 0 && overallSigma === 0) {
+    const withinSpec = mean >= lsl && mean <= usl;
+    const index = withinSpec ? 2 : 0;
+    const perfectStatus: CapabilityStatus = index >= 1.67 ? 'Excellent' : index >= 1.33 ? 'Acceptable' : 'Needs Improvement';
+    return {
+      count: clean.length,
+      mean: round(mean),
+      median: round(median),
+      range: round(sorted[sorted.length - 1] - sorted[0]),
+      variance: 0,
+      standardDeviation: 0,
+      cp: index,
+      cpk: index,
+      cpu: index,
+      cpl: index,
+      pp: index,
+      ppk: index,
+      sigmaLevel: round(index * 3),
+      performanceIndex: round(Math.min(2, index) * 50, 1),
+      status: perfectStatus,
+    };
+  }
+
+  const ppSigma = overallSigma > 0 ? overallSigma : withinSigma;
   const cp = (usl - lsl) / (6 * withinSigma);
   const cpu = (usl - mean) / (3 * withinSigma);
   const cpl = (mean - lsl) / (3 * withinSigma);
   const cpk = Math.min(cpu, cpl);
-  const pp = (usl - lsl) / (6 * overallSigma);
-  const ppu = (usl - mean) / (3 * overallSigma);
-  const ppl = (mean - lsl) / (3 * overallSigma);
+  const pp = (usl - lsl) / (6 * ppSigma);
+  const ppu = (usl - mean) / (3 * ppSigma);
+  const ppl = (mean - lsl) / (3 * ppSigma);
   const ppk = Math.min(ppu, ppl);
-  const status: CapabilityStatus = cpk > 1.33 ? 'Excellent' : cpk >= 1 ? 'Acceptable' : 'Needs Improvement';
+  const status: CapabilityStatus = cpk >= 1.67 ? 'Excellent' : cpk >= 1.33 ? 'Acceptable' : 'Needs Improvement';
 
   return {
     count: clean.length,

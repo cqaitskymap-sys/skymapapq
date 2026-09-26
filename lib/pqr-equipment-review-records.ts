@@ -75,6 +75,7 @@ export interface PqrEquipmentReviewRecord {
   id?: string;
   equipmentReviewId: string;
   pqrId: string;
+  cpvProductId?: string;
   pqrNumber: string;
   product: string;
   productCode: string;
@@ -530,6 +531,7 @@ export function normalizeEquipmentReviewRecord(raw: Record<string, unknown>): Pq
     id: S(raw.id),
     equipmentReviewId: S(raw.equipmentReviewId, `PER-${S(raw.id, 'X')}`),
     pqrId: S(raw.pqrId),
+    cpvProductId: S(raw.cpvProductId) || (S(raw.pqrId).startsWith('cpv:') ? S(raw.pqrId).slice(4) : ''),
     pqrNumber: S(raw.pqrNumber),
     product: S(raw.product || raw.productName),
     productCode: S(raw.productCode),

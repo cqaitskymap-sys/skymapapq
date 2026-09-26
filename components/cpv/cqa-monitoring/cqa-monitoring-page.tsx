@@ -244,7 +244,7 @@ export function CqaMonitoringPage() {
       manufacturingDate: f.manufacturingDate || new Date().toISOString().split('T')[0],
     }));
     const [batches] = await Promise.all([
-      fetchCqaBatchesForProduct(p.productName),
+      fetchCqaBatchesForProduct(p.productName, productId),
     ]);
     setFormBatches(batches);
     setFormParams(resolveFormParameters(p.productName, productId, stage));
@@ -406,7 +406,7 @@ export function CqaMonitoringPage() {
     if (!p) return;
     const params = resolveFormParameters(p.productName, productId, bulkStage);
     setBulkRows(params.map((param) => ({ param, observed: '', remarks: '' })));
-    const batches = await fetchCqaBatchesForProduct(p.productName);
+    const batches = await fetchCqaBatchesForProduct(p.productName, productId);
     setFormBatches(batches);
     setBulkOpen(true);
   };
@@ -803,7 +803,7 @@ export function CqaMonitoringPage() {
                 setBulkProductId(v);
                 const p = products.find((x) => x.id === v);
                 if (p) {
-                  const batches = await fetchCqaBatchesForProduct(p.productName);
+                  const batches = await fetchCqaBatchesForProduct(p.productName, p.id);
                   setFormBatches(batches);
                   const params = resolveFormParameters(p.productName, v, bulkStage);
                   setBulkRows(params.map((param) => ({ param, observed: '', remarks: '' })));

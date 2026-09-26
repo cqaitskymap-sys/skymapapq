@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { RESULT_TYPES } from '@/lib/admin/constants';
+import { inOuterSpecificationBand } from '@/lib/cpv';
 
 export const UTILITY_MONITORING_COLLECTION = 'utility_monitoring';
 export const UTILITY_LEGACY_COLLECTIONS = ['cpv_utility_monitoring', 'cpv_utility'] as const;
@@ -168,14 +169,7 @@ export function evaluateUtilityStatus(
   if (actionHigh != null && Number.isFinite(actionHigh) && num > actionHigh) return 'Action';
   if (alertLow != null && Number.isFinite(alertLow) && num < alertLow) return 'Alert';
   if (alertHigh != null && Number.isFinite(alertHigh) && num > alertHigh) return 'Alert';
-  if (alertLow == null && alertHigh == null) {
-    const range = usl - lsl;
-    if (range > 0) {
-      const bandLow = lsl + range * 0.1;
-      const bandHigh = usl - range * 0.1;
-      if (num < bandLow || num > bandHigh) return 'OOT';
-    }
-  }
+  if (alertLow == null && alertHigh == null && inOuterSpecificationBand(num, lsl, usl)) return 'OOT';
   return 'Complies';
 }
 

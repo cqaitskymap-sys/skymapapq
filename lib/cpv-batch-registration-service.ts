@@ -201,6 +201,32 @@ export async function fetchCpvBatches(): Promise<CpvBatchRecord[]> {
   }
 }
 
+export function filterCpvBatchesForProduct(
+  batches: CpvBatchRecord[],
+  productName: string,
+  cpvProductId = '',
+): CpvBatchRecord[] {
+  return batches.filter((b) => {
+    if (cpvProductId && b.cpvProductId) return b.cpvProductId === cpvProductId;
+    return b.productName === productName || b.productCode === productName;
+  });
+}
+
+/** Client guard used before monitoring writes. Returns an error message, or null when the batch is valid. */
+export async function clientBatchErrorForProduct(
+  productName: string,
+  cpvProductId: string,
+  batchNumber: string,
+): Promise<string | null> {
+  const batches = filterCpvBatchesForProduct(await fetchCpvBatches(), productName, cpvProductId);
+  const match = batches.find((b) => b.batchNumber === batchNumber);
+  if (!match) return 'Batch does not belong to selected product.';
+  if (['Cancelled', 'Closed', 'Rejected', 'Archived'].includes(match.batchStatus)) {
+    return 'Closed, rejected, or archived batch — entry not allowed.';
+  }
+  return null;
+}
+
 export async function fetchCpvBatchById(id: string): Promise<CpvBatchRecord | null> {
   if (!isFirebaseConfigured()) return null;
   try {

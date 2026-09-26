@@ -351,7 +351,7 @@ export function buildHoldTimeComputedFields(
     endDateTime: data.endDateTime,
     inProgress,
   });
-  const nearExpiry = remainingTime <= data.allowedHoldTime * 0.2 && remainingTime > 0;
+  const nearExpiry = remainingTime > 0 && remainingTime <= data.allowedHoldTime * 0.05;
   const excursions = evaluateStorageExcursion(data);
   return {
     actualHoldTime,
@@ -408,17 +408,27 @@ export function computeHoldTimeStats(
     if (f > maxFreq) { maxFreq = f; mode = v; }
   });
   if (maxFreq <= 1) mode = null;
-  const variance = sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / count;
+  const clean = values.filter((v) => Number.isFinite(v));
+  const variance = count > 1
+    ? clean.reduce((s, v) => s + (v - mean) ** 2, 0) / (count - 1)
+    : 0;
   const stdDev = Math.sqrt(variance);
+  const movingRanges = clean.slice(1).map((v, i) => Math.abs(v - clean[i]));
+  const mrBar = movingRanges.length
+    ? movingRanges.reduce((s, v) => s + v, 0) / movingRanges.length
+    : 0;
+  const withinSd = mrBar > 0 ? mrBar / 1.128 : stdDev;
   const min = sorted[0];
   const max = sorted[count - 1];
   const upper = usl ?? Math.max(...sorted, lsl + 1);
-  const cp = stdDev > 0 ? (upper - lsl) / (6 * stdDev) : null;
-  const cpk = stdDev > 0
+  const cp = withinSd > 0 ? (upper - lsl) / (6 * withinSd) : null;
+  const cpk = withinSd > 0
+    ? Math.min((mean - lsl) / (3 * withinSd), (upper - mean) / (3 * withinSd))
+    : null;
+  const pp = stdDev > 0 ? (upper - lsl) / (6 * stdDev) : null;
+  const ppk = stdDev > 0
     ? Math.min((mean - lsl) / (3 * stdDev), (upper - mean) / (3 * stdDev))
     : null;
-  const pp = cp;
-  const ppk = cpk;
   const sigmaLevel = stdDev > 0 && cpk != null ? cpk * 3 : null;
   return {
     count,
@@ -464,7 +474,7 @@ export function detectNelsonRuleViolations(values: number[]): { rule: string; in
     const current = v >= mean ? 'above' : 'below';
     if (current === side) run.push(i);
     else { run = [i]; side = current; }
-    if (run.length >= 9) violations.push({ rule: 'Nelson 2', indices: [...run] });
+    if (run.length === 9) violations.push({ rule: 'Nelson 2', indices: [...run] });
   });
   return violations;
 }

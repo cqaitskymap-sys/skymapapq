@@ -13,7 +13,7 @@ import { listReceipts } from '@/lib/warehouse-mgmt-service';
 import { listVendors } from '@/lib/vendor-mgmt-service';
 import { fetchCpvProductById } from '@/lib/cpv-product-master-service';
 import { isCpvProductOperational } from '@/lib/cpv-product-master';
-import { fetchCpvBatches } from '@/lib/cpv-batch-registration-service';
+import { clientBatchErrorForProduct, fetchCpvBatches, filterCpvBatchesForProduct } from '@/lib/cpv-batch-registration-service';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
 import {
@@ -213,9 +213,8 @@ export async function fetchWarehouseReceiptsForImport() {
   }
 }
 
-export async function fetchRmBatchesForProduct(productName: string) {
-  const batches = await fetchCpvBatches();
-  return batches.filter((b) => b.productName === productName || b.productCode === productName);
+export async function fetchRmBatchesForProduct(productName: string, cpvProductId = '') {
+  return filterCpvBatchesForProduct(await fetchCpvBatches(), productName, cpvProductId);
 }
 
 export async function createRawMaterialRecord(
@@ -234,14 +233,8 @@ export async function createRawMaterialRecord(
     if (product && !isCpvProductOperational(product.cpvStatus)) {
       return { result: null, error: 'Selected CPV product is not operational for raw material entry.' };
     }
-    const batches = await fetchRmBatchesForProduct(data.productName);
-    const batchMatch = batches.find((b) => b.batchNumber === data.batchNumber);
-    if (batches.length && !batchMatch) {
-      return { result: null, error: 'Batch does not belong to selected product.' };
-    }
-    if (batchMatch && ['Cancelled', 'Closed', 'Rejected', 'Archived'].includes(batchMatch.batchStatus)) {
-      return { result: null, error: 'Closed, rejected, or archived batch — entry not allowed.' };
-    }
+    const batchError = await clientBatchErrorForProduct(data.productName, data.cpvProductId, data.batchNumber);
+    if (batchError) return { result: null, error: batchError };
     if (qaOverride && options?.esignConfirmed !== true) {
       return { result: null, error: 'Electronic signature confirmation required for QA override.' };
     }
