@@ -513,7 +513,7 @@ export function CreateAnnualPqrPage() {
 
   return (
     <PqrCreateAccessGuard>
-      <div className="space-y-6 p-4 sm:p-6 max-w-5xl mx-auto">
+      <div className="mx-auto max-w-5xl space-y-6">
         <CpvPageHeader
           title="Create Annual PQR"
           description="Generate annual Product Quality Review from Product Master, Batch Master and QMS data"

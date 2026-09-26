@@ -167,7 +167,7 @@ export function UtilityDetailView({ id }: { id: string }) {
     : '/qms/capa';
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={record.parameterName}
         description={`${record.batchNumber} · ${record.utilitySystemName}`}

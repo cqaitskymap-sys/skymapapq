@@ -1,19 +1,12 @@
 'use client';
 
-import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
-import { ErrorCard } from '@/components/admin/dashboard/error-card';
+import { CpvModuleAccessGuard } from '@/components/cpv/cpv-module-access-guard';
 
 export function AnnualReviewAccessGuard({ children }: { children: React.ReactNode }) {
-  const { profile } = useAuth();
-  if (!profile?.role || !cpvPermissions.canViewAnnualReview(profile.role)) {
-    return (
-      <ErrorCard
-        accessDenied
-        title="Access Denied"
-        message="You do not have permission to access Annual CPV Review."
-      />
-    );
-  }
-  return <>{children}</>;
+  return (
+    <CpvModuleAccessGuard canView={cpvPermissions.canViewAnnualReview} moduleLabel="Annual CPV Review">
+      {children}
+    </CpvModuleAccessGuard>
+  );
 }

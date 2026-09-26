@@ -448,7 +448,7 @@ export function StabilityMonitoringPage() {
       ]),
     );
     void logStabilityExport(actor, filteredResults.length);
-    toast.success('Export placeholder — CSV downloaded');
+    toast.success(`Exported ${filteredResults.length} results`);
   };
 
   const resultColumns: ColumnDef<StabilityResultRecord>[] = [
@@ -543,7 +543,7 @@ export function StabilityMonitoringPage() {
   if (error) return <div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title="Stability Monitoring"
         description="Monitor stability schedules, sample pulling, results and trends for CPV products"
@@ -554,7 +554,7 @@ export function StabilityMonitoringPage() {
         actions={
           <>
             {canImportExport && (
-              <Button variant="outline" size="sm" onClick={() => toast.info('Excel import placeholder — upload template coming soon')}>
+              <Button variant="outline" size="sm" onClick={() => toast.info('Excel import is not available yet. Use Add Result to enter data.')}>
                 Import Excel
               </Button>
             )}

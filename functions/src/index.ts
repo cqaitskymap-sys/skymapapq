@@ -10,7 +10,6 @@ import { setGlobalOptions } from 'firebase-functions/v2/options';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
-import { defineSecret } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
 
 import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
@@ -966,229 +965,64 @@ export const auditPendingUserRegistration = onDocumentCreated('profiles/{userId}
   });
 });
 
-const cronSecret = defineSecret('EFFECTIVE_DATE_CRON_SECRET');
-const apiUrl = defineSecret('EFFECTIVE_DATE_API_URL');
+async function invokeCronEndpoint(urlEnv: string, secretEnv: string, label: string) {
+  const url = process.env[urlEnv];
+  const secret = process.env[secretEnv];
+  if (!url) {
+    logger.error(`${urlEnv} not configured`);
+    return;
+  }
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: secret ? { Authorization: `Bearer ${secret}` } : {},
+  });
+  const body = await res.json();
+  logger.info(`${label} completed`, body);
+}
 
 export const scheduledEffectiveDateActivation = onSchedule(
-  {
-    schedule: 'every day 00:05',
-    timeZone: 'UTC',
-    secrets: [cronSecret, apiUrl],
-  },
-  async () => {
-    const url = apiUrl.value() || process.env.EFFECTIVE_DATE_API_URL;
-    const secret = cronSecret.value() || process.env.EFFECTIVE_DATE_CRON_SECRET;
-    if (!url) {
-      logger.error('EFFECTIVE_DATE_API_URL not configured');
-      return;
-    }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
-    });
-    const body = await res.json();
-    logger.info('Effective date activation completed', body);
-  },
+  { schedule: 'every day 00:05', timeZone: 'UTC' },
+  () => invokeCronEndpoint('EFFECTIVE_DATE_API_URL', 'EFFECTIVE_DATE_CRON_SECRET', 'Effective date activation'),
 );
-
-const prmCronSecret = defineSecret('PERIODIC_REVIEW_CRON_SECRET');
-const prmApiUrl = defineSecret('PERIODIC_REVIEW_API_URL');
 
 export const scheduledPeriodicReviewJobs = onSchedule(
-  {
-    schedule: 'every day 06:00',
-    timeZone: 'UTC',
-    secrets: [prmCronSecret, prmApiUrl],
-  },
-  async () => {
-    const url = prmApiUrl.value() || process.env.PERIODIC_REVIEW_API_URL;
-    const secret = prmCronSecret.value() || process.env.PERIODIC_REVIEW_CRON_SECRET;
-    if (!url) {
-      logger.error('PERIODIC_REVIEW_API_URL not configured');
-      return;
-    }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
-    });
-    const body = await res.json();
-    logger.info('Periodic review scheduler completed', body);
-  },
+  { schedule: 'every day 06:00', timeZone: 'UTC' },
+  () => invokeCronEndpoint('PERIODIC_REVIEW_API_URL', 'PERIODIC_REVIEW_CRON_SECRET', 'Periodic review scheduler'),
 );
-
-const ciaCronSecret = defineSecret('CHANGE_IMPACT_CRON_SECRET');
-const ciaApiUrl = defineSecret('CHANGE_IMPACT_API_URL');
 
 export const scheduledChangeImpactJobs = onSchedule(
-  {
-    schedule: 'every day 08:00',
-    timeZone: 'UTC',
-    secrets: [ciaCronSecret, ciaApiUrl],
-  },
-  async () => {
-    const url = ciaApiUrl.value() || process.env.CHANGE_IMPACT_API_URL;
-    const secret = ciaCronSecret.value() || process.env.CHANGE_IMPACT_CRON_SECRET;
-    if (!url) {
-      logger.error('CHANGE_IMPACT_API_URL not configured');
-      return;
-    }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
-    });
-    const body = await res.json();
-    logger.info('Change impact scheduler completed', body);
-  },
+  { schedule: 'every day 08:00', timeZone: 'UTC' },
+  () => invokeCronEndpoint('CHANGE_IMPACT_API_URL', 'CHANGE_IMPACT_CRON_SECRET', 'Change impact scheduler'),
 );
-
-const archiveCronSecret = defineSecret('ARCHIVE_CRON_SECRET');
-const archiveApiUrl = defineSecret('ARCHIVE_API_URL');
 
 export const scheduledArchiveJobs = onSchedule(
-  {
-    schedule: 'every day 09:00',
-    timeZone: 'UTC',
-    secrets: [archiveCronSecret, archiveApiUrl],
-  },
-  async () => {
-    const url = archiveApiUrl.value() || process.env.ARCHIVE_API_URL;
-    const secret = archiveCronSecret.value() || process.env.ARCHIVE_CRON_SECRET;
-    if (!url) {
-      logger.error('ARCHIVE_API_URL not configured');
-      return;
-    }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
-    });
-    const body = await res.json();
-    logger.info('Archive scheduler completed', body);
-  },
+  { schedule: 'every day 09:00', timeZone: 'UTC' },
+  () => invokeCronEndpoint('ARCHIVE_API_URL', 'ARCHIVE_CRON_SECRET', 'Archive scheduler'),
 );
-
-const retentionCronSecret = defineSecret('RETENTION_CRON_SECRET');
-const retentionApiUrl = defineSecret('RETENTION_API_URL');
 
 export const scheduledRetentionJobs = onSchedule(
-  {
-    schedule: 'every day 10:00',
-    timeZone: 'UTC',
-    secrets: [retentionCronSecret, retentionApiUrl],
-  },
-  async () => {
-    const url = retentionApiUrl.value() || process.env.RETENTION_API_URL;
-    const secret = retentionCronSecret.value() || process.env.RETENTION_CRON_SECRET;
-    if (!url) {
-      logger.error('RETENTION_API_URL not configured');
-      return;
-    }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
-    });
-    const body = await res.json();
-    logger.info('Retention scheduler completed', body);
-  },
+  { schedule: 'every day 10:00', timeZone: 'UTC' },
+  () => invokeCronEndpoint('RETENTION_API_URL', 'RETENTION_CRON_SECRET', 'Retention scheduler'),
 );
-
-const externalDocCronSecret = defineSecret('EXTERNAL_DOC_CRON_SECRET');
-const externalDocApiUrl = defineSecret('EXTERNAL_DOC_API_URL');
 
 export const scheduledExternalDocumentJobs = onSchedule(
-  {
-    schedule: 'every day 11:00',
-    timeZone: 'UTC',
-    secrets: [externalDocCronSecret, externalDocApiUrl],
-  },
-  async () => {
-    const url = externalDocApiUrl.value() || process.env.EXTERNAL_DOC_API_URL;
-    const secret = externalDocCronSecret.value() || process.env.EXTERNAL_DOC_CRON_SECRET;
-    if (!url) {
-      logger.error('EXTERNAL_DOC_API_URL not configured');
-      return;
-    }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
-    });
-    const body = await res.json();
-    logger.info('External document scheduler completed', body);
-  },
+  { schedule: 'every day 11:00', timeZone: 'UTC' },
+  () => invokeCronEndpoint('EXTERNAL_DOC_API_URL', 'EXTERNAL_DOC_CRON_SECRET', 'External document scheduler'),
 );
-
-const printControlCronSecret = defineSecret('PRINT_CONTROL_CRON_SECRET');
-const printControlApiUrl = defineSecret('PRINT_CONTROL_API_URL');
 
 export const scheduledPrintControlJobs = onSchedule(
-  {
-    schedule: 'every day 12:00',
-    timeZone: 'UTC',
-    secrets: [printControlCronSecret, printControlApiUrl],
-  },
-  async () => {
-    const url = printControlApiUrl.value() || process.env.PRINT_CONTROL_API_URL;
-    const secret = printControlCronSecret.value() || process.env.PRINT_CONTROL_CRON_SECRET;
-    if (!url) {
-      logger.error('PRINT_CONTROL_API_URL not configured');
-      return;
-    }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
-    });
-    const body = await res.json();
-    logger.info('Print control scheduler completed', body);
-  },
+  { schedule: 'every day 12:00', timeZone: 'UTC' },
+  () => invokeCronEndpoint('PRINT_CONTROL_API_URL', 'PRINT_CONTROL_CRON_SECRET', 'Print control scheduler'),
 );
-
-const watermarkCronSecret = defineSecret('WATERMARK_CRON_SECRET');
-const watermarkApiUrl = defineSecret('WATERMARK_API_URL');
 
 export const scheduledWatermarkJobs = onSchedule(
-  {
-    schedule: 'every day 13:00',
-    timeZone: 'UTC',
-    secrets: [watermarkCronSecret, watermarkApiUrl],
-  },
-  async () => {
-    const url = watermarkApiUrl.value() || process.env.WATERMARK_API_URL;
-    const secret = watermarkCronSecret.value() || process.env.WATERMARK_CRON_SECRET;
-    if (!url) {
-      logger.error('WATERMARK_API_URL not configured');
-      return;
-    }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
-    });
-    const body = await res.json();
-    logger.info('Watermark scheduler completed', body);
-  },
+  { schedule: 'every day 13:00', timeZone: 'UTC' },
+  () => invokeCronEndpoint('WATERMARK_API_URL', 'WATERMARK_CRON_SECRET', 'Watermark scheduler'),
 );
 
-const documentAuditCronSecret = defineSecret('DOCUMENT_AUDIT_CRON_SECRET');
-const documentAuditApiUrl = defineSecret('DOCUMENT_AUDIT_API_URL');
-
 export const scheduledDocumentAuditJobs = onSchedule(
-  {
-    schedule: 'every day 14:00',
-    timeZone: 'UTC',
-    secrets: [documentAuditCronSecret, documentAuditApiUrl],
-  },
-  async () => {
-    const url = documentAuditApiUrl.value() || process.env.DOCUMENT_AUDIT_API_URL;
-    const secret = documentAuditCronSecret.value() || process.env.DOCUMENT_AUDIT_CRON_SECRET;
-    if (!url) {
-      logger.error('DOCUMENT_AUDIT_API_URL not configured');
-      return;
-    }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: secret ? { Authorization: `Bearer ${secret}` } : {},
-    });
-    const body = await res.json();
-    logger.info('Document audit scheduler completed', body);
-  },
+  { schedule: 'every day 14:00', timeZone: 'UTC' },
+  () => invokeCronEndpoint('DOCUMENT_AUDIT_API_URL', 'DOCUMENT_AUDIT_CRON_SECRET', 'Document audit scheduler'),
 );
 
 const ROLE_MATRIX_MODULES = [
@@ -2862,6 +2696,7 @@ export {
 
 export {
   appendAdminAuditTrail,
+  recordAdminAuditTrail,
   logAdminAuditTrailExport,
   archiveAdminAuditTrail,
   verifyAdminAuditIntegrity,

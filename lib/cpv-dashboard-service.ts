@@ -1,14 +1,15 @@
 import { collection, getDocs, limit, orderBy, query } from 'firebase/firestore';
-import { createAuditLog, shouldSkipRemoteAuditInLocalDev } from '@/lib/audit-trail';
-import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
+import { areAuditCallablesUnavailable, createAuditLog, shouldSkipRemoteAuditInLocalDev } from '@/lib/audit-trail';
+import { httpsCallable } from '@/lib/callable';
+import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
 import { listCpvRecords } from '@/lib/cpv-service';
 import { CPV_COLLECTIONS, type CppRecord, type CqaRecord, type RiskRecord } from '@/lib/cpv';
 import { computeCapabilityAverages } from '@/lib/cpv-dashboard';
 
-/** Firestore collection names — standard QMS + legacy CPV fallbacks */
+/** Firestore collection names — CPV masters first, then QMS/legacy fallbacks */
 export const CPV_DASHBOARD_COLLECTIONS = {
-  products: 'products',
-  batches: 'batches',
+  products: ['cpv_products', 'products'],
+  batches: ['cpv_batches', 'batches', 'pqr_batches'],
   cppParameters: ['cpp_parameters'],
   cppResults: ['cpp_results', 'cpv_cpp'],
   cqaParameters: ['cqa_parameters'],
@@ -94,6 +95,10 @@ function str(v: unknown, fallback = ''): string {
 function num(v: unknown, fallback = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function notDeleted(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  return rows.filter((r) => r.isDeleted !== true && r.is_deleted !== true);
 }
 
 async function safeQueryCollection(
@@ -285,8 +290,8 @@ export async function fetchCpvDashboardData(): Promise<CpvDashboardRawData> {
       deviationRaw,
       changeControlRaw,
     ] = await Promise.all([
-      safeQueryCollection(CPV_DASHBOARD_COLLECTIONS.products, 200),
-      safeQueryCollection(CPV_DASHBOARD_COLLECTIONS.batches, 500),
+      loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.products, 200),
+      loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.batches, 500),
       loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.cppParameters, 500),
       loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.cqaParameters, 500),
       loadFromAlternatives(CPV_DASHBOARD_COLLECTIONS.cppResults, 500),
@@ -333,28 +338,28 @@ export async function fetchCpvDashboardData(): Promise<CpvDashboardRawData> {
     };
 
     return {
-      products,
-      batches,
+      products: notDeleted(products),
+      batches: notDeleted(batches),
       cppParameters,
       cqaParameters,
-      cpp,
-      cqa,
-      risks,
+      cpp: cpp.filter((r) => (r as unknown as Record<string, unknown>).isDeleted !== true),
+      cqa: cqa.filter((r) => (r as unknown as Record<string, unknown>).isDeleted !== true),
+      risks: risks.filter((r) => (r as unknown as Record<string, unknown>).isDeleted !== true),
       cpvReviews: reviewRaw.map(normalizeReview),
-      processCapability: capabilityRaw,
-      alerts: alertsRaw,
+      processCapability: notDeleted(capabilityRaw),
+      alerts: notDeleted(alertsRaw),
       auditTrail: auditRaw,
       notifications,
-      stabilityResults: stabilityResultsRaw,
-      stabilityStudies: stabilityStudiesRaw,
-      holdTimeRecords: holdTimeRaw,
-      trendAnalysisRecords: trendAnalysisRaw,
-      controlChartRecords: controlChartsRaw,
-      rawMaterialRecords: rawMaterialRaw,
-      packingMaterialRecords: packingMaterialRaw,
-      utilityRecords: utilityRaw,
-      environmentalRecords: environmentalRaw,
-      yieldRecords: yieldRaw,
+      stabilityResults: notDeleted(stabilityResultsRaw),
+      stabilityStudies: notDeleted(stabilityStudiesRaw),
+      holdTimeRecords: notDeleted(holdTimeRaw),
+      trendAnalysisRecords: notDeleted(trendAnalysisRaw),
+      controlChartRecords: notDeleted(controlChartsRaw),
+      rawMaterialRecords: notDeleted(rawMaterialRaw),
+      packingMaterialRecords: notDeleted(packingMaterialRaw),
+      utilityRecords: notDeleted(utilityRaw),
+      environmentalRecords: notDeleted(environmentalRaw),
+      yieldRecords: notDeleted(yieldRaw),
       openCapaCount: capaRaw.filter((r) => isOpenStatus(str(r.status))).length,
       openDeviationCount: deviationRaw.filter((r) => isOpenStatus(str(r.status))).length,
       openChangeControlCount: changeControlRaw.filter((r) => isOpenStatus(str(r.status))).length,
@@ -451,12 +456,10 @@ export async function logCpvDashboardAudit(
     status: 'Success',
   });
 
-  // Best-effort dual audit via Cloud Function (immutable server trail when deployed)
-  if (shouldSkipRemoteAuditInLocalDev()) return;
+  // Best-effort dual audit via same-origin proxy (avoids Cloud Run CORS preflight).
+  if (shouldSkipRemoteAuditInLocalDev() || areAuditCallablesUnavailable()) return;
+  if (!isFirebaseConfigured()) return;
   try {
-    const { httpsCallable } = await import('firebase/functions');
-    const { getFirebaseFunctions, isFirebaseConfigured } = await import('@/lib/firebase');
-    if (!isFirebaseConfigured()) return;
     const fn = httpsCallable(getFirebaseFunctions(), 'recordAdminCpvDashboardAudit');
     await fn({
       actionType,

@@ -30,7 +30,7 @@ export function AppShell({ children, className }: AppShellProps) {
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <Header />
           <main id="main-content" className={cn('min-w-0 flex-1 overflow-x-hidden overflow-y-auto', className)}>
-            <PageTransition routeKey={pathname ?? 'app'} variant="fade" className="min-h-full p-3 xs:p-4 md:p-6">
+            <PageTransition routeKey={pathname ?? 'app'} variant="fade" className="mx-auto min-h-full max-w-[1600px] p-3 xs:p-4 md:p-6">
               {children}
             </PageTransition>
           </main>

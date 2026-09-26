@@ -63,7 +63,7 @@ export function AlertEngineDetailView({ id }: { id: string }) {
   const isClosed = ['Closed', 'Rejected'].includes(record.alertStatus);
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={record.alertNumber}
         description={record.alertTitle}

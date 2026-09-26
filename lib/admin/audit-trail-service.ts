@@ -2,7 +2,7 @@ import {
   collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import { createAuditLog, shouldSkipRemoteAuditInLocalDev } from '@/lib/audit-trail';
 import { getFirebaseApp, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import {

@@ -30,19 +30,22 @@ function CreateProductContent() {
 
   const onSubmit = async (data: ProductFormData) => {
     setSubmitting(true);
-    const result = await createProduct(data, auditMeta);
-    setSubmitting(false);
-    if (result.error) {
-      toast.error(result.error);
-      return;
+    try {
+      const result = await createProduct(data, auditMeta);
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+      toast.success('Product created');
+      router.push(`/admin/products/${result.product?.id}`);
+    } finally {
+      setSubmitting(false);
     }
-    toast.success('Product created');
-    router.push(`/admin/products/${result.product?.id}`);
   };
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Create Product" description="Add a new pharmaceutical product master record" basePath="/admin" />
+      <PageHeader title="Create Product" description="Add a new pharmaceutical product master record" />
       <ProductForm onSubmit={onSubmit} onCancel={() => router.push('/admin/products')} submitting={submitting} />
     </div>
   );

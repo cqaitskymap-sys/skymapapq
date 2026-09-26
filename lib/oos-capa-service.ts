@@ -92,6 +92,14 @@ async function findCapaByNumber(capaNumber: string): Promise<CapaRecord | null> 
 
 export async function checkRepeatOos(record: OosRecord): Promise<boolean> {
   if (!isFirebaseConfigured()) return false;
+  const hasRepeat = (docs: Array<{ id: string; data: () => { result_status?: unknown; test_name?: unknown } }>, testName?: string) =>
+    docs.filter((d) => {
+      if (d.id === record.id) return false;
+      if (d.data().result_status !== 'OOS') return false;
+      if (testName && String(d.data().test_name || '') !== testName) return false;
+      return true;
+    }).length >= 1;
+
   try {
     const snap = await getDocs(query(
       collection(getFirebaseFirestore(), OOS_COLLECTIONS.records),
@@ -99,10 +107,18 @@ export async function checkRepeatOos(record: OosRecord): Promise<boolean> {
       where('test_name', '==', record.test_name),
       limit(20),
     ));
-    const matches = snap.docs.filter((d) => d.id !== record.id && d.data().result_status === 'OOS');
-    return matches.length >= 1;
+    return hasRepeat(snap.docs);
   } catch {
-    return false;
+    try {
+      const snap = await getDocs(query(
+        collection(getFirebaseFirestore(), OOS_COLLECTIONS.records),
+        where('product_name', '==', record.product_name),
+        limit(50),
+      ));
+      return hasRepeat(snap.docs, record.test_name);
+    } catch {
+      return false;
+    }
   }
 }
 

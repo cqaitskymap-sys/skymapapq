@@ -3,7 +3,7 @@
  * Reads via Firestore; privileged mutations via Cloud Functions.
  */
 import { doc, getDoc, onSnapshot, type Unsubscribe } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import { ADMIN_COLLECTIONS } from './constants';
 import type { SystemSettings } from './schemas';
 import { isFirebaseConfigured, getFirebaseAuth, getFirebaseFirestore, getFirebaseFunctions } from '@/lib/firebase';

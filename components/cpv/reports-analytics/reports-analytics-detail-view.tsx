@@ -61,7 +61,7 @@ export function ReportsAnalyticsDetailView({ id }: { id: string }) {
   const charts = record.charts || {};
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={record.reportNumber}
         description={`${record.reportType} · ${record.productName}`}

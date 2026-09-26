@@ -13,9 +13,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
   DOSAGE_FORMS, MARKET_OPTIONS, PRODUCT_PRESET,
-  CONTAINER_CLOSURE_TYPES,
+  CONTAINER_CLOSURE_TYPES, PRODUCT_LIFECYCLE_STATUSES, PRODUCT_STATUSES,
 } from '@/lib/admin/constants';
-import { productFormSchema, type ProductFormData } from '@/lib/admin/schemas';
+import { productFormEditSchema, productFormSchema, type ProductFormData } from '@/lib/admin/schemas';
 import { CompositionTable } from './composition-table';
 import { PackingTable } from './packing-table';
 import { BrandNamesInput } from './brand-names-input';
@@ -29,8 +29,9 @@ interface ProductFormProps {
 }
 
 export function ProductForm({ initial, readOnly, onSubmit, onCancel, submitting }: ProductFormProps) {
+  const isEdit = Boolean(initial?.productCode);
   const form = useForm<ProductFormData>({
-    resolver: zodResolver(productFormSchema),
+    resolver: zodResolver(isEdit ? productFormEditSchema : productFormSchema),
     defaultValues: {
       productCode: '',
       productName: '',
@@ -71,28 +72,41 @@ export function ProductForm({ initial, readOnly, onSubmit, onCancel, submitting 
       productStatus: 'Active',
       description: '',
       remarks: '',
-      compositions: [{
-        ingredientName: 'Amikacin Sulphate IP', ingredientType: 'API', grade: 'IP',
-        quantity: 500, unit: 'mg', functionPurpose: 'API', specificationNo: '', stpNo: '',
-      }],
+      compositions: [],
       packingDetails: [],
       changeReason: '',
       ...initial,
     },
   });
 
+  const initialKey = initial?.productCode || '';
   useEffect(() => {
-    if (initial) form.reset({ ...form.getValues(), ...initial, changeReason: initial.changeReason || '' });
-  }, [initial, form]);
+    if (!initial) return;
+    form.reset({ ...form.getValues(), ...initial, changeReason: initial.changeReason || '' });
+    // Reset only when the loaded product identity changes — avoid wiping in-progress edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialKey]);
 
   const applyPreset = () => {
     form.setValue('productName', PRODUCT_PRESET.productName);
     form.setValue('genericName', PRODUCT_PRESET.genericName);
     form.setValue('strength', PRODUCT_PRESET.strength);
     form.setValue('dosageForm', PRODUCT_PRESET.dosageForm as ProductFormData['dosageForm']);
+    form.setValue('routeOfAdministration', PRODUCT_PRESET.routeOfAdministration);
     form.setValue('shelfLife', PRODUCT_PRESET.shelfLife);
     form.setValue('storageCondition', PRODUCT_PRESET.storageCondition);
     form.setValue('standardBatchSize', PRODUCT_PRESET.standardBatchSize);
+    form.setValue('productStatus', PRODUCT_PRESET.productStatus);
+    form.setValue('compositions', [{
+      ingredientName: 'Amikacin Sulphate IP',
+      ingredientType: 'API',
+      grade: 'IP',
+      quantity: 500,
+      unit: 'mg',
+      functionPurpose: 'API',
+      specificationNo: '',
+      stpNo: '',
+    }]);
   };
 
   const compositions = form.watch('compositions') || [];
@@ -105,8 +119,10 @@ export function ProductForm({ initial, readOnly, onSubmit, onCancel, submitting 
       )}
 
       <Card>
-        <CardHeader><CardTitle className="text-base">Product Identity</CardTitle></CardHeader>
-        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Product Identity</CardTitle>
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <div className="space-y-2">
             <Label>Product Code *</Label>
             <Input {...form.register('productCode')} disabled={readOnly || !!initial?.productCode} />
@@ -143,6 +159,24 @@ export function ProductForm({ initial, readOnly, onSubmit, onCancel, submitting 
               <SelectContent>{DOSAGE_FORMS.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}</SelectContent>
             </Select>
           </div>
+          <div className="space-y-2">
+            <Label>Route of Administration</Label>
+            <Input {...form.register('routeOfAdministration')} disabled={readOnly} />
+          </div>
+          <div className="space-y-2">
+            <Label>Lifecycle *</Label>
+            <Select value={form.watch('lifecycleStatus')} onValueChange={(v) => form.setValue('lifecycleStatus', v as ProductFormData['lifecycleStatus'])} disabled={readOnly}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{PRODUCT_LIFECYCLE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <Label>Product Status *</Label>
+            <Select value={form.watch('productStatus')} onValueChange={(v) => form.setValue('productStatus', v as ProductFormData['productStatus'])} disabled={readOnly}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{PRODUCT_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
           <div className="space-y-2"><Label>Pack Size</Label><Input {...form.register('packSize')} disabled={readOnly} /></div>
           <div className="space-y-2">
             <Label>Container Closure</Label>
@@ -172,8 +206,10 @@ export function ProductForm({ initial, readOnly, onSubmit, onCancel, submitting 
       </Card>
 
       <Card>
-        <CardHeader><CardTitle className="text-base">Regulatory & Document Numbers</CardTitle></CardHeader>
-        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Regulatory & Document Numbers</CardTitle>
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <div className="space-y-2"><Label>Mfg License No</Label><Input {...form.register('manufacturingLicenseNumber')} disabled={readOnly} /></div>
           <div className="space-y-2"><Label>MFR Number</Label><Input {...form.register('mfrNumber')} disabled={readOnly} /></div>
           <div className="space-y-2"><Label>BMR Number</Label><Input {...form.register('bmrNumber')} disabled={readOnly} /></div>
@@ -191,13 +227,25 @@ export function ProductForm({ initial, readOnly, onSubmit, onCancel, submitting 
             <Label>Remarks</Label>
             <Textarea {...form.register('remarks')} disabled={readOnly} rows={2} />
           </div>
+          <div className="mt-4 space-y-2">
+            <Label>Change reason{isEdit ? ' *' : ''}</Label>
+            <Textarea
+              {...form.register('changeReason')}
+              disabled={readOnly}
+              rows={2}
+              placeholder="Reason for this product master change"
+            />
+            {form.formState.errors.changeReason && (
+              <p className="text-xs text-red-500">{form.formState.errors.changeReason.message}</p>
+            )}
+          </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader><CardTitle className="text-base">Composition per batch</CardTitle></CardHeader>
         <CardContent>
-          <CompositionTable rows={compositions} onChange={(r) => form.setValue('compositions', r)} readOnly={readOnly} />
+          <CompositionTable rows={compositions} onChange={(r) => form.setValue('compositions', r, { shouldDirty: true, shouldValidate: true })} readOnly={readOnly} />
           {form.formState.errors.compositions && (
             <p className="text-xs text-red-500 mt-2">{String(form.formState.errors.compositions.message)}</p>
           )}
@@ -215,9 +263,9 @@ export function ProductForm({ initial, readOnly, onSubmit, onCancel, submitting 
       </Card>
 
       {!readOnly && (
-        <div className="flex justify-end gap-3">
+        <div className="sticky bottom-0 z-10 flex justify-end gap-3 border-t bg-background/95 py-3 backdrop-blur">
           <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-          <Button type="submit" disabled={submitting} className="bg-blue-600 hover:bg-blue-700">
+          <Button type="submit" disabled={submitting}>
             {submitting ? 'Saving...' : 'Save Product'}
           </Button>
         </div>

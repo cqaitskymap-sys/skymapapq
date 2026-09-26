@@ -289,7 +289,7 @@ export function RiskAssessmentDetailView({ id }: { id: string }) {
   const heatMap = buildRiskAssessmentHeatMap([record]);
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={record.riskNumber}
         description={`${record.productName} · ${record.riskCategory} · ${record.riskSource}`}

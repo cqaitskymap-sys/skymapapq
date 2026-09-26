@@ -263,7 +263,7 @@ export function CpvBatchListPage() {
   }
 
   return (
-    <div id="cpv-batch-registration-root" className="space-y-6 p-4 sm:p-6">
+    <div id="cpv-batch-registration-root" className="space-y-6">
       <CpvPageHeader
         title="CPV Batch Registration"
         description="Register and manage batches under Continued Process Verification"

@@ -6,7 +6,7 @@ import {
   collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import {
   ADMIN_COLLECTIONS, BACKUP_SCOPE_COLLECTIONS, BACKUP_EXPORT_COLLECTIONS, BACKUP_STATUSES,
 } from './constants';

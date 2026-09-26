@@ -1514,7 +1514,7 @@ function notify(
 
     eventName: input.eventName, recordId: input.recordId, module: MODULE,
 
-    href: `/cpv/control-charts/${input.recordId}`, read: false, createdAt: input.now,
+    href: `/cpv/statistical-process-control/${input.recordId}`, read: false, createdAt: input.now,
 
   });
 

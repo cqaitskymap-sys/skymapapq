@@ -16,6 +16,8 @@ const nextConfig = {
     remotePatterns: [
       { protocol: 'https', hostname: 'firebasestorage.googleapis.com' },
       { protocol: 'https', hostname: 'storage.googleapis.com' },
+      { protocol: 'https', hostname: 'apq-skymap.firebasestorage.app' },
+      { protocol: 'https', hostname: 'lh3.googleusercontent.com' },
     ],
   },
 };

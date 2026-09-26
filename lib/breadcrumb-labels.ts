@@ -114,6 +114,13 @@ export const BREADCRUMB_LABELS: Record<string, string> = {
   ebmr: 'eBMR',
   batches: 'Batch Registration',
   products: 'Product Master',
+  'product-master': 'Product Master',
+  'batch-registration': 'Batch Registration',
+  departments: 'Department Master',
+  designations: 'Designation Master',
+  'company-site': 'Company / Site Master',
+  'company-sites': 'Company / Site Master',
+  parameters: 'Parameter Master',
   cpp: 'Process Parameters (CPP)',
   cqa: 'Quality Attributes (CQA)',
   'raw-materials': 'Raw Materials',
@@ -131,7 +138,7 @@ export const BREADCRUMB_LABELS: Record<string, string> = {
   'hold-time-monitoring': 'Hold Time',
   'process-capability': 'Capability',
   'trend-analysis': 'Trends',
-  'control-charts': 'Control Charts',
+  'control-charts': 'Control Charts (SPC)',
   'statistical-process-control': 'Control Charts (SPC)',
   'risk-assessment': 'Risk',
   'impact-assessment': 'Impact Assessment',
@@ -169,6 +176,9 @@ export function formatBreadcrumbLabel(segment: string, pathname?: string): strin
   }
   if (pathname && segment === 'equipment' && isMasterDataPath(pathname)) {
     return 'Equipment Master';
+  }
+  if (pathname && segment === 'batches' && isMasterDataPath(pathname)) {
+    return 'Batch Master';
   }
   if (pathname && segment === 'master' && pathname.includes('/documents/')) {
     return 'Document Master';

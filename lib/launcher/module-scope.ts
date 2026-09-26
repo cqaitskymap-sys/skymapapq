@@ -1,12 +1,26 @@
 import { LAUNCHER_MODULES } from '@/lib/launcher/module-definitions';
 
-/** Product / equipment masters live under /admin but belong to the Master Data module, not Super Admin. */
+/** Masters that still live under /admin routes belong to the Master Data module, not Super Admin. */
+export const MASTER_DATA_HOME = '/admin/products';
+
 export const MASTER_DATA_PATH_PREFIXES = [
   '/dashboard/master',
   '/admin/products',
   '/admin/equipment',
+  '/admin/batches',
+  '/admin/parameters',
+  '/admin/departments',
+  '/admin/designations',
+  '/admin/company-site',
+  '/admin/master-data-import-export',
   '/dashboard/admin/products',
   '/dashboard/admin/equipment',
+  '/dashboard/admin/batches',
+  '/dashboard/admin/parameters',
+  '/dashboard/admin/departments',
+  '/dashboard/admin/designations',
+  '/dashboard/admin/company-sites',
+  '/dashboard/admin/master-data-import-export',
 ] as const;
 
 export function isMasterDataPath(pathname: string): boolean {

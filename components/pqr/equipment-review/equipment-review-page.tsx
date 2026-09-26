@@ -175,7 +175,13 @@ export function EquipmentReviewPage() {
     finally { setBusy(false); }
   }, []);
 
-  useEffect(() => { void loadPqrs(); void logEquipmentReviewView(actor); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void loadPqrs(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const viewLogged = useRef(false);
+  useEffect(() => {
+    if (viewLogged.current || actor.id === 'system') return;
+    viewLogged.current = true;
+    void logEquipmentReviewView(actor);
+  }, [actor]);
 
   useEffect(() => {
     const loadProductMaster = async () => {
@@ -392,10 +398,12 @@ export function EquipmentReviewPage() {
 
   return (
     <EquipmentReviewAccessGuard>
-      <div className="space-y-6 p-4 sm:p-6">
+      <div className="space-y-6">
         <CpvPageHeader
           title="Equipment Review"
-          description="Review qualification, calibration, maintenance and performance of equipment used during the PQR period"
+          description={isCpvContext
+            ? 'Review qualification, calibration, and performance of equipment used for CPV batches. Select the linked PQR that covers the verification period.'
+            : 'Review qualification, calibration, maintenance and performance of equipment used during the PQR period'}
           trail={isCpvContext
             ? [
                 { label: 'Continued Process Verification', href: '/cpv/dashboard' },
@@ -429,7 +437,28 @@ export function EquipmentReviewPage() {
           )}
         />
 
-        {!isCpvContext && (
+        {isCpvContext ? (
+          <div className="no-print flex flex-wrap gap-1.5">
+            {[
+              { href: '/cpv/product-master', label: 'Product' },
+              { href: '/cpv/batch-registration', label: 'Batch' },
+              { href: '/cpv/cpp', label: 'CPP' },
+              { href: '/cpv/cqa', label: 'CQA' },
+              { href: '/cpv/utility-monitoring', label: 'Utility' },
+              { href: '/cpv/environmental-monitoring', label: 'Environmental' },
+              { href: '/qms/equipment', label: 'Equipment Master' },
+              { href: '/admin/audit-trail', label: 'Audit Trail' },
+            ].map((link) => (
+              <Link
+                key={link.label}
+                href={link.href}
+                className="rounded-md border px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-900"
+              >
+                {link.label}
+              </Link>
+            ))}
+          </div>
+        ) : (
           <div className="flex flex-wrap gap-2 text-sm">
             {PQR_SECTION_FLOW.filter((s) => !['dashboard', 'create'].includes(s.key)).map((s) => (
               <Link
@@ -447,7 +476,7 @@ export function EquipmentReviewPage() {
           <CardContent className="pt-6">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="pqr-select-equipment">PQR Number *</Label>
+                <Label htmlFor="pqr-select-equipment">{isCpvContext ? 'Linked PQR *' : 'PQR Number *'}</Label>
                 <Select
                   value={selectedPqrId}
                   onValueChange={(id) => {
@@ -455,7 +484,7 @@ export function EquipmentReviewPage() {
                     syncPqrIdToUrl(id);
                   }}
                 >
-                  <SelectTrigger id="pqr-select-equipment"><SelectValue placeholder="Select PQR..." /></SelectTrigger>
+                  <SelectTrigger id="pqr-select-equipment"><SelectValue placeholder={isCpvContext ? 'Select linked PQR...' : 'Select PQR...'} /></SelectTrigger>
                   <SelectContent>
                     {pqrs.map((p) => <SelectItem key={p.id} value={p.id}>{p.pqrNumber} — {p.productName}</SelectItem>)}
                   </SelectContent>

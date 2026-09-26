@@ -6,7 +6,7 @@ import { LoginFormPanel } from '@/components/auth/login/login-form-panel';
 
 function LoginPageContent() {
   return (
-    <div className="flex min-h-dvh flex-col bg-white lg:flex-row">
+    <div className="flex min-h-dvh flex-col bg-white lg:flex-row" suppressHydrationWarning>
       <LoginMobileHeader />
       <LoginHeroPanel />
       <Suspense fallback={null}>

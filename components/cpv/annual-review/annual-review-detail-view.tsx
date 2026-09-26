@@ -78,7 +78,7 @@ export function AnnualReviewDetailView({ id }: { id: string }) {
   if (!record) return <div className="p-4 sm:p-6"><ErrorCard message="Review not found." onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={record.cpvReviewNumber}
         description={`${record.productName} · ${record.reviewPeriodFrom} to ${record.reviewPeriodTo}`}

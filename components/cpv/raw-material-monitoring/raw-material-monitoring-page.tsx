@@ -618,7 +618,7 @@ export function RawMaterialMonitoringPage() {
   if (error) return <div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title="Raw Material Monitoring"
         description="Monitor API and raw material quality, vendor compliance and batch-wise usage for CPV"

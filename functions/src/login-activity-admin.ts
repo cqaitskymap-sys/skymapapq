@@ -2,10 +2,11 @@
  * Login Activity — privileged Cloud Functions.
  * Immutable session/security event logging for 21 CFR Part 11 / ISO 27001.
  */
-import { HttpsError, onCall } from 'firebase-functions/v2/https';
+import { HttpsError, onCall, type CallableRequest } from 'firebase-functions/v2/https';
 import { type Firestore, type DocumentData,
 } from 'firebase-admin/firestore';
 import { getAdminFirestore } from './admin-app';
+import { BROWSER_CALLABLE } from './callable-options';
 
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
@@ -234,6 +235,13 @@ function clientContext(data: Record<string, unknown>) {
   };
 }
 
+function requestIp(request: CallableRequest): string {
+  const headers = request.rawRequest?.headers || {};
+  const forwarded = String(headers['x-forwarded-for'] || headers['x-real-ip'] || '').split(',')[0].trim();
+  const socketIp = String(request.rawRequest?.ip || request.rawRequest?.socket?.remoteAddress || '');
+  return (forwarded || socketIp).slice(0, 120);
+}
+
 async function countRecentFailed(firestore: Firestore, email: string): Promise<number> {
   const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
   const snap = await firestore.collection('login_activity')
@@ -261,13 +269,17 @@ async function hasSeenDevice(firestore: Firestore, userId: string, deviceFingerp
 /**
  * Record successful login + open session (authenticated).
  */
-export const recordAdminLoginSuccess = onCall({ cors: true }, async (request) => {
+export const recordAdminLoginSuccess = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   if (!actor || actor.is_active !== true) {
     throw new HttpsError('permission-denied', 'Active account required');
   }
   if (actor.account_locked === true) {
     throw new HttpsError('failed-precondition', 'Account is locked. Contact administrator.');
+  }
+  const blockedUntil = actor.login_blocked_until ? new Date(String(actor.login_blocked_until)).getTime() : 0;
+  if (blockedUntil && blockedUntil > Date.now()) {
+    throw new HttpsError('failed-precondition', 'Account is temporarily locked due to failed login attempts. Try again later.');
   }
 
   const data = (request.data || {}) as Record<string, unknown>;
@@ -362,6 +374,7 @@ export const recordAdminLoginSuccess = onCall({ cors: true }, async (request) =>
   batch.update(firestore.collection('profiles').doc(actorUid), {
     last_login: now,
     failed_login_count: 0,
+    login_blocked_until: null,
     updated_at: now,
   });
   await batch.commit();
@@ -390,27 +403,40 @@ export const recordAdminLoginSuccess = onCall({ cors: true }, async (request) =>
 /**
  * Record failed login (may be unauthenticated).
  */
-export const recordAdminLoginFailure = onCall({ cors: true }, async (request) => {
+export const recordAdminLoginFailure = onCall(BROWSER_CALLABLE, async (request) => {
     const firestore = getAdminFirestore();
   const data = (request.data || {}) as Record<string, unknown>;
   const email = requiredString(data.email, 'Email', 320).toLowerCase();
   const failureReason = optionalString(data.failureReason, 'failureReason', 500)
     || 'Invalid credentials';
   const ctx = clientContext(data);
+  const ipAddress = requestIp(request) || ctx.ipAddress || 'unknown';
   const now = new Date().toISOString();
   const loginId = buildLoginId();
-
-  // Basic rate limit: reject if > 30 failures for email in 10 minutes
   const recentWindow = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-  const rateSnap = await firestore.collection('login_activity')
+
+  const emailRateSnap = await firestore.collection('login_activity')
     .where('email', '==', email)
     .where('loginStatus', '==', 'Failed')
     .where('loginTime', '>=', recentWindow)
-    .limit(40)
+    .limit(12)
     .get()
     .catch(() => null);
-  if (rateSnap && rateSnap.size >= 30) {
+  if (emailRateSnap && emailRateSnap.size >= 10) {
     throw new HttpsError('resource-exhausted', 'Too many failed login attempts. Try again later.');
+  }
+
+  if (ipAddress && ipAddress !== 'unknown' && ipAddress !== 'client') {
+    const ipRateSnap = await firestore.collection('login_activity')
+      .where('ipAddress', '==', ipAddress)
+      .where('loginStatus', '==', 'Failed')
+      .where('loginTime', '>=', recentWindow)
+      .limit(22)
+      .get()
+      .catch(() => null);
+    if (ipRateSnap && ipRateSnap.size >= 20) {
+      throw new HttpsError('resource-exhausted', 'Too many failed login attempts. Try again later.');
+    }
   }
 
   const failedRecent = await countRecentFailed(firestore, email);
@@ -429,15 +455,16 @@ export const recordAdminLoginFailure = onCall({ cors: true }, async (request) =>
   const profileDoc = profiles?.docs[0];
   const profile = profileDoc?.data();
 
+  // Unauthenticated failures must never permanently lock an account (DoS).
+  // Apply a time-bounded cooldown from password policy instead.
   if (profile && (failedRecent + 1) >= policy.maxLoginAttempts) {
     loginStatus = 'Locked';
     eventType = 'Account Lock';
     locked = true;
+    const blockedUntil = new Date(Date.now() + policy.lockoutDurationMinutes * 60 * 1000).toISOString();
     if (profileDoc) {
       await profileDoc.ref.set({
-        account_locked: true,
-        locked_at: now,
-        lock_reason: 'Max failed login attempts exceeded',
+        login_blocked_until: blockedUntil,
         failed_login_count: failedRecent + 1,
         updated_at: now,
       }, { merge: true });
@@ -472,6 +499,7 @@ export const recordAdminLoginFailure = onCall({ cors: true }, async (request) =>
     company: String(profile?.company || ''),
     site: String(profile?.site || ''),
     ...ctx,
+    ipAddress,
     deviceFingerprint: optionalString(data.deviceFingerprint, 'deviceFingerprint', 200),
     loginTime: now,
     logoutTime: null,
@@ -504,8 +532,8 @@ export const recordAdminLoginFailure = onCall({ cors: true }, async (request) =>
       `Failed login for ${email}: ${failureReason}`, now, 'High');
   }
   if (locked && profileDoc) {
-    await notify(firestore, profileDoc.id, 'Account Locked', 'Account locked',
-      `Account locked after ${policy.maxLoginAttempts} failed attempts.`, now, 'Critical');
+    await notify(firestore, profileDoc.id, 'Account Locked', 'Temporary login cooldown',
+      `Login temporarily blocked for ${policy.lockoutDurationMinutes} minutes after ${policy.maxLoginAttempts} failed attempts.`, now, 'Critical');
   }
   if (failedRecent + 1 >= 3 && profileDoc) {
     await notify(firestore, profileDoc.id, 'Security Alert', 'Multiple failed logins',
@@ -524,7 +552,7 @@ export const recordAdminLoginFailure = onCall({ cors: true }, async (request) =>
 /**
  * Close session on logout.
  */
-export const recordAdminLogout = onCall({ cors: true }, async (request) => {
+export const recordAdminLogout = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorName, actorUid } = await resolveActor(request);
   const data = (request.data || {}) as Record<string, unknown>;
   const sessionDocId = optionalString(data.sessionDocId || data.sessionId, 'sessionDocId', 128);
@@ -577,7 +605,7 @@ export const recordAdminLogout = onCall({ cors: true }, async (request) => {
   return { success: true, closed: true, id: target.id, sessionDurationMinutes: duration };
 });
 
-export const terminateAdminSession = onCall({ cors: true }, async (request) => {
+export const terminateAdminSession = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertAdmin(actor, actorRole);
 
@@ -618,7 +646,7 @@ export const terminateAdminSession = onCall({ cors: true }, async (request) => {
   return { success: true };
 });
 
-export const terminateAllAdminSessionsForUser = onCall({ cors: true }, async (request) => {
+export const terminateAllAdminSessionsForUser = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertAdmin(actor, actorRole);
 
@@ -661,7 +689,7 @@ export const terminateAllAdminSessionsForUser = onCall({ cors: true }, async (re
   return { success: true, closed };
 });
 
-export const unlockAdminAccount = onCall({ cors: true }, async (request) => {
+export const unlockAdminAccount = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertAdmin(actor, actorRole);
 
@@ -671,11 +699,17 @@ export const unlockAdminAccount = onCall({ cors: true }, async (request) => {
   if (reason.length < 5) throw new HttpsError('invalid-argument', 'Change reason must be at least 5 characters');
 
   const now = new Date().toISOString();
-  await firestore.collection('profiles').doc(targetUserId).set({
+  const targetRef = firestore.collection('profiles').doc(targetUserId);
+  const targetSnap = await targetRef.get();
+  if (!targetSnap.exists) {
+    throw new HttpsError('not-found', 'User profile not found');
+  }
+  await targetRef.set({
     account_locked: false,
     locked_at: null,
     lock_reason: null,
     failed_login_count: 0,
+    login_blocked_until: null,
     updated_at: now,
   }, { merge: true });
 
@@ -711,13 +745,15 @@ export const unlockAdminAccount = onCall({ cors: true }, async (request) => {
   return { success: true };
 });
 
-export const recordAdminSecurityEvent = onCall({ cors: true }, async (request) => {
+export const recordAdminSecurityEvent = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorName, actorUid } = await resolveActor(request);
+  if (!actor || actor.is_active !== true) {
+    throw new HttpsError('permission-denied', 'Active account required');
+  }
   const data = (request.data || {}) as Record<string, unknown>;
   const eventType = requiredString(data.eventType, 'Event type', 80);
-  if (!(LOGIN_EVENT_TYPES as readonly string[]).includes(eventType)
-    && !['Password Reset', 'Password Change', 'Session Timeout', 'Session Expired', 'MFA Success', 'MFA Failure'].includes(eventType)) {
-    // allow known security events even if not in const (already covered)
+  if (!(LOGIN_EVENT_TYPES as readonly string[]).includes(eventType)) {
+    throw new HttpsError('invalid-argument', 'Unsupported security event type');
   }
   const ctx = clientContext(data);
   const now = new Date().toISOString();
@@ -756,7 +792,7 @@ export const recordAdminSecurityEvent = onCall({ cors: true }, async (request) =
   return { id: ref.id, eventType };
 });
 
-export const archiveAdminLoginActivity = onCall({ cors: true }, async (request) => {
+export const archiveAdminLoginActivity = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertAdmin(actor, actorRole);
 
@@ -794,7 +830,7 @@ export const archiveAdminLoginActivity = onCall({ cors: true }, async (request) 
   return { archived, beforeDate };
 });
 
-export const logAdminLoginActivityExport = onCall({ cors: true }, async (request) => {
+export const logAdminLoginActivityExport = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertViewer(actor, actorRole);
 

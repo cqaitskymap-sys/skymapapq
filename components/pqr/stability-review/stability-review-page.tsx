@@ -187,7 +187,13 @@ export function StabilityReviewPage() {
     finally { setBusy(false); }
   }, []);
 
-  useEffect(() => { void loadPqrs(); void logStabilityReviewView(actor); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void loadPqrs(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const viewLogged = useRef(false);
+  useEffect(() => {
+    if (viewLogged.current || actor.id === 'system') return;
+    viewLogged.current = true;
+    void logStabilityReviewView(actor);
+  }, [actor]);
 
   useEffect(() => {
     if (selectedPqrId) {
@@ -381,7 +387,7 @@ export function StabilityReviewPage() {
 
   return (
     <StabilityReviewAccessGuard>
-      <div className="space-y-6 p-4 sm:p-6">
+      <div className="space-y-6">
         <CpvPageHeader
           title="Stability Review"
           description="Review stability study results, OOT/OOS trends and shelf-life impact during PQR period"

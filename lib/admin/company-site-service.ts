@@ -2,7 +2,7 @@ import {
   collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import { uploadFile } from '@/lib/storage';
 import { getFirebaseApp, getFirebaseAuth, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import { ADMIN_COLLECTIONS, LOGO_ALLOWED_TYPES, LOGO_MAX_BYTES, SYSTEM_SITE_CODES } from './constants';

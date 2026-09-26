@@ -3,10 +3,11 @@
  * Append-only, integrity-hashed, dual-collection writes for 21 CFR Part 11 / ALCOA+.
  */
 import { createHash } from 'crypto';
-import { HttpsError, onCall } from 'firebase-functions/v2/https';
-import { type Firestore, type DocumentData,
+import { HttpsError, onCall, type CallableRequest } from 'firebase-functions/v2/https';
+import { type Firestore, type DocumentData, type DocumentReference,
 } from 'firebase-admin/firestore';
 import { getAdminFirestore } from './admin-app';
+import { BROWSER_CALLABLE } from './callable-options';
 
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
@@ -89,22 +90,61 @@ async function resolveActor(request: { auth?: { uid: string } | null; data?: unk
   return { firestore, actor, actorRole, actorName, actorUid: request.auth.uid };
 }
 
-async function getPreviousIntegrityHash(firestore: Firestore): Promise<string> {
-  const meta = await firestore.collection('system_settings').doc('audit_integrity_chain').get();
-  return String(meta.data()?.lastIntegrityHash || 'GENESIS');
+function auditChainRef(firestore: Firestore) {
+  return firestore.collection('system_settings').doc('audit_integrity_chain');
 }
 
-async function updateIntegrityChain(
+async function commitChainedAudit(
   firestore: Firestore,
-  hash: string,
-  auditId: string,
-  now: string,
+  input: {
+    hashParts: (previousHash: string) => string[];
+    buildEntry: (previousHash: string, integrityHash: string) => ReturnType<typeof buildCanonicalEntry>;
+    extraWrites?: Array<{ ref: DocumentReference; data: Record<string, unknown> }>;
+    writeLogs?: boolean;
+  },
 ) {
-  await firestore.collection('system_settings').doc('audit_integrity_chain').set({
-    lastIntegrityHash: hash,
-    lastAuditId: auditId,
-    updatedAt: now,
-  }, { merge: true });
+  const trailRef = firestore.collection('audit_trail').doc();
+  const logsRef = firestore.collection('audit_logs').doc();
+  const chainRef = auditChainRef(firestore);
+
+  const result = await firestore.runTransaction(async (tx) => {
+    const meta = await tx.get(chainRef);
+    const previousHash = String(meta.data()?.lastIntegrityHash || 'GENESIS');
+    const integrityHash = computeIntegrityHash(input.hashParts(previousHash));
+    const entry = input.buildEntry(previousHash, integrityHash);
+    tx.set(trailRef, entry);
+    if (input.writeLogs !== false) {
+      tx.set(logsRef, {
+        dateTime: entry.dateTime,
+        userId: entry.userId,
+        userName: entry.userName,
+        module: entry.moduleName,
+        recordId: entry.recordId,
+        action: entry.actionType,
+        oldValue: entry.oldValue,
+        newValue: entry.newValue,
+        reason: entry.reason,
+        ipAddress: entry.ipAddress,
+        device: entry.deviceInfo,
+        status: entry.status,
+        auditId: entry.auditId,
+        transactionId: entry.transactionId,
+        integrityHash: entry.integrityHash,
+        previousHash: entry.previousHash,
+      });
+    }
+    tx.set(chainRef, {
+      lastIntegrityHash: integrityHash,
+      lastAuditId: entry.auditId,
+      updatedAt: entry.dateTime,
+    }, { merge: true });
+    for (const extra of input.extraWrites || []) {
+      tx.set(extra.ref, extra.data);
+    }
+    return { previousHash, integrityHash, entry };
+  });
+
+  return { trailRef, ...result };
 }
 
 function buildCanonicalEntry(input: {
@@ -239,10 +279,7 @@ async function maybeSecurityAlert(
   });
 }
 
-/**
- * Trusted append-only audit writer used by all SkyMap modules.
- */
-export const appendAdminAuditTrail = onCall({ cors: true }, async (request) => {
+async function handleAppendAdminAuditTrail(request: CallableRequest) {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   if (!actor || actor.is_active !== true) {
     throw new HttpsError('permission-denied', 'Active user required to write audit events');
@@ -258,84 +295,60 @@ export const appendAdminAuditTrail = onCall({ cors: true }, async (request) => {
   const transactionId = optionalString(data.transactionId, 'transactionId', 80) || buildTransactionId();
   const oldValue = serializeValue(data.oldValue);
   const newValue = serializeValue(data.newValue);
-  const previousHash = await getPreviousIntegrityHash(firestore);
-  const integrityHash = computeIntegrityHash([
-    previousHash, auditId, now, moduleName, actionType, recordId, actorUid, oldValue, newValue,
-  ]);
-
-  const entry = buildCanonicalEntry({
-    auditId,
-    transactionId,
-    now,
-    timezone: optionalString(data.timezone, 'timezone', 64) || 'UTC',
-    moduleName,
-    subModule: optionalString(data.subModule, 'subModule', 120),
-    screen: optionalString(data.screen, 'screen', 120),
-    collectionName,
-    recordId,
-    documentNumber: optionalString(data.documentNumber, 'documentNumber', 120),
-    actionType,
-    actionDescription: optionalString(data.actionDescription, 'actionDescription', 1000)
-      || `${actionType} on ${moduleName}`,
-    fieldName: optionalString(data.fieldName, 'fieldName', 120),
-    oldValue,
-    newValue,
-    changedFields: optionalString(data.changedFields, 'changedFields', 2000),
-    actorUid,
-    actorName: optionalString(data.userName, 'userName', 200) || actorName,
-    actorRole: optionalString(data.role || data.changedByRole, 'role', 80) || actorRole,
-    employeeId: optionalString(data.employeeId, 'employeeId', 80)
-      || String(actor?.employee_id || actor?.employeeId || ''),
-    username: optionalString(data.username, 'username', 120)
-      || String(actor?.email || actorName),
-    department: optionalString(data.department, 'department', 120)
-      || String(actor?.department || ''),
-    site: optionalString(data.site, 'site', 120),
-    businessUnit: optionalString(data.businessUnit, 'businessUnit', 120),
-    company: optionalString(data.company, 'company', 120),
-    reason: optionalString(data.reason || data.reasonForChange, 'reason', 2000),
-    remarks: optionalString(data.remarks, 'remarks', 2000),
-    ipAddress: optionalString(data.ipAddress, 'ipAddress', 120) || 'client',
-    deviceInfo: optionalString(data.deviceInfo || data.device, 'deviceInfo', 1000) || 'browser',
-    browserInfo: optionalString(data.browserInfo, 'browserInfo', 1000),
-    operatingSystem: optionalString(data.operatingSystem, 'operatingSystem', 120),
-    sessionId: optionalString(data.sessionId, 'sessionId', 128),
-    requestId: optionalString(data.requestId, 'requestId', 128),
-    workflowId: optionalString(data.workflowId, 'workflowId', 128),
-    approvalLevel: optionalString(data.approvalLevel, 'approvalLevel', 40),
-    eSignatureRequired: Boolean(data.eSignatureRequired),
-    eSignatureStatus: optionalString(data.eSignatureStatus, 'eSignatureStatus', 80),
-    eSignatureId: optionalString(data.eSignatureId, 'eSignatureId', 128),
-    status: optionalString(data.status, 'status', 40) || 'Success',
-    previousHash,
-    integrityHash,
+  const notificationRef = firestore.collection('notifications').doc();
+  const chained = await commitChainedAudit(firestore, {
+    hashParts: (previousHash) => [
+      previousHash, auditId, now, moduleName, actionType, recordId, actorUid, oldValue, newValue,
+    ],
+    buildEntry: (previousHash, integrityHash) => buildCanonicalEntry({
+      auditId,
+      transactionId,
+      now,
+      timezone: optionalString(data.timezone, 'timezone', 64) || 'UTC',
+      moduleName,
+      subModule: optionalString(data.subModule, 'subModule', 120),
+      screen: optionalString(data.screen, 'screen', 120),
+      collectionName,
+      recordId,
+      documentNumber: optionalString(data.documentNumber, 'documentNumber', 120),
+      actionType,
+      actionDescription: optionalString(data.actionDescription, 'actionDescription', 1000)
+        || `${actionType} on ${moduleName}`,
+      fieldName: optionalString(data.fieldName, 'fieldName', 120),
+      oldValue,
+      newValue,
+      changedFields: optionalString(data.changedFields, 'changedFields', 2000),
+      actorUid,
+      actorName,
+      actorRole,
+      employeeId: String(actor?.employee_id || actor?.employeeId || ''),
+      username: String(actor?.email || actorName),
+      department: String(actor?.department || ''),
+      site: optionalString(data.site, 'site', 120),
+      businessUnit: optionalString(data.businessUnit, 'businessUnit', 120),
+      company: optionalString(data.company, 'company', 120),
+      reason: optionalString(data.reason || data.reasonForChange, 'reason', 2000),
+      remarks: optionalString(data.remarks, 'remarks', 2000),
+      ipAddress: optionalString(data.ipAddress, 'ipAddress', 120) || 'client',
+      deviceInfo: optionalString(data.deviceInfo || data.device, 'deviceInfo', 1000) || 'browser',
+      browserInfo: optionalString(data.browserInfo, 'browserInfo', 1000),
+      operatingSystem: optionalString(data.operatingSystem, 'operatingSystem', 120),
+      sessionId: optionalString(data.sessionId, 'sessionId', 128),
+      requestId: optionalString(data.requestId, 'requestId', 128),
+      workflowId: optionalString(data.workflowId, 'workflowId', 128),
+      approvalLevel: optionalString(data.approvalLevel, 'approvalLevel', 40),
+      eSignatureRequired: Boolean(data.eSignatureRequired),
+      eSignatureStatus: optionalString(data.eSignatureStatus, 'eSignatureStatus', 80),
+      eSignatureId: optionalString(data.eSignatureId, 'eSignatureId', 128),
+      status: optionalString(data.status, 'status', 40) || 'Success',
+      previousHash,
+      integrityHash,
+    }),
   });
 
-  const trailRef = firestore.collection('audit_trail').doc();
-  const logsRef = firestore.collection('audit_logs').doc();
-  const batch = firestore.batch();
-  batch.set(trailRef, entry);
-  batch.set(logsRef, {
-    dateTime: entry.dateTime,
-    userId: entry.userId,
-    userName: entry.userName,
-    module: entry.moduleName,
-    recordId: entry.recordId,
-    action: entry.actionType,
-    oldValue: entry.oldValue,
-    newValue: entry.newValue,
-    reason: entry.reason,
-    ipAddress: entry.ipAddress,
-    device: entry.deviceInfo,
-    status: entry.status,
-    auditId: entry.auditId,
-    transactionId: entry.transactionId,
-    integrityHash: entry.integrityHash,
-    previousHash: entry.previousHash,
-  });
-
+  const { entry, trailRef, integrityHash, previousHash } = chained;
   if (CRITICAL_ACTIONS.has(actionType) || entry.status === 'Failed') {
-    batch.set(firestore.collection('notifications').doc(), {
+    await firestore.collection('notifications').doc(notificationRef.id).set({
       userId: actorUid,
       type: entry.status === 'Failed' ? 'Audit Failure' : 'Security Alert',
       title: `${actionType} recorded`,
@@ -347,14 +360,24 @@ export const appendAdminAuditTrail = onCall({ cors: true }, async (request) => {
     });
   }
 
-  await batch.commit();
-  await updateIntegrityChain(firestore, integrityHash, auditId, now);
   await maybeSecurityAlert(firestore, actorUid, actionType, now).catch(() => undefined);
 
   return { id: trailRef.id, auditId, transactionId, integrityHash, previousHash };
-});
+}
 
-export const logAdminAuditTrailExport = onCall({ cors: true }, async (request) => {
+/**
+ * Trusted append-only audit writer used by all SkyMap modules.
+ */
+export const appendAdminAuditTrail = onCall(BROWSER_CALLABLE, handleAppendAdminAuditTrail);
+
+/**
+ * New callable name so first-time deploy can grant public Cloud Run invoke.
+ * Updating an existing Gen 2 callable often leaves invoker private, which makes
+ * browser CORS preflight fail with no Access-Control-Allow-Origin header.
+ */
+export const recordAdminAuditTrail = onCall(BROWSER_CALLABLE, handleAppendAdminAuditTrail);
+
+export const logAdminAuditTrailExport = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertViewer(actor, actorRole);
 
@@ -363,78 +386,76 @@ export const logAdminAuditTrailExport = onCall({ cors: true }, async (request) =
   const count = Number(data.count || 0);
   const reason = optionalString(data.reason, 'reason', 500) || `Audit trail exported as ${format}`;
 
-  // Inline append to avoid nested callable
   const now = new Date().toISOString();
   const auditId = buildAuditId();
-  const previousHash = await getPreviousIntegrityHash(firestore);
-  const integrityHash = computeIntegrityHash([
-    previousHash, auditId, now, 'Admin', 'Export', 'export', actorUid, '', JSON.stringify({ format, count }),
-  ]);
-  const entry = buildCanonicalEntry({
-    auditId,
-    transactionId: buildTransactionId(),
-    now,
-    timezone: 'UTC',
-    moduleName: 'Admin',
-    subModule: 'Audit Trail',
-    screen: 'Audit Trail Export',
-    collectionName: 'audit_trail',
-    recordId: 'export',
-    documentNumber: '',
-    actionType: 'Export',
-    actionDescription: reason,
-    fieldName: '',
-    oldValue: '',
-    newValue: serializeValue({ format, count }),
-    changedFields: '',
-    actorUid,
-    actorName,
-    actorRole,
-    employeeId: String(actor?.employee_id || ''),
-    username: String(actor?.email || actorName),
-    department: String(actor?.department || ''),
-    site: '',
-    businessUnit: '',
-    company: '',
-    reason,
-    remarks: '',
-    ipAddress: 'client',
-    deviceInfo: 'browser',
-    browserInfo: '',
-    operatingSystem: '',
-    sessionId: '',
-    requestId: '',
-    workflowId: '',
-    approvalLevel: '',
-    eSignatureRequired: false,
-    eSignatureStatus: '',
-    eSignatureId: '',
-    status: 'Success',
-    previousHash,
-    integrityHash,
+  const exportRef = firestore.collection('audit_exports').doc();
+  await commitChainedAudit(firestore, {
+    hashParts: (previousHash) => [
+      previousHash, auditId, now, 'Admin', 'Export', 'export', actorUid, '', JSON.stringify({ format, count }),
+    ],
+    buildEntry: (previousHash, integrityHash) => buildCanonicalEntry({
+      auditId,
+      transactionId: buildTransactionId(),
+      now,
+      timezone: 'UTC',
+      moduleName: 'Admin',
+      subModule: 'Audit Trail',
+      screen: 'Audit Trail Export',
+      collectionName: 'audit_trail',
+      recordId: 'export',
+      documentNumber: '',
+      actionType: 'Export',
+      actionDescription: reason,
+      fieldName: '',
+      oldValue: '',
+      newValue: serializeValue({ format, count }),
+      changedFields: '',
+      actorUid,
+      actorName,
+      actorRole,
+      employeeId: String(actor?.employee_id || ''),
+      username: String(actor?.email || actorName),
+      department: String(actor?.department || ''),
+      site: '',
+      businessUnit: '',
+      company: '',
+      reason,
+      remarks: '',
+      ipAddress: 'client',
+      deviceInfo: 'browser',
+      browserInfo: '',
+      operatingSystem: '',
+      sessionId: '',
+      requestId: '',
+      workflowId: '',
+      approvalLevel: '',
+      eSignatureRequired: false,
+      eSignatureStatus: '',
+      eSignatureId: '',
+      status: 'Success',
+      previousHash,
+      integrityHash,
+    }),
+    extraWrites: [{
+      ref: exportRef,
+      data: {
+        exportedAt: now,
+        exportedBy: actorUid,
+        exportedByName: actorName,
+        format,
+        count,
+        reason,
+        auditId,
+      },
+    }],
   });
-
-  const batch = firestore.batch();
-  const trailRef = firestore.collection('audit_trail').doc();
-  batch.set(trailRef, entry);
-  batch.set(firestore.collection('audit_exports').doc(), {
-    exportedAt: now,
-    exportedBy: actorUid,
-    exportedByName: actorName,
-    format,
-    count,
-    reason,
-    auditId,
-  });
-  await batch.commit();
-  await updateIntegrityChain(firestore, integrityHash, auditId, now);
   return { success: true, auditId };
 });
 
 /**
  * Copy aged records into audit_trail_archive (originals remain immutable).
  */
-export const archiveAdminAuditTrail = onCall({ cors: true }, async (request) => {
+export const archiveAdminAuditTrail = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertArchiver(actor, actorRole);
 
@@ -465,61 +486,60 @@ export const archiveAdminAuditTrail = onCall({ cors: true }, async (request) => 
     archived += 1;
   }
 
-  // Log the archive operation itself
   const auditId = buildAuditId();
-  const previousHash = await getPreviousIntegrityHash(firestore);
-  const integrityHash = computeIntegrityHash([
-    previousHash, auditId, now, 'Admin', 'Archive', 'archive', actorUid, '', String(archived),
-  ]);
-  await firestore.collection('audit_trail').doc().set(buildCanonicalEntry({
-    auditId,
-    transactionId: buildTransactionId(),
-    now,
-    timezone: 'UTC',
-    moduleName: 'Admin',
-    subModule: 'Audit Trail',
-    screen: 'Audit Archive',
-    collectionName: 'audit_trail_archive',
-    recordId: 'archive',
-    documentNumber: '',
-    actionType: 'Archive',
-    actionDescription: `Archived ${archived} audit records before ${beforeDate}`,
-    fieldName: '',
-    oldValue: '',
-    newValue: serializeValue({ archived, beforeDate }),
-    changedFields: '',
-    actorUid,
-    actorName,
-    actorRole,
-    employeeId: '',
-    username: actorName,
-    department: String(actor?.department || ''),
-    site: '',
-    businessUnit: '',
-    company: '',
-    reason,
-    remarks: '',
-    ipAddress: 'server',
-    deviceInfo: 'cloud-function',
-    browserInfo: '',
-    operatingSystem: '',
-    sessionId: '',
-    requestId: '',
-    workflowId: '',
-    approvalLevel: '',
-    eSignatureRequired: false,
-    eSignatureStatus: '',
-    eSignatureId: '',
-    status: 'Success',
-    previousHash,
-    integrityHash,
-  }));
-  await updateIntegrityChain(firestore, integrityHash, auditId, now);
+  await commitChainedAudit(firestore, {
+    hashParts: (previousHash) => [
+      previousHash, auditId, now, 'Admin', 'Archive', 'archive', actorUid, '', String(archived),
+    ],
+    buildEntry: (previousHash, integrityHash) => buildCanonicalEntry({
+      auditId,
+      transactionId: buildTransactionId(),
+      now,
+      timezone: 'UTC',
+      moduleName: 'Admin',
+      subModule: 'Audit Trail',
+      screen: 'Audit Archive',
+      collectionName: 'audit_trail_archive',
+      recordId: 'archive',
+      documentNumber: '',
+      actionType: 'Archive',
+      actionDescription: `Archived ${archived} audit records before ${beforeDate}`,
+      fieldName: '',
+      oldValue: '',
+      newValue: serializeValue({ archived, beforeDate }),
+      changedFields: '',
+      actorUid,
+      actorName,
+      actorRole,
+      employeeId: '',
+      username: actorName,
+      department: String(actor?.department || ''),
+      site: '',
+      businessUnit: '',
+      company: '',
+      reason,
+      remarks: '',
+      ipAddress: 'server',
+      deviceInfo: 'cloud-function',
+      browserInfo: '',
+      operatingSystem: '',
+      sessionId: '',
+      requestId: '',
+      workflowId: '',
+      approvalLevel: '',
+      eSignatureRequired: false,
+      eSignatureStatus: '',
+      eSignatureId: '',
+      status: 'Success',
+      previousHash,
+      integrityHash,
+    }),
+  });
 
   return { archived, beforeDate };
 });
 
-export const verifyAdminAuditIntegrity = onCall({ cors: true }, async (request) => {
+export const verifyAdminAuditIntegrity = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole } = await resolveActor(request);
   assertViewer(actor, actorRole);
 
@@ -561,7 +581,7 @@ export const verifyAdminAuditIntegrity = onCall({ cors: true }, async (request) 
   return { checked: snap.size, verified, mismatches, issues: issues.slice(0, 20) };
 });
 
-export const getAdminAuditIntegrityStatus = onCall({ cors: true }, async (request) => {
+export const getAdminAuditIntegrityStatus = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole } = await resolveActor(request);
   assertViewer(actor, actorRole);
   const meta = await firestore.collection('system_settings').doc('audit_integrity_chain').get();

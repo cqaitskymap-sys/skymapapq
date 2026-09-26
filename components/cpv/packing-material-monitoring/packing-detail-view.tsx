@@ -177,7 +177,7 @@ export function PackingDetailView({ id }: { id: string }) {
   const oot = Boolean(raw.ootRequired || raw.linkedOotNumber);
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={record.materialName}
         description={`${record.batchNumber} · ${record.productName}`}

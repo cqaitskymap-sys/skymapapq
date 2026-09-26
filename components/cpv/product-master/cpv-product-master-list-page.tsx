@@ -280,7 +280,7 @@ export function CpvProductMasterListPage() {
   }
 
   return (
-    <div id="cpv-product-master-root" className="space-y-6 p-4 sm:p-6">
+    <div id="cpv-product-master-root" className="space-y-6">
       <CpvPageHeader
         title="CPV Product Master"
         description="Manage products under Continued Process Verification"

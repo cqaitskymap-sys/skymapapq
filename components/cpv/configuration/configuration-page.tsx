@@ -589,7 +589,7 @@ export function ConfigurationPage() {
   if (error || !bundle) return <div className="p-4 sm:p-6"><ErrorCard message={error || 'Configuration unavailable'} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title="CPV Configuration"
         description="Configure CPV rules, limits, workflows, reports and automation logic"

@@ -531,7 +531,7 @@ export function CqaMonitoringPage() {
   if (error) return <div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title="CQA Monitoring"
         description="Monitor Critical Quality Attributes batch-wise for Continued Process Verification"

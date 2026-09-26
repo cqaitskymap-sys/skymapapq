@@ -6,7 +6,7 @@ import {
   collection, doc, getDoc, getDocs, onSnapshot, orderBy, query, where, limit,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import { getFirebaseApp, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import { ADMIN_COLLECTIONS } from '@/lib/admin/constants';
 import type { DocumentNumbering, DocumentNumberingFormData } from '@/lib/admin/schemas';

@@ -99,7 +99,7 @@ export function EnvironmentalDetailView({ id }: { id: string }) {
   if (error || !record) return <div className="p-4 sm:p-6"><ErrorCard message={error || 'Not found'} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={record.parameterName}
         description={`${record.batchNumber} · ${record.areaName}`}

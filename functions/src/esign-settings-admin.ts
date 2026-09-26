@@ -7,6 +7,7 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { type Firestore, type DocumentData,
 } from 'firebase-admin/firestore';
 import { getAdminFirestore } from './admin-app';
+import { BROWSER_CALLABLE } from './callable-options';
 
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
@@ -338,7 +339,7 @@ const DEFAULT_SETTINGS = [
   },
 ];
 
-export const createAdminEsignSetting = onCall({ cors: true }, async (request) => {
+export const createAdminEsignSetting = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertEditor(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -375,7 +376,7 @@ export const createAdminEsignSetting = onCall({ cors: true }, async (request) =>
   return { success: true, id: ref.id, esignSettingId: payload.esignSettingId };
 });
 
-export const updateAdminEsignSetting = onCall({ cors: true }, async (request) => {
+export const updateAdminEsignSetting = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertEditor(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -420,7 +421,7 @@ export const updateAdminEsignSetting = onCall({ cors: true }, async (request) =>
   return { success: true, id };
 });
 
-export const setAdminEsignSettingStatus = onCall({ cors: true }, async (request) => {
+export const setAdminEsignSettingStatus = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertEditor(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -447,7 +448,7 @@ export const setAdminEsignSettingStatus = onCall({ cors: true }, async (request)
   return { success: true, id, status };
 });
 
-export const softDeleteAdminEsignSetting = onCall({ cors: true }, async (request) => {
+export const softDeleteAdminEsignSetting = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertEditor(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -472,7 +473,7 @@ export const softDeleteAdminEsignSetting = onCall({ cors: true }, async (request
   return { success: true, id };
 });
 
-export const seedAdminEsignSettings = onCall({ cors: true }, async (request) => {
+export const seedAdminEsignSettings = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertEditor(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -530,7 +531,7 @@ export const seedAdminEsignSettings = onCall({ cors: true }, async (request) => 
   return { success: true, created, skipped };
 });
 
-export const resolveAdminEsignSetting = onCall({ cors: true }, async (request) => {
+export const resolveAdminEsignSetting = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole } = await resolveActor(request);
   assertViewer(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;
@@ -548,7 +549,7 @@ export const resolveAdminEsignSetting = onCall({ cors: true }, async (request) =
   return { success: true, setting: { id: match.id, ...match.data() } };
 });
 
-export const recordAdminEsignAttestation = onCall({ cors: true }, async (request) => {
+export const recordAdminEsignAttestation = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   if (!actor || actor.is_active !== true) {
     throw new HttpsError('permission-denied', 'Active account required');
@@ -567,15 +568,11 @@ export const recordAdminEsignAttestation = onCall({ cors: true }, async (request
   const operatingSystem = optionalString(data.operatingSystem, 'OS', 120);
   const authMethod = optionalString(data.authenticationMethod, 'Auth method', 80) || 'Password Confirmation';
   const mfaStatus = optionalString(data.mfaStatus, 'MFA status', 40) || 'Not Applicable';
-  const clientReauthAt = optionalString(data.clientReauthAt, 'Reauth timestamp', 40);
 
-  // Require recent auth_time for non-test signatures (Part 11 re-authentication)
+  // Part 11: freshness comes only from Firebase Auth token auth_time, never a client timestamp.
   if (!isTest && authStatus === 'Success') {
     const authTime = Number(request.auth?.token?.auth_time || 0) * 1000;
-    const reauthMs = clientReauthAt ? Date.parse(clientReauthAt) : 0;
-    const recent = (authTime && Date.now() - authTime < 10 * 60_000)
-      || (reauthMs && Date.now() - reauthMs < 10 * 60_000);
-    if (!recent) {
+    if (!authTime || Date.now() - authTime > 10 * 60_000) {
       throw new HttpsError('failed-precondition', 'Recent re-authentication is required before signing');
     }
   }
@@ -727,7 +724,7 @@ export const recordAdminEsignAttestation = onCall({ cors: true }, async (request
   return { success: true, id: ref.id, esignRecordId, digitalHash, record };
 });
 
-export const logAdminEsignSettingsExport = onCall({ cors: true }, async (request) => {
+export const logAdminEsignSettingsExport = onCall(BROWSER_CALLABLE, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertViewer(actor, actorRole);
   const data = (request.data || {}) as Record<string, unknown>;

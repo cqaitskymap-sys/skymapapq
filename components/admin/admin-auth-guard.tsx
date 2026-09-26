@@ -27,6 +27,14 @@ export function AdminAuthGuard({
   const pathname = usePathname();
   const canAccessRoute = canAccessAdminRoute(perms.role, pathname);
 
+  const BLOCKED_STATUSES = ['pending', 'disabled', 'locked', 'retired', 'rejected'];
+  const isBlockedAccount = Boolean(
+    profile && (
+      !profile.is_active
+      || BLOCKED_STATUSES.includes(profile.access_status || '')
+    ),
+  );
+
   useEffect(() => {
     if (authLoading || perms.loading) return;
     if (!user) {
@@ -34,7 +42,7 @@ export function AdminAuthGuard({
       router.replace('/auth/login?redirect=/admin');
       return;
     }
-    if (profile && (!profile.is_active || profile.access_status === 'pending')) {
+    if (isBlockedAccount) {
       return;
     }
     if (!perms.canAccessAdmin) {
@@ -71,6 +79,7 @@ export function AdminAuthGuard({
     requireSuperAdmin,
     requireManageUsers,
     requireManageMaster,
+    isBlockedAccount,
   ]);
 
   if (authLoading || perms.loading) {
@@ -92,13 +101,13 @@ export function AdminAuthGuard({
     );
   }
 
-  if (!profile || !profile.is_active || profile.access_status === 'pending') {
+  if (!profile || isBlockedAccount) {
     return (
       <div className="mx-auto mt-12 max-w-lg space-y-4 p-6 text-center">
         <p className="text-sm text-muted-foreground">
           {!profile
             ? 'Your profile could not be loaded. Sign out and try again.'
-            : 'Your account is pending approval or inactive.'}
+            : 'Your account is pending approval, locked, or inactive.'}
         </p>
         <button
           type="button"

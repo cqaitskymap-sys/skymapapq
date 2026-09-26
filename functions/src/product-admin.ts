@@ -4,6 +4,7 @@
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
 import { getAdminFirestore } from './admin-app';
+import { BROWSER_CALLABLE } from './callable-options';
 
 function requiredString(value: unknown, field: string, maxLength = 200): string {
   if (typeof value !== 'string' || !value.trim()) {
@@ -76,7 +77,7 @@ const INGREDIENT_TYPES = [
 ] as const;
 
 const PACKING_MATERIAL_TYPES = [
-  'Primary Packing',
+  'Primary Packing', 'Secondary Packing', 'Tertiary Packing',
 ] as const;
 
 const PRODUCT_ATTACHMENT_TYPES = ['specification', 'stp', 'other'] as const;
@@ -222,9 +223,10 @@ function parsePackingDetails(value: unknown): ParsedPacking[] {
     const r = row as Record<string, unknown>;
     const packingMaterial = requiredString(r.packingMaterial, `packingDetails[${index}].packingMaterial`, 200);
     const materialTypeRaw = String(r.materialType || 'Primary Packing');
-    const materialType = PACKING_MATERIAL_TYPES.includes(materialTypeRaw as typeof PACKING_MATERIAL_TYPES[number])
-      ? materialTypeRaw
-      : 'Primary Packing';
+    if (!PACKING_MATERIAL_TYPES.includes(materialTypeRaw as typeof PACKING_MATERIAL_TYPES[number])) {
+      throw new HttpsError('invalid-argument', `Invalid packing material type at index ${index}`);
+    }
+    const materialType = materialTypeRaw;
     const quantity = r.quantity == null ? 0 : Number(r.quantity);
     if (!Number.isFinite(quantity) || quantity < 0) {
       throw new HttpsError('invalid-argument', `Packing quantity must be numeric at index ${index}`);
@@ -274,7 +276,7 @@ function parseProductPayload(input: Record<string, unknown>, existing?: Document
     ? parsePackingDetails(input.packingDetails)
     : parsePackingDetails(existing?.packingDetails ?? []);
 
-  if (compositions.length > 0 && !compositions.some((c) => c.ingredientType === 'API')) {
+  if (!compositions.some((c) => c.ingredientType === 'API')) {
     throw new HttpsError('invalid-argument', 'At least one API ingredient is required');
   }
 
@@ -342,7 +344,7 @@ function parseProductPayload(input: Record<string, unknown>, existing?: Document
     barcode: optionalString(input.barcode ?? existing?.barcode, 'barcode', 80),
     qrCode: optionalString(input.qrCode ?? existing?.qrCode, 'qrCode', 200),
     productStatus,
-    status: productStatus === 'Active' ? 'Active' : 'Inactive',
+    status: recordStatusFromProductStatus(productStatus),
     description: optionalString(input.description ?? existing?.description, 'description', 2000),
     remarks: optionalString(input.remarks ?? existing?.remarks, 'remarks', 2000),
     composition: compositions.map((c) => c.ingredientName).join(', '),
@@ -369,6 +371,23 @@ async function assertUniqueProduct(
   }
 }
 
+const FIRESTORE_BATCH_LIMIT = 400;
+
+async function commitInChunks(
+  firestore: Firestore,
+  ops: Array<(batch: WriteBatch) => void>,
+) {
+  for (let i = 0; i < ops.length; i += FIRESTORE_BATCH_LIMIT) {
+    const batch = firestore.batch();
+    ops.slice(i, i + FIRESTORE_BATCH_LIMIT).forEach((op) => op(batch));
+    await batch.commit();
+  }
+}
+
+function recordStatusFromProductStatus(productStatus: string): string {
+  return productStatus === 'Active' || productStatus === 'Under Development' ? 'Active' : 'Inactive';
+}
+
 async function countLinkedProductReferences(firestore: Firestore, productCode: string) {
   const batches = await firestore.collection('batches')
     .where('productCode', '==', productCode)
@@ -379,7 +398,6 @@ async function countLinkedProductReferences(firestore: Firestore, productCode: s
 
 async function cascadeProductRename(
   firestore: Firestore,
-  batch: WriteBatch,
   productCode: string,
   productName: string,
   genericName: string,
@@ -390,23 +408,24 @@ async function cascadeProductRename(
     .where('productCode', '==', productCode)
     .limit(500)
     .get();
-  let cascadeCount = 0;
+  const ops: Array<(batch: WriteBatch) => void> = [];
   batches.docs.forEach((doc) => {
     if (doc.data().isDeleted === true) return;
-    batch.update(doc.ref, {
-      productName,
-      genericName,
-      updatedAt: now,
-      updatedBy: actorUid,
+    ops.push((batch) => {
+      batch.update(doc.ref, {
+        productName,
+        genericName,
+        updatedAt: now,
+        updatedBy: actorUid,
+      });
     });
-    cascadeCount += 1;
   });
-  return cascadeCount;
+  await commitInChunks(firestore, ops);
+  return ops.length;
 }
 
 async function syncProductCompositions(
   firestore: Firestore,
-  batch: WriteBatch,
   productDocId: string,
   rows: ParsedComposition[],
   actorUid: string,
@@ -418,6 +437,7 @@ async function syncProductCompositions(
     .get();
   const existingIds = new Set(existingSnap.docs.map((doc) => doc.id));
   const newIds = new Set(rows.map((r) => r.id).filter(Boolean));
+  const ops: Array<(batch: WriteBatch) => void> = [];
 
   for (const row of rows) {
     const payload = {
@@ -435,26 +455,32 @@ async function syncProductCompositions(
       updatedBy: actorUid,
     };
     if (row.id && existingIds.has(row.id)) {
-      batch.update(firestore.collection('product_compositions').doc(row.id), payload);
+      ops.push((batch) => {
+        batch.update(firestore.collection('product_compositions').doc(row.id as string), payload);
+      });
     } else {
-      batch.set(firestore.collection('product_compositions').doc(), {
-        ...payload,
-        createdAt: now,
-        createdBy: actorUid,
+      ops.push((batch) => {
+        batch.set(firestore.collection('product_compositions').doc(), {
+          ...payload,
+          createdAt: now,
+          createdBy: actorUid,
+        });
       });
     }
   }
 
   for (const doc of existingSnap.docs) {
     if (!newIds.has(doc.id) && doc.data().isDeleted !== true) {
-      batch.update(doc.ref, { isDeleted: true, updatedAt: now, updatedBy: actorUid });
+      ops.push((batch) => {
+        batch.update(doc.ref, { isDeleted: true, updatedAt: now, updatedBy: actorUid });
+      });
     }
   }
+  await commitInChunks(firestore, ops);
 }
 
 async function syncProductPacking(
   firestore: Firestore,
-  batch: WriteBatch,
   productDocId: string,
   rows: ParsedPacking[],
   actorUid: string,
@@ -466,6 +492,7 @@ async function syncProductPacking(
     .get();
   const existingIds = new Set(existingSnap.docs.map((doc) => doc.id));
   const newIds = new Set(rows.map((r) => r.id).filter(Boolean));
+  const ops: Array<(batch: WriteBatch) => void> = [];
 
   for (const row of rows) {
     const payload = {
@@ -482,21 +509,28 @@ async function syncProductPacking(
       updatedBy: actorUid,
     };
     if (row.id && existingIds.has(row.id)) {
-      batch.update(firestore.collection('product_packing_details').doc(row.id), payload);
+      ops.push((batch) => {
+        batch.update(firestore.collection('product_packing_details').doc(row.id as string), payload);
+      });
     } else {
-      batch.set(firestore.collection('product_packing_details').doc(), {
-        ...payload,
-        createdAt: now,
-        createdBy: actorUid,
+      ops.push((batch) => {
+        batch.set(firestore.collection('product_packing_details').doc(), {
+          ...payload,
+          createdAt: now,
+          createdBy: actorUid,
+        });
       });
     }
   }
 
   for (const doc of existingSnap.docs) {
     if (!newIds.has(doc.id) && doc.data().isDeleted !== true) {
-      batch.update(doc.ref, { isDeleted: true, updatedAt: now, updatedBy: actorUid });
+      ops.push((batch) => {
+        batch.update(doc.ref, { isDeleted: true, updatedAt: now, updatedBy: actorUid });
+      });
     }
   }
+  await commitInChunks(firestore, ops);
 }
 
 function stripSubcollections<T extends Record<string, unknown>>(payload: T) {
@@ -504,7 +538,7 @@ function stripSubcollections<T extends Record<string, unknown>>(payload: T) {
   return record;
 }
 
-export const createAdminProduct = onCall({ timeoutSeconds: 60, cors: true }, async (request) => {
+export const createAdminProduct = onCall({ timeoutSeconds: 60, ...BROWSER_CALLABLE }, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
@@ -530,8 +564,6 @@ export const createAdminProduct = onCall({ timeoutSeconds: 60, cors: true }, asy
 
   const batch = firestore.batch();
   batch.set(ref, record);
-  await syncProductCompositions(firestore, batch, ref.id, payload.compositions, request.auth.uid, now);
-  await syncProductPacking(firestore, batch, ref.id, payload.packingDetails, request.auth.uid, now);
   writeProductAudit(batch, firestore, {
     actorUid: request.auth.uid,
     actorName: String(actor?.full_name || actor?.email || 'Admin'),
@@ -554,10 +586,12 @@ export const createAdminProduct = onCall({ timeoutSeconds: 60, cors: true }, asy
     ),
   );
   await batch.commit();
+  await syncProductCompositions(firestore, ref.id, payload.compositions, request.auth.uid, now);
+  await syncProductPacking(firestore, ref.id, payload.packingDetails, request.auth.uid, now);
   return { id: ref.id, ...record };
 });
 
-export const updateAdminProduct = onCall({ timeoutSeconds: 60, cors: true }, async (request) => {
+export const updateAdminProduct = onCall({ timeoutSeconds: 60, ...BROWSER_CALLABLE }, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
@@ -577,33 +611,23 @@ export const updateAdminProduct = onCall({ timeoutSeconds: 60, cors: true }, asy
     throw new HttpsError('not-found', 'Product not found');
   }
   const existing = snap.data() || {};
-  const payload = parseProductPayload({ ...existing, ...updates }, existing);
+  const payload = parseProductPayload({
+    ...existing,
+    ...updates,
+    productCode: existing.productCode,
+  }, existing);
   await assertUniqueProduct(firestore, payload, productDocId);
 
   const now = new Date().toISOString();
   const batch = firestore.batch();
   const record = {
     ...stripSubcollections(payload),
+    productCode: String(existing.productCode || payload.productCode),
+    productId: String(existing.productId || payload.productId),
     updatedAt: now,
     updatedBy: request.auth.uid,
   };
   batch.update(ref, record);
-  await syncProductCompositions(firestore, batch, productDocId, payload.compositions, request.auth.uid, now);
-  await syncProductPacking(firestore, batch, productDocId, payload.packingDetails, request.auth.uid, now);
-
-  let cascadeCount = 0;
-  if (String(existing.productName || '') !== payload.productName
-    || String(existing.genericName || '') !== payload.genericName) {
-    cascadeCount = await cascadeProductRename(
-      firestore,
-      batch,
-      payload.productCode,
-      payload.productName,
-      payload.genericName,
-      request.auth.uid,
-      now,
-    );
-  }
 
   if (String(existing.productStatus || '') !== payload.productStatus) {
     writeProductAudit(batch, firestore, {
@@ -662,10 +686,24 @@ export const updateAdminProduct = onCall({ timeoutSeconds: 60, cors: true }, asy
     ),
   );
   await batch.commit();
+  await syncProductCompositions(firestore, productDocId, payload.compositions, request.auth.uid, now);
+  await syncProductPacking(firestore, productDocId, payload.packingDetails, request.auth.uid, now);
+  let cascadeCount = 0;
+  if (String(existing.productName || '') !== payload.productName
+    || String(existing.genericName || '') !== payload.genericName) {
+    cascadeCount = await cascadeProductRename(
+      firestore,
+      String(existing.productCode || payload.productCode),
+      payload.productName,
+      payload.genericName,
+      request.auth.uid,
+      now,
+    );
+  }
   return { product: { id: productDocId, ...existing, ...record }, cascadeCount };
 });
 
-export const setAdminProductStatus = onCall({ cors: true }, async (request) => {
+export const setAdminProductStatus = onCall(BROWSER_CALLABLE, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
@@ -684,7 +722,7 @@ export const setAdminProductStatus = onCall({ cors: true }, async (request) => {
     throw new HttpsError('not-found', 'Product not found');
   }
   const existing = snap.data() || {};
-  const status = productStatus === 'Active' ? 'Active' : 'Inactive';
+  const status = recordStatusFromProductStatus(productStatus);
   const now = new Date().toISOString();
   const batch = firestore.batch();
   batch.update(ref, { productStatus, status, updatedAt: now, updatedBy: request.auth.uid });
@@ -713,7 +751,7 @@ export const setAdminProductStatus = onCall({ cors: true }, async (request) => {
   return { success: true };
 });
 
-export const setAdminProductLifecycle = onCall(async (request) => {
+export const setAdminProductLifecycle = onCall(BROWSER_CALLABLE, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
@@ -760,7 +798,7 @@ export const setAdminProductLifecycle = onCall(async (request) => {
   return { success: true };
 });
 
-export const archiveAdminProduct = onCall(async (request) => {
+export const archiveAdminProduct = onCall(BROWSER_CALLABLE, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
@@ -809,7 +847,7 @@ export const archiveAdminProduct = onCall(async (request) => {
   return { success: true };
 });
 
-export const softDeleteAdminProduct = onCall(async (request) => {
+export const softDeleteAdminProduct = onCall(BROWSER_CALLABLE, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
@@ -866,12 +904,16 @@ export const softDeleteAdminProduct = onCall(async (request) => {
   return { success: true };
 });
 
-export const restoreAdminProduct = onCall(async (request) => {
+export const restoreAdminProduct = onCall(BROWSER_CALLABLE, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
-  assertProductEditor(actor, String(actor?.role || ''));
+  const actorRole = normalizeActorRole(String(actor?.role || ''));
+  assertActiveAdmin(actor, actorRole);
+  if (actorRole !== 'super_admin') {
+    throw new HttpsError('permission-denied', 'Only Super Admin can restore products');
+  }
 
   const productDocId = requiredString(request.data?.productDocId, 'productDocId', 128);
   const reason = requiredString(request.data?.reason, 'reason', 500);
@@ -902,7 +944,7 @@ export const restoreAdminProduct = onCall(async (request) => {
   return { success: true };
 });
 
-export const bulkUpdateAdminProducts = onCall(async (request) => {
+export const bulkUpdateAdminProducts = onCall(BROWSER_CALLABLE, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
@@ -979,7 +1021,7 @@ export const bulkUpdateAdminProducts = onCall(async (request) => {
   return { successCount };
 });
 
-export const bulkSoftDeleteAdminProducts = onCall(async (request) => {
+export const bulkSoftDeleteAdminProducts = onCall(BROWSER_CALLABLE, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
@@ -1040,12 +1082,12 @@ export const bulkSoftDeleteAdminProducts = onCall(async (request) => {
   return { successCount, errors };
 });
 
-export const importAdminProducts = onCall(async (request) => {
+export const importAdminProducts = onCall(BROWSER_CALLABLE, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
   const actor = actorSnapshot.data();
-  assertProductEditor(actor, String(actor?.role || ''));
+  assertActiveAdmin(actor, String(actor?.role || ''));
 
   const reason = requiredString(request.data?.reason, 'reason', 500);
   const rows = Array.isArray(request.data?.rows) ? request.data.rows as Record<string, unknown>[] : [];
@@ -1059,18 +1101,6 @@ export const importAdminProducts = onCall(async (request) => {
   for (let index = 0; index < rows.length; index += 1) {
     try {
       const row = rows[index];
-      if (!row.compositions) {
-        row.compositions = [{
-          ingredientName: 'API',
-          ingredientType: 'API',
-          grade: '',
-          quantity: 1,
-          unit: 'mg',
-          functionPurpose: '',
-          specificationNo: '',
-          stpNo: '',
-        }];
-      }
       const payload = parseProductPayload(row);
       await assertUniqueProduct(firestore, payload);
       const ref = firestore.collection('products').doc();
@@ -1084,8 +1114,6 @@ export const importAdminProducts = onCall(async (request) => {
       };
       const batch = firestore.batch();
       batch.set(ref, record);
-      await syncProductCompositions(firestore, batch, ref.id, payload.compositions, request.auth.uid, now);
-      await syncProductPacking(firestore, batch, ref.id, payload.packingDetails, request.auth.uid, now);
       writeProductAudit(batch, firestore, {
         actorUid: request.auth.uid,
         actorName: String(actor?.full_name || actor?.email || 'Admin'),
@@ -1097,6 +1125,8 @@ export const importAdminProducts = onCall(async (request) => {
         now,
       });
       await batch.commit();
+      await syncProductCompositions(firestore, ref.id, payload.compositions, request.auth.uid, now);
+      await syncProductPacking(firestore, ref.id, payload.packingDetails, request.auth.uid, now);
       successCount += 1;
     } catch (error) {
       errors.push(`Row ${index + 1}: ${(error as Error).message}`);
@@ -1105,7 +1135,7 @@ export const importAdminProducts = onCall(async (request) => {
   return { successCount, errors };
 });
 
-export const logAdminProductExport = onCall(async (request) => {
+export const logAdminProductExport = onCall(BROWSER_CALLABLE, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
@@ -1130,7 +1160,7 @@ export const logAdminProductExport = onCall(async (request) => {
   return { success: true };
 });
 
-export const registerAdminProductAttachment = onCall(async (request) => {
+export const registerAdminProductAttachment = onCall(BROWSER_CALLABLE, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();
@@ -1196,7 +1226,7 @@ export const registerAdminProductAttachment = onCall(async (request) => {
   return { id: attachmentRef.id, ...attachment };
 });
 
-export const softDeleteAdminProductAttachment = onCall(async (request) => {
+export const softDeleteAdminProductAttachment = onCall(BROWSER_CALLABLE, async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Authentication required');
     const firestore = getAdminFirestore();
   const actorSnapshot = await firestore.collection('profiles').doc(request.auth.uid).get();

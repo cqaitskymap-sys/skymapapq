@@ -244,7 +244,13 @@ export function SummaryConclusionPage() {
     finally { setBusy(false); }
   }, []);
 
-  useEffect(() => { void loadPqrs(); void logSummaryConclusionView(actor); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void loadPqrs(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const viewLogged = useRef(false);
+  useEffect(() => {
+    if (viewLogged.current || actor.id === 'system') return;
+    viewLogged.current = true;
+    void logSummaryConclusionView(actor);
+  }, [actor]);
 
   useEffect(() => {
     if (selectedPqr) {
@@ -377,7 +383,7 @@ export function SummaryConclusionPage() {
 
   return (
     <SummaryConclusionAccessGuard>
-      <div className="space-y-6 p-4 sm:p-6">
+      <div className="space-y-6">
         <CpvPageHeader
           title="PQR Summary & Conclusion"
           description="Final Product Quality Review Assessment and Management Conclusion"

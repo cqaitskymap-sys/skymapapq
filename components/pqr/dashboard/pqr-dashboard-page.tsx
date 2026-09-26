@@ -436,7 +436,7 @@ export function PqrDashboardPage() {
 
   return (
     <PqrDashboardAccessGuard>
-      <div className="space-y-6 p-4 sm:p-6 print:p-2">
+      <div className="space-y-6 print:p-2">
         <CpvPageHeader
           title="PQR Dashboard"
           description="Product Quality Review overview, annual review status and quality performance"

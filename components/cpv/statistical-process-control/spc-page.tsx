@@ -277,7 +277,7 @@ export function SpcPage() {
   if (error) return <div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title="Statistical Process Control"
         description="Generate control charts and detect special cause variation for CPV data"

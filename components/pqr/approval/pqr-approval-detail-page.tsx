@@ -263,7 +263,7 @@ export function PqrApprovalDetailPage() {
 
   return (
     <PqrApprovalAccessGuard>
-      <div className="space-y-6 p-4 sm:p-6">
+      <div className="space-y-6">
         <CpvPageHeader
           title={`PQR Approval — ${pqr.pqrNumber}`}
           description={`${pqr.productName} · ${pqr.reviewPeriodFrom} — ${pqr.reviewPeriodTo}`}

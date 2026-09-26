@@ -451,7 +451,7 @@ export function EnvironmentalMonitoringPage() {
   if (error) return <div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title="Environmental Monitoring"
         description="Monitor cleanroom temperature, RH, differential pressure, particle and microbial data for CPV"

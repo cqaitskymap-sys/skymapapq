@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -168,7 +168,13 @@ export function PackagingReviewPage() {
     finally { setBusy(false); }
   }, []);
 
-  useEffect(() => { void loadPqrs(); void logPackagingReviewView(actor); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void loadPqrs(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const viewLogged = useRef(false);
+  useEffect(() => {
+    if (viewLogged.current || actor.id === 'system') return;
+    viewLogged.current = true;
+    void logPackagingReviewView(actor);
+  }, [actor]);
 
   useEffect(() => {
     if (selectedPqrId) {
@@ -334,7 +340,7 @@ export function PackagingReviewPage() {
 
   return (
     <PackagingReviewAccessGuard>
-      <div className="space-y-6 p-4 sm:p-6">
+      <div className="space-y-6">
         <CpvPageHeader
           title="Packaging Review"
           description="Review primary, secondary and tertiary packaging materials used during the PQR period"

@@ -1,5 +1,5 @@
-import { httpsCallable } from 'firebase/functions';
-import { isFirebaseConfigured, getFirebaseFunctions } from './firebase';
+import { httpsCallableMaybeProxied } from './callable';
+import { isFirebaseConfigured } from './firebase';
 import { AUDIT_LOG_STATUSES } from './admin/constants';
 
 export const AUDIT_TRAIL_COLLECTION = 'audit_trail';
@@ -145,6 +145,53 @@ export function shouldSkipRemoteAuditInLocalDev(): boolean {
 /** Alias for non-audit admin callables (login activity, health checks, etc.). */
 export const shouldSkipRemoteCallablesInLocalDev = shouldSkipRemoteAuditInLocalDev;
 
+const AUDIT_APPEND_FNS = ['appendAdminAuditTrail', 'recordAdminAuditTrail'] as const;
+const AUDIT_CALLABLE_UNAVAILABLE_KEY = 'skymap-audit-callables-unavailable';
+
+let auditCallablesUnavailable = false;
+
+function markAuditCallablesUnavailable(): void {
+  auditCallablesUnavailable = true;
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    sessionStorage.setItem(AUDIT_CALLABLE_UNAVAILABLE_KEY, '1');
+  } catch {
+    /* ignore */
+  }
+}
+
+export function areAuditCallablesUnavailable(): boolean {
+  if (auditCallablesUnavailable) return true;
+  if (typeof sessionStorage === 'undefined') return false;
+  try {
+    if (sessionStorage.getItem(AUDIT_CALLABLE_UNAVAILABLE_KEY) === '1') {
+      auditCallablesUnavailable = true;
+      return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+function isCallableGatewayFailure(error: unknown): boolean {
+  const err = error as { code?: string; message?: string };
+  const code = String(err.code || '').toLowerCase();
+  const message = String(err.message || '').toLowerCase();
+  return (
+    code.includes('internal')
+    || code.includes('unavailable')
+    || code.includes('not-found')
+    || /cors|preflight|access-control-allow-origin|failed to fetch|network error|not serving|check billing|returned 50[023]|not found/i.test(message)
+  );
+}
+
+function getAppendAuditCallable(name: (typeof AUDIT_APPEND_FNS)[number]) {
+  return httpsCallableMaybeProxied<Record<string, unknown>, { id: string; auditId: string }>(name);
+}
+
+export { httpsCallableMaybeProxied } from './callable';
+
 /**
  * GMP / 21 CFR Part 11 compliant append-only audit log writer.
  * Routes through trusted Cloud Function (integrity hash + dual write).
@@ -164,7 +211,7 @@ export async function createAuditLog(
     return null;
   }
 
-  if (shouldSkipRemoteAuditInLocalDev()) {
+  if (shouldSkipRemoteAuditInLocalDev() || areAuditCallablesUnavailable()) {
     // Localhost + non-emulator flows often do not have Cloud Functions deployed.
     // Skip remote callable to avoid noisy CORS/network errors during development.
     return null;
@@ -209,25 +256,37 @@ export async function createAuditLog(
     timezone: input.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
   };
 
-  try {
-    const fn = httpsCallable<
-      Record<string, unknown>,
-      { id: string; auditId: string }
-    >(getFirebaseFunctions(), 'appendAdminAuditTrail');
-    const response = await fn(payload);
-    return response.data.id || response.data.auditId || null;
-  } catch (error) {
-    // Never silently fail — Part 11 requires detectable audit failures
-    console.error('AUDIT_FAILURE: appendAdminAuditTrail callable failed', {
-      error: callableErrorMessage(error),
-      module: input.moduleName,
-      action: input.actionType,
-      recordId: input.recordId,
-      auditId: buildAuditId(),
-      at: nowIso(),
-    });
-    return null;
+  let lastError: unknown;
+  for (let i = 0; i < AUDIT_APPEND_FNS.length; i += 1) {
+    const name = AUDIT_APPEND_FNS[i]!;
+    try {
+      const response = await getAppendAuditCallable(name)(payload);
+      return response.data.id || response.data.auditId || null;
+    } catch (error) {
+      lastError = error;
+      const remaining = AUDIT_APPEND_FNS.length - i - 1;
+      const code = String((error as { code?: string }).code || '').toLowerCase();
+      const canRetry = remaining > 0 && (
+        isCallableGatewayFailure(error)
+        || code.includes('not-found')
+      );
+      if (!canRetry) break;
+    }
   }
+
+  // Never silently fail — Part 11 requires detectable audit failures
+  console.error('AUDIT_FAILURE: append audit callable failed', {
+    error: callableErrorMessage(lastError),
+    module: input.moduleName,
+    action: input.actionType,
+    recordId: input.recordId,
+    auditId: buildAuditId(),
+    at: nowIso(),
+  });
+  if (isCallableGatewayFailure(lastError)) {
+    markAuditCallablesUnavailable();
+  }
+  return null;
 }
 
 export async function writeAuditTrail(

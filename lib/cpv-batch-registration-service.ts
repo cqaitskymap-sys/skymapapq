@@ -6,7 +6,7 @@ import {
   query,
   where,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
 import { getRecord, getRecords } from '@/lib/firestore';
 import { fetchBatches as fetchAdminBatches, normalizeBatch } from '@/lib/admin/batch-service';

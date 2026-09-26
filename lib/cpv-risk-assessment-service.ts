@@ -1,5 +1,5 @@
 import { limit, orderBy } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import { getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
 import { getRecord, getRecords } from '@/lib/firestore';
 import { listCpvRecords } from '@/lib/cpv-service';

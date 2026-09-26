@@ -1,7 +1,7 @@
 import {
   collection, doc, getDoc, getDocs, limit, orderBy, query, where,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
 import {
   CPV_CONFIG_COLLECTIONS,

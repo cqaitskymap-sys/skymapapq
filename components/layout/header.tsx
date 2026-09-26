@@ -16,7 +16,9 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { cn } from '@/lib/utils';
 import { formatBreadcrumbLabel } from '@/lib/breadcrumb-labels';
-import { isMasterDataPath } from '@/lib/launcher/module-scope';
+import { isMasterDataPath, MASTER_DATA_HOME } from '@/lib/launcher/module-scope';
+
+const RECORD_ID_RE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Za-z0-9_-]{18,})$/i;
 
 function getBreadcrumbs(pathname: string) {
   const parts = pathname.split('/').filter(Boolean);
@@ -26,9 +28,10 @@ function getBreadcrumbs(pathname: string) {
     path += `/${part}`;
     if (path === '/dashboard') continue;
     const href = (path === '/admin' || path === '/dashboard/admin') && isMasterDataPath(pathname)
-      ? '/admin/products'
+      ? MASTER_DATA_HOME
       : path;
-    crumbs.push({ label: formatBreadcrumbLabel(part, pathname), href });
+    const label = RECORD_ID_RE.test(part) ? 'Record' : formatBreadcrumbLabel(part, pathname);
+    crumbs.push({ label, href });
   }
   return crumbs;
 }
@@ -61,8 +64,7 @@ export function Header() {
   return (
     <header className="sticky top-0 z-30 flex h-14 min-h-14 items-center gap-2 border-b bg-background/95 px-2 backdrop-blur-sm xs:gap-3 xs:px-3 sm:h-16 sm:min-h-16 sm:px-4 sm:gap-4">
       <MobileNav />
-      {/* Company Logo & Name */}
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2 lg:hidden">
         <div className="relative h-7 shrink-0 sm:h-8">
           <Image
             src="/logo-1.png"
@@ -78,9 +80,6 @@ export function Header() {
           <span className="hidden text-xs text-muted-foreground sm:block">Pharmaceuticals</span>
         </div>
       </div>
-
-      {/* Divider */}
-      <div className="hidden md:block w-px h-6 bg-border" />
 
       {/* Breadcrumb */}
       <nav aria-label="Breadcrumb" className="hidden min-w-0 flex-1 items-center gap-1 overflow-hidden text-sm text-muted-foreground md:flex">

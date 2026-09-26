@@ -87,7 +87,7 @@ export function ProcessCapabilityDetailView({ id }: { id: string }) {
   const chartData = [{ label: record.parameterName, cp: record.cp, cpk: record.cpk, ppk: record.ppk }];
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={record.parameterName}
         description={`${record.productName} · ${record.parameterType} · ${record.capabilityCode || record.capabilityId}`}

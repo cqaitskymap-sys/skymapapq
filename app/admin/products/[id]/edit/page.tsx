@@ -31,15 +31,17 @@ function EditProductContent({ id }: { id: string }) {
   };
 
   useEffect(() => {
+    let cancelled = false;
     fetchProductById(id, true).then(async (p) => {
       if (!p) {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
         return;
       }
       const [comps, pack] = await Promise.all([
         fetchProductCompositions(id),
         fetchProductPacking(id),
       ]);
+      if (cancelled) return;
       setExisting(p);
       setInitial({
         productCode: p.productCode,
@@ -81,15 +83,16 @@ function EditProductContent({ id }: { id: string }) {
         productStatus: (p.productStatus as ProductFormData['productStatus']) || 'Active',
         description: p.description || '',
         remarks: p.remarks || '',
-        compositions: comps.length ? comps : [{
-          ingredientName: 'API', ingredientType: 'API', grade: '', quantity: 1, unit: 'mg',
-          functionPurpose: '', specificationNo: '', stpNo: '',
-        }],
+        compositions: comps,
         packingDetails: pack,
         changeReason: '',
       });
       setLoading(false);
+    }).catch((error) => {
+      console.error('Failed to load product for edit:', error);
+      if (!cancelled) setLoading(false);
     });
+    return () => { cancelled = true; };
   }, [id]);
 
   if (!canEditProducts(role)) {
@@ -101,18 +104,21 @@ function EditProductContent({ id }: { id: string }) {
 
   const onSubmit = async (data: ProductFormData) => {
     setSubmitting(true);
-    const result = await updateProduct(id, data, existing, auditMeta);
-    setSubmitting(false);
-    if (result.error) {
-      toast.error(result.error);
-      return;
+    try {
+      const result = await updateProduct(id, data, existing, auditMeta);
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+      if (result.cascadeCount && result.cascadeCount > 0) {
+        toast.success(`Product updated — ${result.cascadeCount} linked batch record(s) synchronized`);
+      } else {
+        toast.success('Product updated');
+      }
+      router.push(`/admin/products/${id}`);
+    } finally {
+      setSubmitting(false);
     }
-    if (result.cascadeCount && result.cascadeCount > 0) {
-      toast.success(`Product updated — ${result.cascadeCount} linked batch record(s) synchronized`);
-    } else {
-      toast.success('Product updated');
-    }
-    router.push(`/admin/products/${id}`);
   };
 
   return (

@@ -310,7 +310,7 @@ export function AnnualReviewPage() {
   if (error) return <div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title="Annual CPV Review"
         description="Generate annual Continued Process Verification review report with Stage 3 analytics"
@@ -595,7 +595,8 @@ export function AnnualReviewPage() {
                             await load();
                           }} />
                           <Button size="sm" variant="destructive" onClick={async () => {
-                            await rejectCpvReview(activeReview.id, actor, activeReview);
+                            const { error: err } = await rejectCpvReview(activeReview.id, actor, activeReview);
+                            if (err) return toast.error(err);
                             toast.success('Review rejected');
                             setWizardOpen(false);
                             await load();
@@ -604,7 +605,8 @@ export function AnnualReviewPage() {
                       )}
                       {canApprove && activeReview.reviewStatus === 'Approved' && (
                         <Button size="sm" variant="outline" onClick={async () => {
-                          await archiveCpvReview(activeReview.id, actor, activeReview);
+                          const { error: err } = await archiveCpvReview(activeReview.id, actor, activeReview);
+                          if (err) return toast.error(err);
                           toast.success('Archived');
                           setWizardOpen(false);
                           await load();

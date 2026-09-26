@@ -17,7 +17,6 @@ import {
   Lock,
   HelpCircle,
 } from 'lucide-react';
-import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -42,13 +41,12 @@ type FormData = z.infer<typeof schema>;
 function SkymapLogo() {
   return (
     <div className="mx-auto flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl shadow-lg shadow-blue-600/25">
-      <Image
+      <img
         src="/logo-1.png"
         alt="Skymap Pharmaceuticals"
         width={64}
         height={64}
         className="h-16 w-16 object-contain"
-        priority
       />
     </div>
   );
@@ -172,11 +170,10 @@ export function LoginFormPanel() {
   };
 
   return (
-    <div className="flex flex-1 items-center justify-center bg-gradient-to-br from-slate-50 via-white to-blue-50/40 px-4 py-6 md:px-8 md:w-full md:py-8 lg:w-[40%] lg:py-12 xl:w-[35%]">
+    <div className="flex flex-1 items-start justify-center bg-gradient-to-br from-slate-50 via-white to-blue-50/40 px-4 py-6 sm:items-center sm:px-8 sm:py-10 lg:w-[40%] lg:py-12 xl:w-[35%]">
       <motion.div
-        initial={{ opacity: 0, y: 32 }}
+        initial={false}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, ease: 'easeOut' }}
         className="w-full max-w-[420px]"
       >
         <div className="rounded-[24px] border border-white/60 bg-white/70 p-5 shadow-[0_8px_40px_rgba(15,23,42,0.08)] backdrop-blur-2xl xs:p-6 sm:p-8 md:p-10">
@@ -314,7 +311,7 @@ export function LoginFormPanel() {
         </div>
 
         <p className="mt-6 text-center text-xs text-slate-400">
-          <span className="md:hidden">Version 2.0 &middot; &copy; 2026 SKYMAP Pharmaceuticals</span>
+          <span className="lg:hidden">Version 2.0 &middot; &copy; 2026 SKYMAP Pharmaceuticals</span>
           <span className="block mt-1">Developed by Satyajit Patri from Odisha</span>
         </p>
       </motion.div>

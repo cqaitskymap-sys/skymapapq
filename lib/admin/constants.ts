@@ -781,7 +781,7 @@ export const INGREDIENT_TYPES = [
 ] as const;
 
 export const PACKING_MATERIAL_TYPES = [
-  'Primary Packing',
+  'Primary Packing', 'Secondary Packing', 'Tertiary Packing',
 ] as const;
 
 export const PRODUCT_ATTACHMENT_TYPES = ['specification', 'stp', 'other'] as const;
@@ -848,13 +848,6 @@ export const ADMIN_NAV_ITEMS = [
   { label: 'Admin Dashboard', href: '/admin', icon: 'LayoutDashboard' },
   { label: 'User Management', href: '/admin/users', icon: 'Users' },
   { label: 'Role & Permission', href: '/admin/roles', icon: 'Shield' },
-  { label: 'Department Master', href: '/admin/departments', icon: 'Building2' },
-  { label: 'Designation Master', href: '/admin/designations', icon: 'BadgeCheck' },
-  { label: 'Company / Site Master', href: '/admin/company-site', icon: 'Factory' },
-  { label: 'Product Master', href: '/admin/products', icon: 'FlaskConical' },
-  { label: 'Equipment Master', href: '/admin/equipment', icon: 'Wrench' },
-  { label: 'Batch Master', href: '/admin/batches', icon: 'Package' },
-  { label: 'Parameter Master', href: '/admin/parameters', icon: 'SlidersHorizontal' },
   { label: 'Workflow Configuration', href: '/admin/workflows', icon: 'GitBranch' },
   { label: 'Approval Matrix', href: '/admin/approval-matrix', icon: 'CheckSquare' },
   { label: 'Document Numbering', href: '/admin/document-numbering', icon: 'Hash' },
@@ -866,7 +859,6 @@ export const ADMIN_NAV_ITEMS = [
   { label: 'Notification Settings', href: '/admin/notifications', icon: 'Bell' },
   { label: 'Email/SMS Templates', href: '/admin/email-sms-templates', icon: 'Mail' },
   { label: 'Module Configuration', href: '/admin/module-configuration', icon: 'Blocks' },
-  { label: 'Master Data Import/Export', href: '/admin/master-data-import-export', icon: 'FileUp' },
   { label: 'Backup & Restore', href: '/admin/backup', icon: 'Database' },
   { label: 'Backup History', href: '/admin/backup/history', icon: 'HardDrive' },
   { label: 'Firebase Status', href: '/admin/firebase-status', icon: 'Cloud' },

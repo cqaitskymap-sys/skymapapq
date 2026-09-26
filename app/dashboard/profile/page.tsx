@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import {
   EmailAuthProvider, reauthenticateWithCredential, sendEmailVerification, updatePassword,
 } from 'firebase/auth';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import { toast } from 'sonner';
 import { KeyRound, MailCheck, Save, UserCircle } from 'lucide-react';
 import { useAuth } from '@/contexts/auth-context';

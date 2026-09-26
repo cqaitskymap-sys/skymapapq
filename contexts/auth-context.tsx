@@ -77,7 +77,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               void syncAuthSessionCookie(currentUser).catch(() => clearAuthSessionCookies());
               const data = await fetchProfile(currentUser.uid);
               if (cancelled || requestId !== profileRequestId) return;
-              setProfile(data);
+              if (data) {
+                setProfile(data);
+              } else if (requestId === 1) {
+                setProfile(null);
+              }
             } else {
               clearAuthSessionCookies();
               if (!cancelled && requestId === profileRequestId) {

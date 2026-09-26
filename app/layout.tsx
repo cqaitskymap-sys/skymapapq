@@ -40,7 +40,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <LoadingProvider>
             <QueryProvider>
               <AuthProvider>
-                <AuthLoadingBridge />
+                <Suspense fallback={null}>
+                  <AuthLoadingBridge />
+                </Suspense>
                 <SystemSettingsProvider>
                   <FirebaseSetupBanner />
                   <MaintenanceBanner />

@@ -1,3 +1,5 @@
+import { MASTER_DATA_PATH_PREFIXES } from '@/lib/launcher/module-scope';
+
 export type GuideGroup =
   | 'start'
   | 'admin'
@@ -62,12 +64,12 @@ export const USER_GUIDE_TOPICS: UserGuideTopic[] = [
       },
       {
         title: 'Admin prepares the system (once)',
-        detail: 'An administrator creates sites, departments, users, roles, products, equipment, numbering, workflows, and e-signature settings before operational records are raised.',
+        detail: 'An administrator creates users, roles, numbering, workflows, and e-signature settings before operational records are raised.',
         href: '/admin',
       },
       {
         title: 'Load master data',
-        detail: 'Confirm products, materials, vendors, and equipment exist. CPV and PQR cannot run without this foundation.',
+        detail: 'Confirm products, equipment, batches, parameters, sites, departments, materials, and vendors exist. CPV and PQR cannot run without this foundation.',
         href: '/admin/products',
       },
       {
@@ -100,7 +102,7 @@ export const USER_GUIDE_TOPICS: UserGuideTopic[] = [
   {
     id: 'admin',
     title: 'Administration',
-    summary: 'Configure the company, people, and controlled system behaviour before any GMP records are created.',
+    summary: 'Configure people, access, workflows, and controlled system behaviour before any GMP records are created.',
     who: 'Super Admin / IT / QA system owner',
     whatNext: 'Users can log in with their role and open only the modules assigned to them.',
     href: '/admin',
@@ -108,11 +110,8 @@ export const USER_GUIDE_TOPICS: UserGuideTopic[] = [
     pathPrefixes: ['/admin', '/dashboard/admin'],
     steps: [
       { title: 'Open Admin Dashboard', detail: 'Start at Administration to see system health and configuration shortcuts.', href: '/admin', match: ['/admin'] },
-      { title: 'Company / Site Master', detail: 'Define legal entities and manufacturing sites. Most records are site-scoped.', href: '/admin/company-site' },
-      { title: 'Departments & designations', detail: 'Create departments and job titles used on users and approval matrices.', href: '/admin/departments' },
       { title: 'Users', detail: 'Create users, assign site / department / role, and activate access after identity verification.', href: '/admin/users' },
       { title: 'Roles & permissions', detail: 'Grant view / create / approve rights per module. Users only see what their role allows.', href: '/admin/roles' },
-      { title: 'Product, equipment, parameter masters', detail: 'Load products, equipment, and process / quality parameters used by CPV, eBMR, and PQR.', href: '/admin/products' },
       { title: 'Workflows & approval matrix', detail: 'Set who reviews and who approves each record type, including e-signature steps.', href: '/admin/workflows' },
       { title: 'Document numbering & e-sign settings', detail: 'Configure controlled numbering and 21 CFR Part 11 electronic signature rules.', href: '/admin/document-numbering' },
       { title: 'Notifications, backup, system settings', detail: 'Turn on alerts, email/SMS templates, backups, and compliance settings.', href: '/admin/notifications' },
@@ -415,16 +414,19 @@ export const USER_GUIDE_TOPICS: UserGuideTopic[] = [
   {
     id: 'master-data',
     title: 'Master Data',
-    summary: 'Reference data that every module reads: products, equipment, materials, vendors.',
+    summary: 'Reference data that every module reads: products, equipment, batches, parameters, departments, sites, materials, and vendors.',
     who: 'Master data owner, QA',
     whatNext: 'Once published, operational modules can select these records instead of typing free text.',
     href: '/admin/products',
     group: 'ops',
-    pathPrefixes: ['/dashboard/master'],
+    pathPrefixes: [...MASTER_DATA_PATH_PREFIXES],
     steps: [
       { title: 'Products', detail: 'Keep product codes, strengths, and sites accurate.', href: '/admin/products' },
       { title: 'Equipment', detail: 'IDs must match qualification and CPV equipment review.', href: '/admin/equipment' },
+      { title: 'Batches & parameters', detail: 'Register manufacturing batches and the CPP / CQA / IPC parameters they use.', href: '/admin/batches' },
+      { title: 'Departments, designations & sites', detail: 'Define organization structure and manufacturing sites used across QMS records.', href: '/admin/departments' },
       { title: 'Materials & vendors', detail: 'Link materials to approved vendors before goods receipt.', href: '/dashboard/master/materials' },
+      { title: 'Import / export', detail: 'Bulk load or extract master records when migrating or reconciling data.', href: '/admin/master-data-import-export' },
     ],
   },
   {
@@ -516,6 +518,7 @@ export function matchGuideStepIndex(topic: UserGuideTopic, pathname: string): nu
 export const GUIDE_SEEN_KEY = 'skymap-user-guide-seen';
 export const GUIDE_OPEN_EVENT = 'skymap-open-user-guide';
 export const BANNER_COLLAPSED_KEY = 'skymap-page-help-collapsed';
+export const GUIDE_FAB_POS_KEY = 'skymap-guide-coach-pos';
 
 export function requestOpenUserGuide() {
   if (typeof window === 'undefined') return;

@@ -197,7 +197,7 @@ export function AiAnalyticsPage() {
   }
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title="AI Analytics"
         description="Predictive Intelligence and Advanced CPV Insights"

@@ -5,6 +5,7 @@
 import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { type Firestore, type DocumentData } from 'firebase-admin/firestore';
 import { getAdminFirestore } from './admin-app';
+import { BROWSER_CALLABLE } from './callable-options';
 
 
 function requiredString(value: unknown, field: string, maxLength = 500): string {
@@ -18,9 +19,15 @@ function requiredString(value: unknown, field: string, maxLength = 500): string 
   return normalized;
 }
 
-function assertViewer(actor: DocumentData | undefined, _role: string) {
-  if (!actor || actor.is_active !== true) {
-    throw new HttpsError('permission-denied', 'Active profile required for CPV Dashboard');
+const VIEWER_ROLES = [
+  'super_admin', 'admin', 'qa', 'head_qa', 'qa_manager',
+  'qc', 'qc_manager', 'production', 'production_manager',
+  'engineering', 'engineering_manager', 'viewer', 'auditor',
+];
+
+function assertViewer(actor: DocumentData | undefined, role: string) {
+  if (!actor || actor.is_active !== true || !VIEWER_ROLES.includes(role)) {
+    throw new HttpsError('permission-denied', 'Not authorized for CPV Dashboard');
   }
 }
 
@@ -106,8 +113,16 @@ async function countCollection(firestore: Firestore, name: string, max = 500): P
   }
 }
 
+async function countFirst(firestore: Firestore, names: string[], max = 500): Promise<number> {
+  for (const name of names) {
+    const count = await countCollection(firestore, name, max);
+    if (count > 0) return count;
+  }
+  return 0;
+}
+
 /** Lightweight server snapshot counts for executive health (optional enrichment). */
-export const getAdminCpvDashboardSnapshot = onCall({ timeoutSeconds: 60, memory: '512MiB', cors: true }, async (request) => {
+export const getAdminCpvDashboardSnapshot = onCall({ timeoutSeconds: 60, ...BROWSER_CALLABLE }, async (request) => {
   const { firestore, actor, actorRole, actorName, actorUid } = await resolveActor(request);
   assertViewer(actor, actorRole);
   const now = new Date().toISOString();
@@ -121,13 +136,13 @@ export const getAdminCpvDashboardSnapshot = onCall({ timeoutSeconds: 60, memory:
     controlCharts,
     batches,
   ] = await Promise.all([
-    countCollection(firestore, 'cpp_results'),
-    countCollection(firestore, 'cqa_results'),
-    countCollection(firestore, 'risk_assessment'),
-    countCollection(firestore, 'cpv_reviews'),
-    countCollection(firestore, 'process_capability'),
-    countCollection(firestore, 'control_charts'),
-    countCollection(firestore, 'batches'),
+    countFirst(firestore, ['cpp_results', 'cpv_cpp']),
+    countFirst(firestore, ['cqa_results', 'cpv_cqa']),
+    countFirst(firestore, ['risk_assessment', 'cpv_risk_assessment']),
+    countFirst(firestore, ['cpv_reviews', 'cpv_annual_review']),
+    countFirst(firestore, ['process_capability', 'cpv_capability']),
+    countFirst(firestore, ['control_charts', 'cpv_control_charts']),
+    countFirst(firestore, ['cpv_batches', 'batches']),
   ]);
 
   const snapshot = {
@@ -180,7 +195,7 @@ async function handleCpvDashboardAudit(request: { auth?: { uid: string } | null;
 }
 
 /** Legacy name — Cloud Run IAM on this endpoint is private (v2 callable updates do not re-grant public invoke). */
-export const logAdminCpvDashboardAudit = onCall({ cors: true }, handleCpvDashboardAudit);
+export const logAdminCpvDashboardAudit = onCall(BROWSER_CALLABLE, handleCpvDashboardAudit);
 
 /** New callable so first-time deploy can grant public invoke (required for browser CORS preflight). */
-export const recordAdminCpvDashboardAudit = onCall({ cors: true }, handleCpvDashboardAudit);
+export const recordAdminCpvDashboardAudit = onCall(BROWSER_CALLABLE, handleCpvDashboardAudit);

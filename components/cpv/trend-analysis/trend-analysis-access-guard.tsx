@@ -1,19 +1,12 @@
 'use client';
 
-import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
-import { ErrorCard } from '@/components/admin/dashboard/error-card';
+import { CpvModuleAccessGuard } from '@/components/cpv/cpv-module-access-guard';
 
 export function TrendAnalysisAccessGuard({ children }: { children: React.ReactNode }) {
-  const { profile } = useAuth();
-  if (!profile?.role || !cpvPermissions.canViewTrendAnalysis(profile.role)) {
-    return (
-      <ErrorCard
-        accessDenied
-        title="Access Denied"
-        message="You do not have permission to access Trend Analysis."
-      />
-    );
-  }
-  return <>{children}</>;
+  return (
+    <CpvModuleAccessGuard canView={cpvPermissions.canViewTrendAnalysis} moduleLabel="Trend Analysis">
+      {children}
+    </CpvModuleAccessGuard>
+  );
 }

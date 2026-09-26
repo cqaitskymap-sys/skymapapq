@@ -178,7 +178,7 @@ export function CpvBatchDetailView({ id }: { id: string }) {
   const nextStatuses = allowedBatchTransitions(batch.batchStatus);
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={batch.batchNumber}
         description={`${batch.cpvBatchId} · ${batch.productName}`}
@@ -238,7 +238,7 @@ export function CpvBatchDetailView({ id }: { id: string }) {
           { href: `/cpv/environmental-monitoring?batch=${encodeURIComponent(batch.batchNumber)}`, label: 'Environmental Monitoring' },
           { href: `/cpv/yield-monitoring?batch=${encodeURIComponent(batch.batchNumber)}`, label: 'Yield Monitoring' },
           { href: `/cpv/stability-monitoring?batch=${encodeURIComponent(batch.batchNumber)}`, label: 'Stability Monitoring' },
-          { href: '/cpv/control-charts', label: 'SPC' },
+          { href: '/cpv/statistical-process-control', label: 'SPC' },
           { href: '/cpv/trend-analysis', label: 'Trend Analysis' },
           { href: '/cpv/risk-assessment', label: 'Risk' },
           { href: '/qms/deviation', label: 'Deviation' },

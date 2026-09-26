@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
-  RefreshCw, Download, FileSpreadsheet, ChevronRight, AlertTriangle, FilterX,
+  RefreshCw, Download, FileSpreadsheet, AlertTriangle, FilterX,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -30,8 +30,10 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { DataState, KpiCard, StatusBadge } from '@/components/cpv/cpv-ui';
+import { KpiCard, StatusBadge } from '@/components/cpv/cpv-ui';
+import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ErrorCard } from '@/components/admin/dashboard/error-card';
+import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
 
 const MONTHS = [
   { value: '01', label: 'Jan' }, { value: '02', label: 'Feb' }, { value: '03', label: 'Mar' },
@@ -351,12 +353,26 @@ export function CpvDashboardPage() {
   const healthTone = healthScore >= 85 ? 'green' : healthScore >= 70 ? 'amber' : 'red';
 
   if (loading && !data) {
-    return <DataState loading empty={false} />;
+    return (
+      <div className="space-y-6">
+        <CpvPageHeader
+          title="CPV Dashboard"
+          description="Stage 3 Continued Process Verification — process health, CPP/CQA, capability, SPC, and risk overview"
+        />
+        <LoadingSkeleton rows={3} />
+      </div>
+    );
   }
 
   if (data?.error && !cpp.length && !cqa.length) {
     return (
-      <ErrorCard message={data.error} onRetry={() => load(true)} />
+      <div className="space-y-6">
+        <CpvPageHeader
+          title="CPV Dashboard"
+          description="Stage 3 Continued Process Verification — process health, CPP/CQA, capability, SPC, and risk overview"
+        />
+        <ErrorCard message={data.error} onRetry={() => load(true)} />
+      </div>
     );
   }
 
@@ -367,7 +383,7 @@ export function CpvDashboardPage() {
     { href: '/cpv/cpp', label: 'CPP' },
     { href: '/cpv/cqa', label: 'CQA' },
     { href: '/cpv/trend-analysis', label: 'Trend' },
-    { href: '/cpv/control-charts', label: 'SPC' },
+    { href: '/cpv/statistical-process-control', label: 'SPC' },
     { href: '/cpv/alert-engine', label: 'Alarms' },
     { href: '/cpv/process-capability', label: 'Capability' },
     { href: '/cpv/risk-assessment', label: 'Risk' },
@@ -384,35 +400,24 @@ export function CpvDashboardPage() {
 
   return (
     <div id="cpv-dashboard-root" className="space-y-6">
-      {/* Breadcrumb */}
-      <nav className="no-print flex flex-wrap items-center gap-1 text-sm text-muted-foreground">
-        <Link href="/dashboard" className="hover:text-blue-600">Dashboard</Link>
-        <ChevronRight className="h-3 w-3" />
-        <Link href="/cpv" className="hover:text-blue-600">Continued Process Verification</Link>
-        <ChevronRight className="h-3 w-3" />
-        <span className="font-medium text-slate-900 dark:text-slate-100">CPV Dashboard</span>
-      </nav>
-
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100 sm:text-3xl">CPV Dashboard</h1>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Stage 3 Continued Process Verification — process health, CPP/CQA, capability, SPC, and risk overview
-          </p>
-        </div>
-        <div className="no-print flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
-            <RefreshCw className={`h-4 w-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleExportPdf}>
-            <Download className="h-4 w-4 mr-1" />Export PDF
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleExportExcel}>
-            <FileSpreadsheet className="h-4 w-4 mr-1" />Export Excel
-          </Button>
-        </div>
-      </div>
+      <CpvPageHeader
+        title="CPV Dashboard"
+        description="Stage 3 Continued Process Verification — process health, CPP/CQA, capability, SPC, and risk overview"
+        actions={
+          <div className="no-print flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
+              <RefreshCw className={`h-4 w-4 mr-1 ${refreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleExportPdf}>
+              <Download className="h-4 w-4 mr-1" />Export PDF
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleExportExcel}>
+              <FileSpreadsheet className="h-4 w-4 mr-1" />Export Excel
+            </Button>
+          </div>
+        }
+      />
 
       {data?.truncated && (
         <Card className="no-print border-amber-300 bg-amber-50 dark:bg-amber-950/30">
@@ -590,10 +595,10 @@ export function CpvDashboardPage() {
         <Link href="/cpv/trend-analysis" className="block">
           <KpiCard label="Trend Issues" value={kpis.trendAnalysisIssues} tone={kpis.trendAnalysisIssues ? 'amber' : 'green'} />
         </Link>
-        <Link href="/cpv/control-charts" className="block">
+        <Link href="/cpv/statistical-process-control" className="block">
           <KpiCard label="SPC Charts" value={kpis.spcTotal} tone="blue" />
         </Link>
-        <Link href="/cpv/control-charts" className="block">
+        <Link href="/cpv/statistical-process-control" className="block">
           <KpiCard label="SPC Out Of Control" value={kpis.spcOutOfControl} tone={kpis.spcOutOfControl ? 'red' : 'green'} />
         </Link>
         <Link href="/cpv/raw-material-monitoring" className="block">

@@ -75,7 +75,7 @@ export function CppResultDetailView({ id }: { id: string }) {
   if (error || !record) return <div className="p-4 sm:p-6"><ErrorCard message={error || 'Not found'} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={record.parameterName}
         description={`${record.batchNumber} · ${record.productName}`}
@@ -115,7 +115,7 @@ export function CppResultDetailView({ id }: { id: string }) {
           { href: `/cpv/batch-registration?product=${encodeURIComponent(record.productCode)}`, label: 'Batch Details' },
           { href: '/qms/equipment', label: 'Equipment' },
           { href: '/cpv/trend-analysis', label: 'Trend Analysis' },
-          { href: '/cpv/control-charts', label: 'SPC Dashboard' },
+          { href: '/cpv/statistical-process-control', label: 'SPC Dashboard' },
           { href: `/cpv/cqa?batch=${encodeURIComponent(record.batchNumber)}`, label: 'CQA Monitoring' },
           { href: '/qms/deviation', label: 'Deviation' },
           { href: '/qms/capa', label: 'CAPA' },

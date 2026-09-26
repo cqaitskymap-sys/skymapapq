@@ -1,6 +1,6 @@
 import {
   collection, doc, addDoc, updateDoc, query, where, orderBy, limit,
-  arrayUnion, onSnapshot, getDoc, getDocs, writeBatch, type Unsubscribe,
+  arrayUnion, onSnapshot, getDoc, getDocs, writeBatch, type Unsubscribe, type Query, type QuerySnapshot,
 } from 'firebase/firestore';
 import { createAuditLog } from '@/lib/audit-trail';
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
@@ -255,39 +255,61 @@ export async function markAllNotificationsRead(
   if (!isFirebaseConfigured()) return false;
   try {
     const db = getFirebaseFirestore();
-    const q = query(
-      collection(db, NOTIFICATIONS_COLLECTION),
-      where('userId', '==', userId),
-      where('isRead', '==', false),
-    );
-    const [snap, roleSnap] = await Promise.all([
-      getDocs(q),
+    const col = collection(db, NOTIFICATIONS_COLLECTION);
+    const safeQuery = async (q: Query): Promise<QuerySnapshot | null> => {
+      try {
+        return await getDocs(q);
+      } catch {
+        return null;
+      }
+    };
+    const [userSnap, legacyUserSnap, roleSnap, legacyRoleSnap] = await Promise.all([
+      safeQuery(query(col, where('userId', '==', userId), where('isRead', '==', false))),
+      safeQuery(query(col, where('user_id', '==', userId), where('read', '==', false))),
       recipientRole
-        ? getDocs(query(
-          collection(db, NOTIFICATIONS_COLLECTION),
-          where('recipientRole', '==', recipientRole),
-        ))
+        ? safeQuery(query(col, where('recipientRole', '==', recipientRole)))
+        : Promise.resolve(null),
+      recipientRole
+        ? safeQuery(query(col, where('target_role', '==', recipientRole)))
         : Promise.resolve(null),
     ]);
-    const roleUnreadDocs = (roleSnap?.docs || [])
-      .filter((d) => !((d.data().readBy as string[] | undefined) || []).includes(userId));
-    await Promise.all(
-      [
-        ...snap.docs.map((d) => updateDoc(d.ref, { isRead: true, readStatus: 'Read', readAt: nowIso() })),
-        ...roleUnreadDocs.map((d) => updateDoc(d.ref, {
-            readBy: arrayUnion(userId),
-            [`readAtBy.${userId}`]: nowIso(),
-          })),
-      ],
-    );
-    const updatedCount = snap.size + roleUnreadDocs.length;
-    if (updatedCount > 0) {
+
+    const seen = new Set<string>();
+    const updates: Array<Promise<unknown>> = [];
+    const markUserDoc = (id: string) => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      updates.push(updateDoc(doc(db, NOTIFICATIONS_COLLECTION, id), {
+        isRead: true,
+        read: true,
+        readStatus: 'Read',
+        readAt: nowIso(),
+      }));
+    };
+
+    (userSnap?.docs || []).forEach((d) => markUserDoc(d.id));
+    (legacyUserSnap?.docs || []).forEach((d) => markUserDoc(d.id));
+
+    const roleDocs = [...(roleSnap?.docs || []), ...(legacyRoleSnap?.docs || [])];
+    for (const d of roleDocs) {
+      if (seen.has(d.id)) continue;
+      const readBy = (d.data().readBy as string[] | undefined) || [];
+      if (readBy.includes(userId)) continue;
+      seen.add(d.id);
+      updates.push(updateDoc(d.ref, {
+        readBy: arrayUnion(userId),
+        [`readAtBy.${userId}`]: nowIso(),
+      }));
+    }
+
+    await Promise.all(updates);
+    if (updates.length > 0) {
       await createAuditLog({
         moduleName: 'Admin',
         collectionName: NOTIFICATIONS_COLLECTION,
         recordId: userId,
         actionType: 'Update',
-        actionDescription: `Marked ${updatedCount} notifications as read`,
+        actionDescription: `Marked ${updates.length} notifications as read`,
         user: actor || { id: userId, name: 'User' },
         status: 'Success',
       });

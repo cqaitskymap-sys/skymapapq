@@ -565,7 +565,7 @@ export function UtilityMonitoringPage() {
   if (error) return <div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title="Utility Monitoring"
         description="Monitor critical utilities such as WFI, purified water, compressed air, nitrogen, clean steam and HVAC for CPV"

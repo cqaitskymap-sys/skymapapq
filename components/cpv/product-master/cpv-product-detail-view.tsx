@@ -229,7 +229,7 @@ export function CpvProductDetailView({ id }: { id: string }) {
   }
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={product.productName}
         description={`${product.cpvProductId} · ${product.productCode}`}

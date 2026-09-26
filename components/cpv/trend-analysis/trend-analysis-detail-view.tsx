@@ -13,6 +13,7 @@ import {
   regenerateTrendAnalysis, logTrendExport,
 } from '@/lib/cpv-trend-analysis-service';
 import type { TrendAnalysisRecord } from '@/lib/cpv-trend-records';
+import { downloadCsv, printPage } from '@/lib/export-utils';
 import { CpvPageHeader } from '@/components/cpv/product-master/cpv-page-header';
 import { ParameterTrendChart } from './parameter-trend-chart';
 import { KpiCard } from '@/components/cpv/cpv-ui';
@@ -79,7 +80,7 @@ export function TrendAnalysisDetailView({ id }: { id: string }) {
   const productKey = record.productCode || record.productName;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title={record.parameterName}
         description={`${record.productName} · ${record.trendType} · ${record.trendId}`}
@@ -96,13 +97,32 @@ export function TrendAnalysisDetailView({ id }: { id: string }) {
             </Button>
             {canExport && (
               <>
-                <Button size="sm" variant="outline" onClick={() => void logTrendExport(actor, 'chart', 1)}>
+                <Button size="sm" variant="outline" onClick={() => {
+                  printPage();
+                  void logTrendExport(actor, 'chart', 1);
+                  toast.success('Print dialog opened for chart export');
+                }}>
                   Export Chart
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => void logTrendExport(actor, 'PDF', 1)}>
+                <Button size="sm" variant="outline" onClick={() => {
+                  printPage();
+                  void logTrendExport(actor, 'PDF', 1);
+                  toast.success('Print dialog opened for PDF export');
+                }}>
                   Export PDF
                 </Button>
-                <Button size="sm" variant="outline" onClick={() => void logTrendExport(actor, 'Excel', record.dataPointsCount)}>
+                <Button size="sm" variant="outline" onClick={() => {
+                  const rows = (record.sourcePreview.length ? record.sourcePreview : record.chartData).map((p) => [
+                    p.batchNumber, p.date, p.value, p.lsl ?? '', p.usl ?? '', p.target ?? '',
+                  ]);
+                  downloadCsv(
+                    `trend-${record.trendId || record.id}.csv`,
+                    ['Batch', 'Date', 'Value', 'LSL', 'USL', 'Target'],
+                    rows,
+                  );
+                  void logTrendExport(actor, 'Excel', rows.length);
+                  toast.success(`Exported ${rows.length} data points`);
+                }}>
                   Export Excel
                 </Button>
               </>

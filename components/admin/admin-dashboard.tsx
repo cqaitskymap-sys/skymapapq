@@ -232,7 +232,6 @@ export function AdminDashboard({ basePath = '/admin' }: AdminDashboardProps) {
           <CardContent className="flex flex-wrap gap-2">
             <Button asChild size="sm" variant="outline"><Link href="/admin/users/create"><Plus className="h-4 w-4 mr-1" />Add User</Link></Button>
             <Button asChild size="sm" variant="outline"><Link href={`${adminBase}/roles`}><Shield className="h-4 w-4 mr-1" />Create Role</Link></Button>
-            <Button asChild size="sm" variant="outline"><Link href={`${adminBase}/departments`}><Building2 className="h-4 w-4 mr-1" />Add Department</Link></Button>
             <Button asChild size="sm" variant="outline"><Link href={`${adminBase}/workflows`}><GitBranch className="h-4 w-4 mr-1" />Configure Workflow</Link></Button>
             <Button asChild size="sm" variant="outline"><Link href={`${adminBase}/audit-trail`}><Eye className="h-4 w-4 mr-1" />View Audit Trail</Link></Button>
             <Button asChild size="sm" variant="outline">

@@ -12,7 +12,7 @@ import {
   SITE_TYPES, COMPANY_TYPES, INDUSTRIES, DATE_FORMATS, TIME_FORMATS, CURRENCY_OPTIONS, TIMEZONE_OPTIONS,
   DOSAGE_FORMS, ROUTE_OPTIONS, MARKET_OPTIONS, PRODUCT_STATUSES,
   PRODUCT_LIFECYCLE_STATUSES, PRODUCT_CATEGORIES, PACK_TYPES, CONTAINER_CLOSURE_TYPES,
-  INGREDIENT_TYPES, PRODUCT_ATTACHMENT_TYPES,
+  INGREDIENT_TYPES, PACKING_MATERIAL_TYPES, PRODUCT_ATTACHMENT_TYPES,
   BATCH_STATUSES, RELEASE_STATUSES, BATCH_SIZE_UNITS, QC_STATUSES, QA_STATUSES,
   PARAMETER_CATEGORIES, PARAMETER_GROUPS, PARAMETER_MODULE_OPTIONS,
   PARAMETER_DATA_TYPES, PARAMETER_CALCULATION_TYPES,
@@ -432,9 +432,7 @@ export const productCompositionRowSchema = z.object({
 export const productPackingRowSchema = z.object({
   id: z.string().optional(),
   packingMaterial: z.string().min(1, 'Packing material required'),
-  materialType: z
-    .enum(['Primary Packing', 'Secondary Packing', 'Tertiary Packing'] as const)
-    .default('Primary Packing'),
+  materialType: z.enum(PACKING_MATERIAL_TYPES).default('Primary Packing'),
   packSize: z.string().default(''),
   quantity: z.coerce.number().min(0, 'Quantity must be numeric').default(0),
   unit: z.string().default(''),
@@ -539,6 +537,10 @@ export const productFormSchema = z.object({
   (data) => data.compositions.some((c) => c.ingredientType === 'API'),
   { message: 'At least one API ingredient is required', path: ['compositions'] },
 );
+
+export const productFormEditSchema = productFormSchema.and(z.object({
+  changeReason: z.string().trim().min(5, 'Change reason is required (min 5 characters)').max(500),
+}));
 
 export const productAttachmentSchema = z.object({
   id: z.string().optional(),

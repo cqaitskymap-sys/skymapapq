@@ -5,7 +5,7 @@
 import {
   collection, limit, onSnapshot, orderBy, query, type Unsubscribe,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import { ADMIN_COLLECTIONS } from './constants';
 import { getFirebaseFirestore, getFirebaseFunctions, isFirebaseConfigured } from '@/lib/firebase';
 import { shouldSkipRemoteCallablesInLocalDev } from '@/lib/audit-trail';

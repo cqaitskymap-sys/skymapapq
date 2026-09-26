@@ -1,6 +1,13 @@
-import { redirect } from 'next/navigation';
+import { SpcAccessGuard } from '@/components/cpv/statistical-process-control/spc-access-guard';
+import { SpcDetailView } from '@/components/cpv/statistical-process-control/spc-detail-view';
 
-export default async function StatisticalProcessControlDetailAliasPage(props: { params: Promise<{ id: string }> }) {
+export const dynamic = 'force-dynamic';
+
+export default async function StatisticalProcessControlDetailPage(props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  redirect(`/cpv/control-charts/${params.id}`);
+  return (
+    <SpcAccessGuard>
+      <SpcDetailView id={params.id} />
+    </SpcAccessGuard>
+  );
 }

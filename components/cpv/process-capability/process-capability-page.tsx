@@ -306,7 +306,7 @@ export function ProcessCapabilityPage() {
   if (error) return <div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title="Process Capability"
         description="Enterprise Cp/Cpk/Pp/Ppk with SPC, AI health scoring, and Part 11 controls"

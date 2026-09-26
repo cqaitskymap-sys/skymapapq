@@ -2,7 +2,7 @@ import {
   collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { getFirebaseApp, getFirebaseFirestore, getFirebaseStorage, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import { ADMIN_COLLECTIONS, PRODUCT_ATTACHMENT_MAX_BYTES, PRODUCT_LIFECYCLE_STATUSES } from './constants';
@@ -17,8 +17,17 @@ export interface ProductAuditMeta {
 }
 
 function callableErrorMessage(error: unknown, fallback: string): string {
-  const err = error as { message?: string };
-  return (err.message || fallback)
+  const err = error as { code?: string; message?: string };
+  const code = String(err.code || '').toLowerCase();
+  const raw = String(err.message || '');
+  if (
+    code.includes('unavailable')
+    || code.includes('internal')
+    || /not serving|returned 50[03]|check billing|failed to fetch/i.test(raw)
+  ) {
+    return 'Cloud Functions are unavailable for this Firebase project (billing is off or the function is not serving). Enable Blaze billing on apq-skymap, wait a few minutes, then create the product again.';
+  }
+  return (raw || fallback)
     .replace(/^Firebase:\s*/i, '')
     .replace(/\s*\([^)]*\)\s*$/, '')
     .trim() || fallback;
@@ -138,7 +147,7 @@ export async function fetchProductCompositions(productId: string): Promise<Produ
       .filter((row) => !(row as { isDeleted?: boolean }).isDeleted);
   } catch (error) {
     console.error('fetchProductCompositions failed:', error);
-    return [];
+    throw new Error('Unable to load product composition.');
   }
 }
 
@@ -154,7 +163,7 @@ export async function fetchProductPacking(productId: string): Promise<ProductPac
       .filter((row) => !(row as { isDeleted?: boolean }).isDeleted);
   } catch (error) {
     console.error('fetchProductPacking failed:', error);
-    return [];
+    throw new Error('Unable to load product packing details.');
   }
 }
 
@@ -703,19 +712,6 @@ function makeUniqueImportCode(code: string, mfrNumber: string, seen: Set<string>
   return unique;
 }
 
-function defaultImportComposition(): ProductFormData['compositions'] {
-  return [{
-    ingredientName: 'API',
-    ingredientType: 'API',
-    grade: '',
-    quantity: 1,
-    unit: 'mg',
-    functionPurpose: '',
-    specificationNo: '',
-    stpNo: '',
-  }];
-}
-
 function rowToImportProduct(
   row: ProductImportRow,
   seenCodes: Set<string>,
@@ -765,7 +761,7 @@ function rowToImportProduct(
     productStatus: row.productStatus || parseImportStatus(row.remarks || ''),
     description: '',
     remarks: row.remarks || 'Imported',
-    compositions: row.compositions || defaultImportComposition(),
+    compositions: row.compositions || [],
     packingDetails: row.packingDetails || [],
   };
 }
@@ -815,7 +811,7 @@ export function parseProductImportRows(text: string): ProductImportRow[] {
           productStatus: parseImportStatus(smart.remarks),
           dosageForm: inferDosageForm(smart.productName),
           shelfLife: '24',
-          compositions: defaultImportComposition(),
+          compositions: [],
           packingDetails: [],
         };
       }
@@ -836,7 +832,7 @@ export function parseProductImportRows(text: string): ProductImportRow[] {
         dosageForm: (cols[formI] || inferDosageForm(cols[nameI] || '')) as ProductFormData['dosageForm'],
         market: (cols[marketI] || 'Domestic') as ProductFormData['market'],
         shelfLife: cols[shelfI] || '24',
-        compositions: defaultImportComposition(),
+        compositions: [],
         packingDetails: [],
       };
     })

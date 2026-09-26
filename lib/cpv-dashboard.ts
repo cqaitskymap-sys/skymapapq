@@ -326,15 +326,16 @@ export function filterGenericCpvRows(
   filters: CpvDashboardFilters,
 ): Record<string, unknown>[] {
   return rows.filter((row) => {
+    if (row.isDeleted === true || row.is_deleted === true) return false;
     const productName = String(row.productName || row.product_name || row.product || '');
     const batchNo = String(row.batchNo || row.batch_no || row.batch_number || row.batchNumber || '');
     const status = String(row.status || '');
-    if (filters.product && filters.product !== 'all' && productName && productName !== filters.product) return false;
-    if (filters.batchNo && filters.batchNo !== 'all' && batchNo && batchNo !== filters.batchNo) return false;
-    if (filters.status && filters.status !== 'all' && status && status.toLowerCase() !== filters.status.toLowerCase()) return false;
+    if (filters.product && filters.product !== 'all' && productName !== filters.product) return false;
+    if (filters.batchNo && filters.batchNo !== 'all' && batchNo !== filters.batchNo) return false;
+    if (filters.status && filters.status !== 'all' && status.toLowerCase() !== filters.status.toLowerCase()) return false;
     if (filters.riskLevel && filters.riskLevel !== 'all') {
       const risk = String(row.riskLevel || row.risk_level || '');
-      if (risk && risk !== filters.riskLevel) return false;
+      if (risk !== filters.riskLevel) return false;
     }
     const dated = {
       manufacturingDate: String(row.manufacturingDate || row.manufacturing_date || row.testDate || row.test_date || ''),

@@ -67,7 +67,7 @@ export const LAUNCHER_MODULES: LauncherModule[] = [
     navGroupLabel: 'Continued Process Verification',
     keywords: ['cpv', 'process verification', 'spc', 'trend', 'monitoring', 'cpp', 'cqa', 'alerts', 'batches'],
     permissionModules: ['cpv'],
-    submoduleCount: 24,
+    submoduleCount: 22,
   },
   {
     id: 'pqr',
@@ -100,15 +100,15 @@ export const LAUNCHER_MODULES: LauncherModule[] = [
   {
     id: 'master-data',
     name: 'Master Data',
-    description: 'Products, materials, vendors & reference data management',
+    description: 'Products, equipment, batches, parameters, departments, sites, materials & vendors',
     href: '/admin/products',
     icon: Database,
     emoji: '📂',
     color: 'from-emerald-500 to-green-500',
     iconBg: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400',
     navGroupLabel: 'Master Data',
-    keywords: ['master data', 'product', 'material', 'vendor', 'abbreviation'],
-    submoduleCount: 4,
+    keywords: ['master data', 'product', 'equipment', 'batch', 'parameter', 'department', 'designation', 'site', 'material', 'vendor', 'import', 'export'],
+    submoduleCount: 10,
   },
   {
     id: 'reports',
@@ -135,7 +135,7 @@ export const LAUNCHER_MODULES: LauncherModule[] = [
     navGroupLabel: 'Admin',
     keywords: ['admin', 'administration', 'users', 'roles', 'settings'],
     permissionModules: ['admin'],
-    submoduleCount: 19,
+    submoduleCount: 13,
   },
 ];
 

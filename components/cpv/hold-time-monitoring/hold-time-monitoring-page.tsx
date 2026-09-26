@@ -427,7 +427,7 @@ export function HoldTimeMonitoringPage() {
   if (error) return <div className="p-4 sm:p-6"><ErrorCard message={error} onRetry={load} /></div>;
 
   return (
-    <div className="space-y-6 p-4 sm:p-6">
+    <div className="space-y-6">
       <CpvPageHeader
         title="Hold Time Monitoring"
         description="Validated hold-time limits with live countdown, SPC, and Part 11 controls"

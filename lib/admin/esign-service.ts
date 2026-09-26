@@ -2,7 +2,7 @@ import {
   EmailAuthProvider, reauthenticateWithCredential,
 } from 'firebase/auth';
 import { doc, getDoc, updateDoc, collection, getDocs, limit, orderBy, query } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from '@/lib/callable';
 import { createAuditLog } from '@/lib/audit-trail';
 import { getFirebaseAuth, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
 import {
@@ -230,6 +230,7 @@ export async function performEsign(input: PerformEsignInput): Promise<PerformEsi
       }
       const credential = EmailAuthProvider.credential(input.userEmail, input.password);
       await reauthenticateWithCredential(currentUser, credential);
+      await currentUser.getIdToken(true);
       clientReauthAt = new Date().toISOString();
     } catch {
       const maxAttempts = normalized?.maxFailedEsignAttempts ?? 3;
@@ -296,7 +297,7 @@ export async function performEsign(input: PerformEsignInput): Promise<PerformEsi
       reasonComment: input.reasonComment,
       authenticationStatus: 'Success',
       isTest: input.isTest,
-      clientReauthAt: clientReauthAt || new Date().toISOString(),
+      clientReauthAt: clientReauthAt || undefined,
       department: input.department,
       workflowId: input.workflowId,
       approvalLevel: input.approvalLevel,

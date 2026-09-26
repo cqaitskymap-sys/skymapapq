@@ -2,8 +2,8 @@ import {
   collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, where,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
 import { getFirebaseApp, getFirebaseFirestore, isFirebaseConfigured, getFirebaseFunctions } from '@/lib/firebase';
+import { httpsCallable } from '@/lib/callable';
 import { shouldSkipRemoteCallablesInLocalDev } from '@/lib/audit-trail';
 import { ADMIN_COLLECTIONS, LOGIN_STATUSES } from './constants';
 import type { LoginActivity } from './schemas';

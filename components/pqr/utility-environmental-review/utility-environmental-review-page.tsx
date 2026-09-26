@@ -163,7 +163,13 @@ export function UtilityEnvironmentalReviewPage() {
     finally { setBusy(false); }
   }, []);
 
-  useEffect(() => { void loadPqrs(); void logUtilityEnvReviewView(actor); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void loadPqrs(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const viewLogged = useRef(false);
+  useEffect(() => {
+    if (viewLogged.current || actor.id === 'system') return;
+    viewLogged.current = true;
+    void logUtilityEnvReviewView(actor);
+  }, [actor]);
 
   useEffect(() => {
     if (selectedPqrId) {
@@ -331,7 +337,7 @@ export function UtilityEnvironmentalReviewPage() {
 
   return (
     <UtilityEnvReviewAccessGuard>
-      <div className="space-y-6 p-4 sm:p-6">
+      <div className="space-y-6">
         <CpvPageHeader
           title="Utility & Environmental Review"
           description="Review utility performance and cleanroom environmental monitoring during the PQR period"

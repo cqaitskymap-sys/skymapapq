@@ -180,7 +180,7 @@ export function PqrApprovalPage() {
 
   return (
     <PqrApprovalAccessGuard>
-      <div className="space-y-6 p-4 sm:p-6">
+      <div className="space-y-6">
         <CpvPageHeader
           title="PQR Approval"
           description="Review, approve and electronically sign Product Quality Review documents"
