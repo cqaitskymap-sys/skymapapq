@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev -p 3001",
     "dev:fresh": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true})\" && next dev -p 3001",
-    "build": "node --max-old-space-size=8192 ./node_modules/next/dist/bin/next build",
+    "build": "node scripts/next-build.mjs",
     "generate:loaders": "node scripts/generate-route-loaders.mjs",
     "start": "next start",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx --max-warnings=0",

@@ -1,5 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  experimental: {
+    // Webpack worker inherits NODE_OPTIONS from scripts/next-build.mjs
+    // (isolatedMemory is false). Static page-data workers stay at 1 CPU.
+    webpackBuildWorker: true,
+    webpackMemoryOptimizations: true,
+    cpus: 1,
+  },
   async headers() {
     return [{
       source: '/(.*)',
