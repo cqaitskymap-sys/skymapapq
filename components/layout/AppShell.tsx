@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Header } from '@/components/layout/header';
@@ -16,6 +16,11 @@ interface AppShellProps {
 export function AppShell({ children, className }: AppShellProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    const main = document.getElementById('main-content');
+    main?.scrollTo(0, 0);
+  }, [pathname]);
 
   return (
     <div className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-background">

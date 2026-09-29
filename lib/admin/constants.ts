@@ -773,7 +773,7 @@ export const PACK_TYPES = [
 ] as const;
 
 export const CONTAINER_CLOSURE_TYPES = [
-  'Rubber Stopper', 'Aluminium Seal', 'Flip-off Cap', 'Screw Cap', 'Child-resistant Cap', 'Other',
+  'Ampoule', 'Rubber Stopper', 'Aluminium Seal', 'Flip-off Cap', 'Screw Cap', 'Child-resistant Cap', 'Other',
 ] as const;
 
 export const INGREDIENT_TYPES = [

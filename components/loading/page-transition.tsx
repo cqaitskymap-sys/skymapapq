@@ -1,67 +1,46 @@
 'use client';
 
 import { ReactNode } from 'react';
-import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { cn } from '@/lib/utils';
-
-type TransitionVariant = 'fade' | 'scale' | 'slide' | 'blur';
-
-const variants = {
-  fade: {
-    initial: { opacity: 0 },
-    animate: { opacity: 1 },
-    exit: { opacity: 0 },
-  },
-  scale: {
-    initial: { opacity: 0, scale: 0.98 },
-    animate: { opacity: 1, scale: 1 },
-    exit: { opacity: 0, scale: 0.99 },
-  },
-  slide: {
-    initial: { opacity: 0, y: 12 },
-    animate: { opacity: 1, y: 0 },
-    exit: { opacity: 0, y: -8 },
-  },
-  blur: {
-    initial: { opacity: 0, filter: 'blur(6px)' },
-    animate: { opacity: 1, filter: 'blur(0px)' },
-    exit: { opacity: 0, filter: 'blur(4px)' },
-  },
-};
 
 interface PageTransitionProps {
   children: ReactNode;
   className?: string;
-  variant?: TransitionVariant;
+  /** @deprecated variant is ignored; kept for call-site compatibility */
+  variant?: 'fade' | 'scale' | 'slide' | 'blur';
   routeKey?: string;
 }
 
+/**
+ * Route content wrapper. Avoid AnimatePresence `mode="wait"` here — it left the main
+ * panel empty when switching between sibling routes (e.g. Material ↔ Vendor Master).
+ */
 export function PageTransition({
   children,
   className,
-  variant = 'fade',
   routeKey,
 }: PageTransitionProps) {
   const reducedMotion = useReducedMotion();
-  const v = variants[variant];
 
   if (reducedMotion) {
-    return <div className={className}>{children}</div>;
+    return (
+      <div key={routeKey} className={className}>
+        {children}
+      </div>
+    );
   }
 
   return (
-    <AnimatePresence mode="wait">
-      <motion.div
-        key={routeKey}
-        className={cn('will-change-[opacity,transform]', className)}
-        initial={v.initial}
-        animate={v.animate}
-        exit={v.exit}
-        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-      >
-        {children}
-      </motion.div>
-    </AnimatePresence>
+    <motion.div
+      key={routeKey}
+      className={cn('min-h-full', className)}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.12, ease: 'easeOut' }}
+    >
+      {children}
+    </motion.div>
   );
 }
 

@@ -174,6 +174,12 @@ export function formatBreadcrumbLabel(segment: string, pathname?: string): strin
   if (pathname && segment === 'admin' && isMasterDataPath(pathname)) {
     return 'Master Data';
   }
+  if (pathname && segment === 'vendors' && pathname.startsWith('/dashboard/master/')) {
+    return 'Vendor Master';
+  }
+  if (pathname && segment === 'materials' && pathname.startsWith('/dashboard/master/')) {
+    return 'Material Master';
+  }
   if (pathname && segment === 'equipment' && isMasterDataPath(pathname)) {
     return 'Equipment Master';
   }

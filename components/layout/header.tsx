@@ -20,6 +20,36 @@ import { isMasterDataPath, MASTER_DATA_HOME } from '@/lib/launcher/module-scope'
 
 const RECORD_ID_RE = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[A-Za-z0-9_-]{18,})$/i;
 
+/** Folder URLs that only redirect. Breadcrumbs link to the real page so prefetch does not 404. */
+const FOLDER_CRUMB_HREFS: Record<string, string> = {
+  '/dashboard/master': MASTER_DATA_HOME,
+  '/qms/document-control': '/qms/documents/external',
+  '/qms/document-management': '/qms/documents/lifecycle',
+  '/qms/system': '/qms/system/electronic-signatures',
+};
+
+const RISK_STATIC_SEGMENTS = new Set([
+  'create', 'new', 'fmea', 'mitigation', 'review-monitoring', 'reports',
+  'risk-review', 'analytics', 'audit-trail', 'dashboard', 'approval', 'closure',
+]);
+
+function crumbHref(path: string, pathname: string): string {
+  const folder = FOLDER_CRUMB_HREFS[path];
+  if (folder) return folder;
+  if ((path === '/admin' || path === '/dashboard/admin') && isMasterDataPath(pathname)) {
+    return MASTER_DATA_HOME;
+  }
+  const risk = path.match(/^\/qms\/risk-management\/([^/]+)$/);
+  if (risk && !RISK_STATIC_SEGMENTS.has(risk[1])) {
+    return `/qms/risk-management/${risk[1]}/fmea`;
+  }
+  const batch = path.match(/^\/dashboard\/pqr\/([^/]+)\/batches\/([^/]+)$/);
+  if (batch && batch[2] !== 'create') {
+    return `/dashboard/pqr/${batch[1]}/batches`;
+  }
+  return path;
+}
+
 function getBreadcrumbs(pathname: string) {
   const parts = pathname.split('/').filter(Boolean);
   const crumbs = [{ label: 'Home', href: '/launcher' }];
@@ -27,9 +57,7 @@ function getBreadcrumbs(pathname: string) {
   for (const part of parts) {
     path += `/${part}`;
     if (path === '/dashboard') continue;
-    const href = (path === '/admin' || path === '/dashboard/admin') && isMasterDataPath(pathname)
-      ? MASTER_DATA_HOME
-      : path;
+    const href = crumbHref(path, pathname);
     const label = RECORD_ID_RE.test(part) ? 'Record' : formatBreadcrumbLabel(part, pathname);
     crumbs.push({ label, href });
   }

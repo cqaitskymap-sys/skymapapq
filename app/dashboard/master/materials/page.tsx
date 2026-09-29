@@ -10,25 +10,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Plus, Edit, Trash2, Search, Beaker, Download } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
-import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, orderBy, query } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { getFirebaseFirestore } from '@/lib/firebase';
 import { PageLoader } from '@/components/loaders/page-loader';
+import { getMaterialMasters } from '@/lib/material-service';
+import { materialMasterToDashboardRow, type DashboardMaterialRow } from '@/lib/dashboard-material-master-map';
 
-interface Material {
-  id: string;
-  material_code: string;
-  material_name: string;
-  material_type: 'api' | 'raw_material' | 'excipient' | 'solvent' | 'preservative' | 'buffer' | 'ph_adjuster' | 'other';
-  grade: string;
-  specification_no: string;
-  stp_no: string;
-  approved_vendor_required: boolean;
-  storage_condition: string;
-  retest_period: string;
-  shelf_life: string;
-  status: 'active' | 'inactive' | 'blocked';
-  remarks: string;
-}
+type Material = DashboardMaterialRow;
 
 const materialTypeOptions = [
   { value: 'api', label: 'API' },
@@ -72,7 +60,7 @@ function getStatusColor(status: Material['status']) {
     inactive: 'bg-gray-100 text-gray-800',
     blocked: 'bg-red-100 text-red-800',
   };
-  return colors[status];
+  return colors[status] ?? 'bg-gray-100 text-gray-800';
 }
 
 export default function MaterialMasterPage() {
@@ -99,30 +87,31 @@ export default function MaterialMasterPage() {
   });
 
   useEffect(() => {
-    fetchMaterials();
+    void fetchMaterials();
   }, []);
 
   const fetchMaterials = async () => {
+    setIsLoading(true);
     try {
-      const q = query(collection(getFirebaseFirestore(), 'material_master'), orderBy('material_code'));
-      const querySnapshot = await getDocs(q);
-      const data = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as Material[];
-      setMaterials(data);
+      const rows = await getMaterialMasters();
+      setMaterials(
+        rows
+          .filter((row) => row.id)
+          .map((row) => materialMasterToDashboardRow({ ...row, id: row.id! })),
+      );
     } catch (error) {
       console.error('Error fetching materials:', error);
+      setMaterials([]);
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   };
 
-  if (isLoading) return <PageLoader />;
-
   const filtered = materials.filter(m => {
-    const matchesSearch =
-      m.material_code.toLowerCase().includes(search.toLowerCase()) ||
-      m.material_name.toLowerCase().includes(search.toLowerCase());
+    const code = (m.material_code ?? (m as { materialCode?: string }).materialCode ?? '').toLowerCase();
+    const name = (m.material_name ?? (m as { materialName?: string }).materialName ?? '').toLowerCase();
+    const q = search.toLowerCase();
+    const matchesSearch = code.includes(q) || name.includes(q);
     const matchesType = filterType === 'all' || m.material_type === filterType;
     const matchesStatus = filterStatus === 'all' || m.status === filterStatus;
     return matchesSearch && matchesType && matchesStatus;
@@ -230,7 +219,12 @@ export default function MaterialMasterPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="relative space-y-6">
+      {isLoading && (
+        <div className="absolute inset-0 z-20 flex min-h-[16rem] items-start justify-center rounded-lg bg-background/80 pt-16 backdrop-blur-[1px]">
+          <PageLoader message="Loading material master…" />
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Material Master</h1>

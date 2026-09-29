@@ -199,7 +199,7 @@ export function ProductDetailView({ id }: { id: string }) {
               ))}
               {product.description && (
                 <div className="sm:col-span-2 md:col-span-3">
-                  <p className="text-xs text-muted-foreground">Label change</p>
+                  <p className="text-xs text-muted-foreground">Label claim</p>
                   <p className="font-medium">{product.description}</p>
                 </div>
               )}

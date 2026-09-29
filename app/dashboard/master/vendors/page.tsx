@@ -8,56 +8,26 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Plus, Edit, Trash2, Search, Building2, Shield } from 'lucide-react';
+import { Plus, Edit, Trash2, Search, Building2, Shield, AlertCircle } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
-import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, orderBy, query } from 'firebase/firestore';
-import { getFirebaseFirestore } from '@/lib/firebase';
 import { PageLoader } from '@/components/loaders/page-loader';
+import { useAuth } from '@/contexts/auth-context';
+import {
+  createVendorMaster,
+  deleteVendorMaster,
+  getVendorMasters,
+  updateVendorMaster,
+} from '@/lib/material-service';
+import {
+  dashboardVendorFormToMaster,
+  vendorMasterToDashboardRow,
+  type DashboardVendorRow,
+} from '@/lib/dashboard-vendor-master-map';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
-type VendorType = 'manufacturer' | 'supplier' | 'manufacturer_supplier';
-type AvlStatus = 'approved' | 'not_approved' | 'conditional_approved' | 'blocked';
-type RiskCategory = 'low' | 'medium' | 'high';
-type VendorStatus = 'active' | 'inactive' | 'blocked';
+type Vendor = DashboardVendorRow;
 
-interface Vendor {
-  id: string;
-  vendor_code: string;
-  vendor_name: string;
-  vendor_type: VendorType;
-  material_supplied: string;
-  manufacturer_name: string;
-  supplier_name: string;
-  address: string;
-  country: string;
-  avl_status: AvlStatus;
-  approval_date: string;
-  approval_expiry_date: string;
-  last_audit_date: string;
-  next_audit_due_date: string;
-  risk_category: RiskCategory;
-  status: VendorStatus;
-  remarks: string;
-  created_at: string;
-}
-
-interface VendorForm {
-  vendor_code: string;
-  vendor_name: string;
-  vendor_type: VendorType;
-  material_supplied: string;
-  manufacturer_name: string;
-  supplier_name: string;
-  address: string;
-  country: string;
-  avl_status: AvlStatus;
-  approval_date: string;
-  approval_expiry_date: string;
-  last_audit_date: string;
-  next_audit_due_date: string;
-  risk_category: RiskCategory;
-  status: VendorStatus;
-  remarks: string;
-}
+type VendorForm = Omit<Vendor, 'id' | 'created_at'>;
 
 const emptyForm: VendorForm = {
   vendor_code: '',
@@ -79,41 +49,46 @@ const emptyForm: VendorForm = {
 };
 
 export default function VendorMasterPage() {
+  const { user } = useAuth();
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [search, setSearch] = useState('');
   const [filterAvlStatus, setFilterAvlStatus] = useState('all');
   const [filterVendorType, setFilterVendorType] = useState('all');
   const [filterRiskCategory, setFilterRiskCategory] = useState('all');
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
 
   useEffect(() => {
-    fetchVendors();
+    void fetchVendors();
   }, []);
 
   const fetchVendors = async () => {
+    setLoadError(null);
+    setIsLoading(true);
     try {
-      const q = query(collection(getFirebaseFirestore(), 'vendor_master'), orderBy('vendor_code'));
-      const querySnapshot = await getDocs(q);
-      const data = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as Vendor[];
-      setVendors(data);
+      const rows = await getVendorMasters();
+      setVendors(
+        rows
+          .filter((row) => row.id)
+          .map((row) => vendorMasterToDashboardRow({ ...row, id: row.id! })),
+      );
     } catch (error) {
       console.error('Error fetching vendors:', error);
+      setLoadError('Could not load vendor master data. Please refresh or contact your administrator.');
+      setVendors([]);
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   };
 
-  if (isLoading) return <PageLoader />;
-
   const filtered = vendors.filter(v => {
-    const matchesSearch =
-      v.vendor_code.toLowerCase().includes(search.toLowerCase()) ||
-      v.vendor_name.toLowerCase().includes(search.toLowerCase());
+    const code = (v.vendor_code ?? '').toLowerCase();
+    const name = (v.vendor_name ?? '').toLowerCase();
+    const q = search.toLowerCase();
+    const matchesSearch = code.includes(q) || name.includes(q);
     const matchesAvlStatus = filterAvlStatus === 'all' || v.avl_status === filterAvlStatus;
     const matchesVendorType = filterVendorType === 'all' || v.vendor_type === filterVendorType;
     const matchesRiskCategory = filterRiskCategory === 'all' || v.risk_category === filterRiskCategory;
@@ -134,17 +109,19 @@ export default function VendorMasterPage() {
       return;
     }
 
+    const actorId = user?.uid ?? 'dashboard-vendor-master';
+    const payload = dashboardVendorFormToMaster(form);
+
     try {
       if (editingId) {
-        await updateDoc(doc(getFirebaseFirestore(), 'vendor_master', editingId), { ...form });
+        await updateVendorMaster(editingId, payload, actorId);
       } else {
-        const vendorRef = doc(collection(getFirebaseFirestore(), 'vendor_master'));
-        await setDoc(vendorRef, form);
+        await createVendorMaster(payload, actorId);
       }
       setDialogOpen(false);
       setEditingId(null);
       setForm(emptyForm);
-      fetchVendors();
+      await fetchVendors();
     } catch (error) {
       console.error('Error saving vendor:', error);
       alert(`Error saving vendor: ${(error as Error).message}`);
@@ -177,8 +154,8 @@ export default function VendorMasterPage() {
   const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to delete this vendor?')) {
       try {
-        await deleteDoc(doc(getFirebaseFirestore(), 'vendor_master', id));
-        fetchVendors();
+        await deleteVendorMaster(id);
+        await fetchVendors();
       } catch (error) {
         console.error('Error deleting vendor:', error);
         alert(`Error deleting vendor: ${(error as Error).message}`);
@@ -225,7 +202,25 @@ export default function VendorMasterPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="relative space-y-6">
+      {isLoading && (
+        <div className="absolute inset-0 z-20 flex min-h-[16rem] items-start justify-center rounded-lg bg-background/80 pt-16 backdrop-blur-[1px]">
+          <PageLoader message="Loading vendor master…" />
+        </div>
+      )}
+      {loadError && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Unable to load vendors</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-3">
+            <span>{loadError}</span>
+            <Button type="button" variant="outline" size="sm" onClick={() => void fetchVendors()}>
+              Retry
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

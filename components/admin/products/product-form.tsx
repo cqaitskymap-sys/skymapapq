@@ -220,7 +220,7 @@ export function ProductForm({ initial, readOnly, onSubmit, onCancel, submitting 
       </Card>
 
       <Card>
-        <CardHeader><CardTitle className="text-base">Label Change</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">Label Claim</CardTitle></CardHeader>
         <CardContent>
           <Textarea {...form.register('description')} disabled={readOnly} rows={3} placeholder="Product label for reports and integrations" />
           <div className="mt-4 space-y-2">
