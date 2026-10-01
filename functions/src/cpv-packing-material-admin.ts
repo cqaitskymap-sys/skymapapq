@@ -87,7 +87,7 @@ const MATERIAL_TYPES = [
 ] as const;
 
 const MATERIAL_CATEGORIES = [
-  'Vial', 'Rubber Stopper', 'Flip Off Seal', 'Label', 'Carton',
+  'Vial', 'Ampoule', 'Rubber Stopper', 'Flip Off Seal', 'Label', 'Carton',
   'Package Insert / Leaflet', 'Shipper Box', 'PVC Film', 'BOPP Tape',
   'Bottle', 'Cap', 'Closure', 'Foil', 'Blister', 'Insert', 'Leaflet',
   'Tube', 'Sachet', 'Pouch', 'Printed Material', 'Other',

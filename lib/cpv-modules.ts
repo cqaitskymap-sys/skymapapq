@@ -26,7 +26,7 @@ export const YIELD_STAGES = ['Bulk Yield', 'Filling Yield', 'Packing Yield'] as 
 export const UTILITY_TYPES = ['Purified Water', 'WFI', 'Compressed Air', 'Nitrogen', 'Steam'] as const;
 export const UTILITY_PARAMS = ['Conductivity', 'TOC', 'Microbial Count', 'Pressure', 'Temperature'] as const;
 export const EM_GRADES = ['A', 'B', 'C', 'D'] as const;
-export const PACKING_TYPES = ['Vial', 'Rubber Stopper', 'Flip Off Seal', 'Carton', 'Label'] as const;
+export const PACKING_TYPES = ['Vial', 'Ampoule', 'Rubber Stopper', 'Flip Off Seal', 'Carton', 'Label'] as const;
 export const ALERT_TYPES = ['Limit Exceeded', 'Cpk Low', 'Trend Deteriorating', 'OOT', 'Risk High'] as const;
 export const ALERT_SEVERITIES = ['Low', 'Medium', 'High', 'Critical'] as const;
 

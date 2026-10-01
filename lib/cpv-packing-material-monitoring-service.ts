@@ -569,7 +569,7 @@ export function mapPackagingType(pmType: string): PackingMaterialMonitoringFormD
 
 export function mapPackagingCategory(category: string): PackingMaterialMonitoringFormData['materialCategory'] {
   const map: Record<string, PackingMaterialMonitoringFormData['materialCategory']> = {
-    Vial: 'Vial', Label: 'Label', Carton: 'Carton', 'Rubber Stopper': 'Rubber Stopper',
+    Vial: 'Vial', Ampoule: 'Ampoule', Label: 'Label', Carton: 'Carton', 'Rubber Stopper': 'Rubber Stopper',
     'Flip Off Seal': 'Flip Off Seal', 'Package Insert / Leaflet': 'Package Insert / Leaflet',
     'Shipper Box': 'Shipper Box', 'PVC Film': 'PVC Film', 'BOPP Tape': 'BOPP Tape',
     Bottle: 'Bottle', Cap: 'Cap', Closure: 'Closure', Foil: 'Foil', Blister: 'Blister',
