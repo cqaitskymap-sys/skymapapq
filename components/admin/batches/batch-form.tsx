@@ -231,8 +231,6 @@ export function BatchForm({
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
           {[
             { key: 'productName', label: 'Product Name' },
-            { key: 'productVersion', label: 'Product Version' },
-            { key: 'productCategory', label: 'Product Category' },
             { key: 'genericName', label: 'Generic Name' },
             { key: 'strength', label: 'Strength' },
             { key: 'dosageForm', label: 'Dosage Form' },
@@ -240,7 +238,6 @@ export function BatchForm({
             { key: 'mfrNumber', label: 'MFR Number' },
             { key: 'bmrNumber', label: 'BMR Number' },
             { key: 'bprNumber', label: 'BPR Number' },
-            { key: 'batchPrefix', label: 'Batch Prefix' },
             { key: 'shelfLife', label: 'Shelf Life' },
           ].map((f) => (
             <div key={f.key} className="space-y-2">
@@ -273,10 +270,6 @@ export function BatchForm({
             </Select>
           </div>
           <div className="space-y-2">
-            <Label>Planned Quantity</Label>
-            <Input type="number" {...form.register('plannedQuantity', { valueAsNumber: true })} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
             <Label>Actual Quantity</Label>
             <Input type="number" {...form.register('actualQuantity', { valueAsNumber: true })} disabled={readOnly} />
           </div>
@@ -286,37 +279,13 @@ export function BatchForm({
             {form.formState.errors.manufacturingDate && <p className="text-xs text-red-500">{form.formState.errors.manufacturingDate.message}</p>}
           </div>
           <div className="space-y-2">
-            <Label>Packaging Date</Label>
-            <Input type="date" {...form.register('packagingDate')} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
             <Label>Expiry Date *</Label>
             <Input type="date" {...form.register('expiryDate')} disabled={locked} />
             {form.formState.errors.expiryDate && <p className="text-xs text-red-500">{form.formState.errors.expiryDate.message}</p>}
           </div>
           <div className="space-y-2">
-            <Label>Retest Date</Label>
-            <Input type="date" {...form.register('retestDate')} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
             <Label>Manufacturing Site</Label>
             <Input {...form.register('manufacturingSite')} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
-            <Label>Business Unit</Label>
-            <Input {...form.register('businessUnit')} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
-            <Label>Department</Label>
-            <Input {...form.register('department')} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
-            <Label>Warehouse</Label>
-            <Input {...form.register('warehouse')} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
-            <Label>Storage Location</Label>
-            <Input {...form.register('storageLocation')} disabled={readOnly} />
           </div>
           <div className="space-y-2">
             <Label>Manufacturing Line</Label>
@@ -325,14 +294,6 @@ export function BatchForm({
           <div className="space-y-2">
             <Label>Equipment</Label>
             <Input {...form.register('equipment')} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
-            <Label>Process Version</Label>
-            <Input {...form.register('processVersion')} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
-            <Label>Recipe Version</Label>
-            <Input {...form.register('recipeVersion')} disabled={readOnly} />
           </div>
           <div className="space-y-2">
             <Label>Shift</Label>
@@ -351,7 +312,7 @@ export function BatchForm({
 
       <Card>
         <CardHeader><CardTitle className="text-base">Additional Batch Numbers</CardTitle></CardHeader>
-        <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Semi Finished Batch</Label>
             <Input {...form.register('semiFinishedBatchNumber')} disabled={readOnly} />
@@ -359,10 +320,6 @@ export function BatchForm({
           <div className="space-y-2">
             <Label>Finished Product Batch</Label>
             <Input {...form.register('finishedProductBatchNumber')} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
-            <Label>Packing Batch</Label>
-            <Input {...form.register('packingBatchNumber')} disabled={readOnly} />
           </div>
         </CardContent>
       </Card>
@@ -421,10 +378,6 @@ export function BatchForm({
                 {QA_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
               </SelectContent>
             </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>Release Date</Label>
-            <Input type="date" {...form.register('releaseDate')} disabled={readOnly} />
           </div>
           <div className="space-y-2">
             <Label>QA Released By</Label>

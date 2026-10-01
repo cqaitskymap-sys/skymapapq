@@ -519,7 +519,7 @@ export const productFormSchema = z.object({
   licenseNumber: z.string().default(''),
   mfrNumber: z.string().default(''),
   bmrNumber: z.string().default(''),
-  bprNumber: z.string().default(''),
+  bprNumber: z.string().max(500, 'BPR numbers are too long').default(''),
   specificationNumber: z.string().default(''),
   stpNumber: z.string().default(''),
   batchPrefix: z.string().default(''),

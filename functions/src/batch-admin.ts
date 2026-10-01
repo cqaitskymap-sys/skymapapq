@@ -430,7 +430,7 @@ function parseBatchPayload(input: Record<string, unknown>, existing?: DocumentDa
     shift: optionalString(input.shift ?? existing?.shift, 'shift', 40),
     mfrNumber: optionalString(input.mfrNumber ?? existing?.mfrNumber, 'mfrNumber', 80),
     bmrNumber: optionalString(input.bmrNumber ?? existing?.bmrNumber, 'bmrNumber', 80),
-    bprNumber: optionalString(input.bprNumber ?? existing?.bprNumber, 'bprNumber', 80),
+    bprNumber: optionalString(input.bprNumber ?? existing?.bprNumber, 'bprNumber', 500),
     manufacturedFor: optionalString(input.manufacturedFor ?? existing?.manufacturedFor, 'manufacturedFor', 160),
     customerName: optionalString(input.customerName ?? existing?.customerName, 'customerName', 160),
     batchStatus,

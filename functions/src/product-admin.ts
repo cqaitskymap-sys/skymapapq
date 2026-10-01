@@ -335,7 +335,7 @@ function parseProductPayload(input: Record<string, unknown>, existing?: Document
     licenseNumber: optionalString(input.licenseNumber ?? existing?.licenseNumber, 'licenseNumber', 80),
     mfrNumber: optionalString(input.mfrNumber ?? existing?.mfrNumber, 'mfrNumber', 80),
     bmrNumber: optionalString(input.bmrNumber ?? existing?.bmrNumber, 'bmrNumber', 80),
-    bprNumber: optionalString(input.bprNumber ?? existing?.bprNumber, 'bprNumber', 80),
+    bprNumber: optionalString(input.bprNumber ?? existing?.bprNumber, 'bprNumber', 500),
     specificationNumber: optionalString(input.specificationNumber ?? existing?.specificationNumber, 'specificationNumber', 80),
     stpNumber: optionalString(input.stpNumber ?? existing?.stpNumber, 'stpNumber', 80),
     batchPrefix: optionalString(input.batchPrefix ?? existing?.batchPrefix, 'batchPrefix', 40),

@@ -13,12 +13,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
   DOSAGE_FORMS, MARKET_OPTIONS, PRODUCT_PRESET,
-  CONTAINER_CLOSURE_TYPES, PRODUCT_LIFECYCLE_STATUSES, PRODUCT_STATUSES,
+  CONTAINER_CLOSURE_TYPES, PRODUCT_STATUSES,
 } from '@/lib/admin/constants';
 import { productFormEditSchema, productFormSchema, type ProductFormData } from '@/lib/admin/schemas';
 import { CompositionTable } from './composition-table';
 import { PackingTable } from './packing-table';
 import { BrandNamesInput } from './brand-names-input';
+import { BprNumbersInput } from './bpr-numbers-input';
 
 interface ProductFormProps {
   initial?: Partial<ProductFormData>;
@@ -92,7 +93,6 @@ export function ProductForm({ initial, readOnly, onSubmit, onCancel, submitting 
     form.setValue('genericName', PRODUCT_PRESET.genericName);
     form.setValue('strength', PRODUCT_PRESET.strength);
     form.setValue('dosageForm', PRODUCT_PRESET.dosageForm as ProductFormData['dosageForm']);
-    form.setValue('routeOfAdministration', PRODUCT_PRESET.routeOfAdministration);
     form.setValue('shelfLife', PRODUCT_PRESET.shelfLife);
     form.setValue('storageCondition', PRODUCT_PRESET.storageCondition);
     form.setValue('standardBatchSize', PRODUCT_PRESET.standardBatchSize);
@@ -160,17 +160,6 @@ export function ProductForm({ initial, readOnly, onSubmit, onCancel, submitting 
             </Select>
           </div>
           <div className="space-y-2">
-            <Label>Route of Administration</Label>
-            <Input {...form.register('routeOfAdministration')} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
-            <Label>Lifecycle *</Label>
-            <Select value={form.watch('lifecycleStatus')} onValueChange={(v) => form.setValue('lifecycleStatus', v as ProductFormData['lifecycleStatus'])} disabled={readOnly}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{PRODUCT_LIFECYCLE_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
             <Label>Product Status *</Label>
             <Select value={form.watch('productStatus')} onValueChange={(v) => form.setValue('productStatus', v as ProductFormData['productStatus'])} disabled={readOnly}>
               <SelectTrigger><SelectValue /></SelectTrigger>
@@ -213,7 +202,16 @@ export function ProductForm({ initial, readOnly, onSubmit, onCancel, submitting 
           <div className="space-y-2"><Label>Mfg License No</Label><Input {...form.register('manufacturingLicenseNumber')} disabled={readOnly} /></div>
           <div className="space-y-2"><Label>MFR Number</Label><Input {...form.register('mfrNumber')} disabled={readOnly} /></div>
           <div className="space-y-2"><Label>BMR Number</Label><Input {...form.register('bmrNumber')} disabled={readOnly} /></div>
-          <div className="space-y-2"><Label>BPR Number</Label><Input {...form.register('bprNumber')} disabled={readOnly} /></div>
+          <div className="space-y-2 sm:col-span-2 xl:col-span-3">
+            <Label>BPR Number</Label>
+            <BprNumbersInput
+              value={form.watch('bprNumber') || ''}
+              onChange={(v) => form.setValue('bprNumber', v, { shouldDirty: true, shouldValidate: true })}
+              disabled={readOnly}
+            />
+            <p className="text-xs text-muted-foreground">Add multiple BPR numbers</p>
+            {form.formState.errors.bprNumber && <p className="text-xs text-red-500">{form.formState.errors.bprNumber.message}</p>}
+          </div>
           <div className="space-y-2"><Label>Specification Number</Label><Input {...form.register('specificationNumber')} disabled={readOnly} /></div>
           <div className="space-y-2"><Label>STP Number</Label><Input {...form.register('stpNumber')} disabled={readOnly} /></div>
         </CardContent>

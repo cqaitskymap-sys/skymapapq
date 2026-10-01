@@ -331,24 +331,6 @@ export default function MaterialMasterPage() {
                     />
                   </div>
                   <div>
-                    <Label>Retest Period</Label>
-                    <Input
-                      className="mt-1"
-                      placeholder="e.g., 12 months"
-                      value={form.retest_period}
-                      onChange={e => setForm(f => ({ ...f, retest_period: e.target.value }))}
-                    />
-                  </div>
-                  <div>
-                    <Label>Shelf Life</Label>
-                    <Input
-                      className="mt-1"
-                      placeholder="e.g., 24 months"
-                      value={form.shelf_life}
-                      onChange={e => setForm(f => ({ ...f, shelf_life: e.target.value }))}
-                    />
-                  </div>
-                  <div>
                     <Label>Status *</Label>
                     <Select value={form.status} onValueChange={v => setForm(f => ({ ...f, status: v as Material['status'] }))}>
                       <SelectTrigger className="mt-1">
