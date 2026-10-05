@@ -116,10 +116,11 @@ export function computeOosClosureReadiness(input: {
   const capaLinked = Boolean(record.linked_capa_number || capaLink?.capa_number);
   const capaOk = isCapaSatisfiedForOosClosure(capa, capaLink, capaRequired);
   const capaDecisionDone = record.capa_required !== undefined || impact?.capa_required !== undefined || phase2?.capa_required !== undefined;
-  const effectivenessOk = !capa?.effectiveness_check_required && !capaLink?.effectiveness_check_required
-    || ['Effective', 'Partially Effective', 'N/A'].includes(capaLink?.effectiveness_result || capa?.effectiveness_result || '');
+  const effectivenessRequired = Boolean(capa?.effectiveness_check_required || capaLink?.effectiveness_check_required);
+  const effectivenessOk = !effectivenessRequired
+    || ['Effective', 'N/A'].includes(capaLink?.effectiveness_result || capa?.effectiveness_result || '');
   const qaApprovalDone = approvalWorkflowComplete(approvals) && record.status === 'approved';
-  const attachmentsOk = form?.all_attachments_reviewed ?? attachments.length > 0;
+  const attachmentsOk = attachments.length > 0 && form?.all_attachments_reviewed !== false;
   const noCriticalRisk = !hasCriticalRiskOpen(record, impact);
   const capaClosureCheck = canCloseOosWithCapa(record, capaLink, capa, capaRequired);
 

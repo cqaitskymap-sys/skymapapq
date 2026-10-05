@@ -408,7 +408,7 @@ export async function reopenComplaintClosure(
       status: 'qa_review',
       closure_date: null,
       qa_remarks: reason,
-    }, { id: actor.id, name: actor.name, role: actor.role || 'head_qa' }, true);
+    }, { id: actor.id, name: actor.name, role: actor.role || 'head_qa' }, true, { reopen: true });
 
     await addDoc(collection(getFirebaseFirestore(), 'esign_records'), {
       module: COMPLAINT_CLOSURE_MODULE,

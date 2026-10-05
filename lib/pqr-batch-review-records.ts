@@ -269,13 +269,27 @@ function strMatch(val: string, token: string): boolean {
   return String(val || '').toLowerCase().includes(token);
 }
 
-export function isReleasedBatch(r: PqrBatchReviewRecord): boolean {
-  return (strMatch(r.releaseStatus, 'release') && !strMatch(r.releaseStatus, 'reject'))
-    || (strMatch(r.batchStatus, 'release') && !strMatch(r.batchStatus, 'reject'));
+/** "Not Released" and "Pending Release" are not released. Rejected wins over released. */
+export function statusMeansReleased(status: string): boolean {
+  const value = String(status || '').toLowerCase();
+  if (!value || value.includes('not release') || value.includes('unreleased') || value.includes('pending')) return false;
+  if (value.includes('reject') || value.includes('hold') || value.includes('cancel')) return false;
+  return value.includes('released') || value === 'release';
+}
+
+export function statusMeansRejected(status: string): boolean {
+  const value = String(status || '').toLowerCase();
+  if (!value || value.includes('not reject')) return false;
+  return value.includes('reject');
 }
 
 export function isRejectedBatch(r: PqrBatchReviewRecord): boolean {
-  return strMatch(r.batchStatus, 'reject') || strMatch(r.releaseStatus, 'reject');
+  return statusMeansRejected(r.batchStatus) || statusMeansRejected(r.releaseStatus);
+}
+
+export function isReleasedBatch(r: PqrBatchReviewRecord): boolean {
+  if (isRejectedBatch(r)) return false;
+  return statusMeansReleased(r.releaseStatus) || statusMeansReleased(r.batchStatus);
 }
 
 export function computeYieldPct(theoretical?: number | null, actual?: number | null): number | null {
@@ -296,7 +310,7 @@ export function computeBatchSummary(records: PqrBatchReviewRecord[]): PqrBatchRe
   const reprocessed = active.filter((r) => strMatch(r.batchStatus, 'reprocess') || r.reprocessRequired).length;
   const yieldVals = active
     .map((r) => (r.yieldPct != null ? Number(r.yieldPct) : computeYieldPct(r.theoreticalYield, r.actualYield)))
-    .filter((v): v is number => v != null && Number.isFinite(v) && v > 0);
+    .filter((v): v is number => v != null && Number.isFinite(v) && v >= 0);
 
   return {
     totalBatches: total,

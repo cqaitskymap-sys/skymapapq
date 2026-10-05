@@ -457,7 +457,7 @@ export async function reopenDeviation(
       status: 'qa_review',
       actual_closure_date: null,
       qa_remarks: reason,
-    }, { id: actor.id, name: actor.name, role: actor.role || 'head_qa' }, { workflow: true });
+    }, { id: actor.id, name: actor.name, role: actor.role || 'head_qa' }, { workflow: true, reopen: true });
     await audit(actor, 'Reopen Deviation', deviationId, reason);
     await saveHistory({
       deviation_id: deviationId,

@@ -215,14 +215,6 @@ export function BatchForm({
             )}
             {form.formState.errors.batchNumber && <p className="text-xs text-red-500">{form.formState.errors.batchNumber.message}</p>}
           </div>
-          <div className="space-y-2">
-            <Label>Batch Code</Label>
-            <Input {...form.register('batchCode')} disabled={readOnly} />
-          </div>
-          <div className="space-y-2">
-            <Label>Manufacturing Order</Label>
-            <Input {...form.register('manufacturingOrder')} disabled={readOnly} />
-          </div>
         </CardContent>
       </Card>
 

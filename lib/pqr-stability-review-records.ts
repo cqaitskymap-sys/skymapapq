@@ -195,7 +195,9 @@ export function autoResultStatus(
   if (status === 'Action') return 'Action';
   if (status === 'OOT') return 'OOT';
   if (status === 'OOS') return 'OOS';
-  return 'Complies';
+  if (status === 'Under Review') return 'Under Review';
+  if (status === 'Complies') return 'Complies';
+  return 'Under Review';
 }
 
 export function computeStabilityCompliance(record: Partial<PqrStabilityReviewRecord>): {

@@ -5,7 +5,7 @@ import { ProtectedRoute } from '@/components/auth/protected-route';
 
 export default function QmsLayout({ children }: { children: React.ReactNode }) {
   return (
-    <ProtectedRoute module="qms">
+    <ProtectedRoute>
       <AppShell>{children}</AppShell>
     </ProtectedRoute>
   );

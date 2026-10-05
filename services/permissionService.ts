@@ -43,6 +43,7 @@ export const APP_MODULE_TO_MATRIX: Record<AppModule, string> = {
   oos: 'OOS',
   capa: 'CAPA',
   change_control: 'Change Control',
+  risk: 'Risk Management',
   stability: 'Stability',
   complaints: 'Complaint',
   recall: 'Recall',

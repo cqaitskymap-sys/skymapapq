@@ -157,6 +157,24 @@ service cloud.firestore {
         || name in ['cpv_audit_trail', 'audit_logs', 'audit_trail', 'packaging_audit_trail', 'audit_logs_material', 'integration_logs'];
     }
 
+    // Dedicated matches lock these to Cloud Functions. Catch-all OR must not reopen them.
+    function isServerOwnedCollection(name) {
+      return name in [
+        'users', 'roles', 'permissions', 'user_permissions',
+        'login_activity', 'login_activity_archive',
+        'access_reviews', 'access_reviews_archive',
+        'system_settings', 'system_settings_versions',
+        'esign_settings', 'notification_settings', 'email_sms_templates',
+        'module_configuration', 'master_data_import_export', 'master_data_import_export_errors',
+        'backup_history', 'backup_restore', 'backup_settings', 'restore_history', 'backup_jobs',
+        'backup_history_archive', 'restore_history_archive',
+        'departments', 'designations', 'company_sites',
+        'workflows', 'workflow_steps', 'approval_matrix',
+        'document_numbering', 'document_numbering_sequences', 'document_number_sequences',
+        'password_policy', 'notification_templates', 'system_logs'
+      ];
+    }
+
     // Non-prefixed CPV collections (legacy cpv_* covered by name.matches('cpv_.*')).
     function isCpvOperationalCollection(name) {
       return name.matches('cpv_.*')
@@ -175,7 +193,7 @@ service cloud.firestore {
       return name.matches('pqr_.*')
         || name in [
           'material_review', 'approved_vendor_list', 'packing_material_master',
-          'capa_trends', 'equipment_qualification', 'equipment_calibration',
+          'equipment_qualification', 'equipment_calibration',
           'preventive_maintenance', 'pm_records', 'breakdown_records',
           'equipment_usage_logs', 'utility_equipment'
         ];
@@ -203,7 +221,7 @@ service cloud.firestore {
           'oos_phase1', 'oos_phase2', 'oos_impact_assessment', 'oos_capa_link',
           'oos_approvals', 'oos_approval_history', 'oos_closure',
           'oos_trends', 'oos_reports', 'oos_attachments',
-          'capa_records', 'capa', 'capa_reports',
+          'capa_records', 'capa', 'capa_reports', 'capa_trends',
           'change_controls', 'change_control', 'change_implementation_plans', 'change_implementation_tasks', 'change_implementation_actions',
           'change_risk_assessments',
           'change_impact_assessments',
@@ -310,8 +328,7 @@ service cloud.firestore {
 
     function canWriteCollection(name) {
       return isSuperAdmin()
-        || (isAdmin() && name in ['users', 'roles', 'permissions', 'products', 'batches', 'departments', 'designations'])
-        || (isQaRole() && name in ['pqr_records', 'pqr_documents', 'deviations', 'deviation_reports', 'oos_records', 'oos', 'oos_phase1', 'oos_phase2', 'oos_impact_assessment', 'oos_capa_link', 'oos_approvals', 'oos_approval_history', 'oos_closure', 'oos_trends', 'oos_reports', 'oos_attachments', 'capa_records', 'capa', 'capa_reports', 'change_controls', 'change_control', 'change_implementation_plans', 'change_implementation_tasks', 'change_implementation_actions', 'change_risk_assessments', 'change_impact_assessments', 'change_reports', 'complaints', 'complaint_reports', 'recalls', 'recall_records', 'recall_reports', 'recall_distribution', 'recall_recovery', 'recall_regulatory_notifications', 'recall_closure', 'recall_trends', 'recall_approvals', 'recall_attachments', 'risk_reports', 'audit_reports', 'validation_reports', 'validation_records', 'audits', 'audit_mgmt_records', 'stability_studies', 'approval_workflows', 'approval_requests', 'approval_steps', 'approval_requests_history', 'approval_delegations', 'approval_escalations', 'approval_comments', 'electronic_signatures', 'signature_meanings', 'signature_sessions', 'signature_settings', 'documents', 'dms_documents', 'document_revisions', 'document_versions', 'document_approvals', 'document_distribution', 'distribution_lists', 'distribution_groups', 'document_acknowledgements', 'read_confirmations', 'document_attachments', 'document_lifecycle', 'document_reviews', 'review_workflows', 'review_steps', 'review_comments', 'review_checklists', 'document_effective_dates', 'periodic_reviews', 'review_schedules', 'review_decisions', 'document_archives', 'document_archive', 'archive_jobs', 'archive_policies', 'archive_requests', 'archive_restoration_requests', 'archive_locations', 'retention_policies', 'retention_schedules', 'retention_reviews', 'retention_events', 'disposal_requests', 'disposal_approvals', 'disposal_certificates', 'legal_holds', 'regulatory_holds', 'external_documents', 'external_document_versions', 'external_document_reviews', 'external_document_distribution', 'external_document_sources', 'external_document_categories', 'supplier_documents', 'regulatory_documents', 'standards_documents', 'safety_documents', 'linked_internal_documents', 'print_requests', 'printed_documents', 'print_copies', 'print_locations', 'print_distribution', 'print_reconciliation', 'print_returns', 'print_destruction', 'watermark_templates', 'watermark_rules', 'watermark_history', 'document_watermarks', 'audit_events', 'audit_exports', 'audit_filters', 'document_obsolete', 'sop_master', 'sop_versions', 'sop_reviews', 'sop_approvals', 'sop_training_links', 'sop_distribution', 'sop_acknowledgements', 'sop_periodic_reviews', 'sop_archive', 'sop_management', 'work_instructions', 'wi_versions', 'wi_reviews', 'wi_approvals', 'wi_training_links', 'wi_distribution', 'wi_acknowledgements', 'wi_periodic_reviews', 'wi_archive', 'forms_templates', 'form_versions', 'form_reviews', 'form_approvals', 'form_distribution', 'form_acknowledgements', 'form_periodic_reviews', 'form_archive', 'production_lines'])
+        || (isQaRole() && name in ['pqr_records', 'pqr_documents', 'deviations', 'deviation_reports', 'oos_records', 'oos', 'oos_phase1', 'oos_phase2', 'oos_impact_assessment', 'oos_capa_link', 'oos_approvals', 'oos_approval_history', 'oos_closure', 'oos_trends', 'oos_reports', 'oos_attachments', 'capa_records', 'capa', 'capa_reports', 'capa_trends', 'change_controls', 'change_control', 'change_implementation_plans', 'change_implementation_tasks', 'change_implementation_actions', 'change_risk_assessments', 'change_impact_assessments', 'change_reports', 'complaints', 'complaint_reports', 'recalls', 'recall_records', 'recall_reports', 'recall_distribution', 'recall_recovery', 'recall_regulatory_notifications', 'recall_closure', 'recall_trends', 'recall_approvals', 'recall_attachments', 'risk_reports', 'audit_reports', 'validation_reports', 'validation_records', 'audits', 'audit_mgmt_records', 'stability_studies', 'approval_workflows', 'approval_requests', 'approval_steps', 'approval_requests_history', 'approval_delegations', 'approval_escalations', 'approval_comments', 'electronic_signatures', 'signature_meanings', 'signature_sessions', 'signature_settings', 'documents', 'dms_documents', 'document_revisions', 'document_versions', 'document_approvals', 'document_distribution', 'distribution_lists', 'distribution_groups', 'document_acknowledgements', 'read_confirmations', 'document_attachments', 'document_lifecycle', 'document_reviews', 'review_workflows', 'review_steps', 'review_comments', 'review_checklists', 'document_effective_dates', 'periodic_reviews', 'review_schedules', 'review_decisions', 'document_archives', 'document_archive', 'archive_jobs', 'archive_policies', 'archive_requests', 'archive_restoration_requests', 'archive_locations', 'retention_policies', 'retention_schedules', 'retention_reviews', 'retention_events', 'disposal_requests', 'disposal_approvals', 'disposal_certificates', 'legal_holds', 'regulatory_holds', 'external_documents', 'external_document_versions', 'external_document_reviews', 'external_document_distribution', 'external_document_sources', 'external_document_categories', 'supplier_documents', 'regulatory_documents', 'standards_documents', 'safety_documents', 'linked_internal_documents', 'print_requests', 'printed_documents', 'print_copies', 'print_locations', 'print_distribution', 'print_reconciliation', 'print_returns', 'print_destruction', 'watermark_templates', 'watermark_rules', 'watermark_history', 'document_watermarks', 'audit_events', 'audit_exports', 'audit_filters', 'document_obsolete', 'sop_master', 'sop_versions', 'sop_reviews', 'sop_approvals', 'sop_training_links', 'sop_distribution', 'sop_acknowledgements', 'sop_periodic_reviews', 'sop_archive', 'sop_management', 'work_instructions', 'wi_versions', 'wi_reviews', 'wi_approvals', 'wi_training_links', 'wi_distribution', 'wi_acknowledgements', 'wi_periodic_reviews', 'wi_archive', 'forms_templates', 'form_versions', 'form_reviews', 'form_approvals', 'form_distribution', 'form_acknowledgements', 'form_periodic_reviews', 'form_archive', 'production_lines'])
 
 
         || (isQcRole() && name in [
@@ -402,7 +419,7 @@ service cloud.firestore {
     match /user_permissions/{docId} {
       allow read: if canReadAdminDirectory()
         || (isAuthenticated() && resource.data.userId == request.auth.uid);
-      allow write: if isSuperAdmin();
+      allow create, update, delete: if false;
     }
 
     match /login_activity/{sessionId} {
@@ -537,72 +554,110 @@ service cloud.firestore {
       );
     }
 
-    function canWriteOosModule() {
+    function canWriteOosQa() {
       return isActiveUser() && isNotReadOnly() && (
         isSuperAdmin()
         || isQaRole()
         || isQcRole()
-        || isProductionRole()
       );
+    }
+
+    function canWriteOosInvestigation() {
+      return canWriteOosQa() || (isActiveUser() && isNotReadOnly() && isProductionRole());
+    }
+
+    function fieldIsClosed(data, field) {
+      return data.get(field, '') is string && data.get(field, '').lower() == 'closed';
+    }
+
+    function qmsSourceClosed() {
+      return fieldIsClosed(resource.data, 'status')
+        || fieldIsClosed(resource.data, 'capa_status')
+        || fieldIsClosed(resource.data, 'recall_status');
+    }
+
+    function qmsControlledReopen() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status', 'capa_status', 'recall_status', 'is_locked',
+        'actual_closure_date', 'closure_date', 'qa_remarks',
+        'updated_by', 'updated_by_name', 'updated_at'
+      ])
+      && (!fieldIsClosed(resource.data, 'status') || !fieldIsClosed(request.resource.data, 'status'))
+      && (!fieldIsClosed(resource.data, 'capa_status') || !fieldIsClosed(request.resource.data, 'capa_status'))
+      && (!fieldIsClosed(resource.data, 'recall_status') || !fieldIsClosed(request.resource.data, 'recall_status'));
+    }
+
+    function qmsLinkAnnotation() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'linked_capa_number', 'linked_capa_id', 'capa_required',
+        'updated_by', 'updated_by_name', 'updated_at'
+      ]);
+    }
+
+    function qmsClosedUpdateAllowed(name) {
+      return !(name in [
+        'deviations', 'capa_records', 'capa', 'change_controls', 'change_control',
+        'oos_records', 'oos', 'complaints', 'recalls', 'recall_records'
+      ]) || !qmsSourceClosed() || qmsControlledReopen() || qmsLinkAnnotation();
     }
 
     match /oos_phase1/{docId} {
       allow read: if canReadOosModule();
-      allow create, update: if canWriteOosModule();
+      allow create, update: if canWriteOosQa();
       allow delete: if isSuperAdmin();
     }
 
     match /oos_phase2/{docId} {
       allow read: if canReadOosModule();
-      allow create, update: if canWriteOosModule();
+      allow create, update: if canWriteOosInvestigation();
       allow delete: if isSuperAdmin();
     }
 
     match /oos_impact_assessment/{docId} {
       allow read: if canReadOosModule();
-      allow create, update: if canWriteOosModule();
+      allow create, update: if canWriteOosInvestigation();
       allow delete: if isSuperAdmin();
     }
 
     match /oos_capa_link/{docId} {
       allow read: if canReadOosModule();
-      allow create, update: if canWriteOosModule();
+      allow create, update: if canWriteOosQa();
       allow delete: if isSuperAdmin();
     }
 
     match /oos_approvals/{docId} {
       allow read: if canReadOosModule();
-      allow create, update: if canWriteOosModule();
+      allow create, update: if canWriteOosQa();
       allow delete: if isSuperAdmin();
     }
 
     match /oos_approval_history/{docId} {
       allow read: if canReadOosModule();
-      allow create, update: if canWriteOosModule();
-      allow delete: if isSuperAdmin();
+      allow create: if canWriteOosQa();
+      allow update, delete: if false;
     }
 
     match /oos_closure/{docId} {
       allow read: if canReadOosModule();
-      allow create, update: if canWriteOosModule();
+      allow create, update: if canWriteOosQa();
       allow delete: if isSuperAdmin();
     }
 
     match /oos_trends/{docId} {
       allow read: if canReadOosModule();
-      allow create, update: if canWriteOosModule();
+      allow create, update: if canWriteOosQa();
       allow delete: if isSuperAdmin();
     }
 
     match /oos_reports/{docId} {
       allow read: if canReadOosModule();
-      allow create, update: if canWriteOosModule();
+      allow create, update: if canWriteOosQa();
       allow delete: if isSuperAdmin();
     }
 
     match /oos_attachments/{docId} {
       allow read: if canReadOosModule();
-      allow create, update: if canWriteOosModule();
+      allow create, update: if canWriteOosQa();
       allow delete: if isSuperAdmin();
     }
 
@@ -1259,10 +1314,40 @@ service cloud.firestore {
 ;
       // Explicit CF-locked collections are denied here so catch-all OR semantics
       // cannot reopen client writes when a dedicated match also exists.
-      allow create, update: if isActiveUser() && isNotReadOnly()
+      allow create: if isActiveUser() && isNotReadOnly()
         && isRegisteredCollection(collection)
         && canWriteCollection(collection)
         && !isAuditCollection(collection)
+        && !isServerOwnedCollection(collection)
+        && !(collection in [
+          'products', 'cpv_products', 'cpv_batches', 'batches',
+          'cpp_results', 'cpv_cpp', 'cqa_results', 'cpv_cqa',
+          'raw_material_monitoring', 'cpv_raw_materials',
+          'packing_material_monitoring', 'cpv_packing_materials',
+          'utility_monitoring', 'cpv_utility_monitoring', 'cpv_utility',
+          'environmental_monitoring', 'cpv_environment_monitoring',
+          'yield_monitoring', 'cpv_yield_monitoring', 'cpv_yield',
+          'hold_time_monitoring', 'hold_time_master', 'cpv_hold_time',
+          'process_capability', 'cpv_capability',
+          'trend_analysis', 'cpv_trends',
+          'control_charts', 'spc_rule_violations', 'cpv_control_charts',
+          'risk_assessment', 'risk_assessments', 'risk_controls', 'risk_reviews', 'cpv_risk_assessment',
+          'cpv_reviews', 'cpv_review_sections', 'cpv_review_approvals', 'cpv_annual_review',
+          'reports', 'report_exports',
+          'alerts', 'alert_rules', 'alert_notifications', 'alert_escalations',
+          'cpv_configuration', 'cpv_config_products', 'cpv_limit_rules', 'cpv_review_frequency',
+          'cpv_alert_rules', 'cpv_report_templates', 'cpv_workflows', 'cpv_integration_mapping',
+          'stability_studies', 'stability_schedules', 'stability_results',
+          'stability_monitoring', 'cpv_stability_studies',
+          'product_compositions', 'product_packing_details', 'product_attachments',
+          'batch_attachments', 'parameters'
+        ]);
+      allow update: if isActiveUser() && isNotReadOnly()
+        && isRegisteredCollection(collection)
+        && canWriteCollection(collection)
+        && !isAuditCollection(collection)
+        && !isServerOwnedCollection(collection)
+        && qmsClosedUpdateAllowed(collection)
         && !(collection in [
           'products', 'cpv_products', 'cpv_batches', 'batches',
           'cpp_results', 'cpv_cpp', 'cqa_results', 'cpv_cqa',
@@ -1289,6 +1374,7 @@ service cloud.firestore {
       allow delete: if isSuperAdmin()
         && isRegisteredCollection(collection)
         && !isAuditCollection(collection)
+        && !isServerOwnedCollection(collection)
         && !(collection in [
           'products', 'cpv_products', 'cpv_batches', 'batches',
           'cpp_results', 'cpv_cpp', 'cqa_results', 'cpv_cqa',

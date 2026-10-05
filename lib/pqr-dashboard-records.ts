@@ -169,9 +169,9 @@ export interface PqrDashboardKpis {
   changeControlCount: number;
   marketComplaintCount: number;
   recallCount: number;
-  averageYieldPct: number;
-  averageAssayPct: number;
-  averageCpk: number;
+  averageYieldPct: number | null;
+  averageAssayPct: number | null;
+  averageCpk: number | null;
   openRisks: number;
 }
 
@@ -433,9 +433,9 @@ export const emptyKpis = (): PqrDashboardKpis => ({
   changeControlCount: 0,
   marketComplaintCount: 0,
   recallCount: 0,
-  averageYieldPct: 0,
-  averageAssayPct: 0,
-  averageCpk: 0,
+  averageYieldPct: null,
+  averageAssayPct: null,
+  averageCpk: null,
   openRisks: 0,
 });
 

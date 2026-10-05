@@ -493,7 +493,7 @@ export async function reopenOosRecord(
     await updateOosRecord(oosId, {
       status: 'final_qa_review',
       actual_closure_date: null,
-    }, toOosActor(actor), { workflow: true });
+    }, toOosActor(actor), { workflow: true, reopen: true });
     await audit(actor, 'OOS Reopened', oosId, reason);
     await saveHistory({
       oos_id: oosId,

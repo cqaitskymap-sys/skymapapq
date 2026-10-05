@@ -196,23 +196,44 @@ async function notify(
   });
 }
 
+async function getGlobalSettings(firestore: Firestore) {
+  const snap = await firestore.collection('system_settings').doc('global').get();
+  return snap.data() || {};
+}
+
 async function getPasswordPolicy(firestore: Firestore) {
-  const snap = await firestore.collection('password_policy').limit(1).get();
-  const data = snap.docs[0]?.data() || {};
+  const [legacySnap, global] = await Promise.all([
+    firestore.collection('password_policy').limit(1).get(),
+    getGlobalSettings(firestore),
+  ]);
+  const legacy = legacySnap.docs[0]?.data() || {};
+  const maxLoginAttempts = Number(
+    global.maxFailedLoginAttempts ?? global.maxLoginAttempts ?? legacy.maxLoginAttempts ?? 5,
+  );
+  const lockoutDurationMinutes = Number(
+    global.accountLockDurationMinutes ?? global.lockoutDurationMinutes ?? legacy.lockoutDurationMinutes ?? 30,
+  );
   return {
-    maxLoginAttempts: Math.max(1, Number(data.maxLoginAttempts ?? 5) || 5),
-    lockoutDurationMinutes: Math.max(1, Number(data.lockoutDurationMinutes ?? 30) || 30),
+    maxLoginAttempts: Math.max(1, Number.isFinite(maxLoginAttempts) ? maxLoginAttempts : 5),
+    lockoutDurationMinutes: Math.max(1, Number.isFinite(lockoutDurationMinutes) ? lockoutDurationMinutes : 30),
+    lockoutEnabled: global.enableAccountLockout !== false,
   };
 }
 
 async function getSessionSettings(firestore: Firestore) {
-  const snap = await firestore.collection('system_settings').doc('session_policy').get();
-  const data = snap.data() || {};
+  const [legacySnap, global] = await Promise.all([
+    firestore.collection('system_settings').doc('session_policy').get(),
+    getGlobalSettings(firestore),
+  ]);
+  const legacy = legacySnap.data() || {};
+  const sessionTimeout = Number(global.sessionTimeoutMinutes ?? legacy.sessionTimeoutMinutes ?? 30);
+  const idleTimeout = Number(global.idleTimeoutMinutes ?? legacy.idleTimeoutMinutes ?? 15);
+  const maxConcurrent = Number(global.maxConcurrentSessions ?? legacy.maxConcurrentSessions ?? 3);
   return {
-    maxConcurrentSessions: Math.max(1, Number(data.maxConcurrentSessions ?? 3) || 3),
-    sessionTimeoutMinutes: Math.max(5, Number(data.sessionTimeoutMinutes ?? 480) || 480),
-    idleTimeoutMinutes: Math.max(5, Number(data.idleTimeoutMinutes ?? 30) || 30),
-    allowMultipleSessions: data.allowMultipleSessions !== false,
+    maxConcurrentSessions: Math.max(1, Number.isFinite(maxConcurrent) ? maxConcurrent : 3),
+    sessionTimeoutMinutes: Math.max(5, Number.isFinite(sessionTimeout) ? sessionTimeout : 30),
+    idleTimeoutMinutes: Math.max(5, Number.isFinite(idleTimeout) ? idleTimeout : 15),
+    allowMultipleSessions: (global.allowMultipleSessions ?? legacy.allowMultipleSessions) !== false,
   };
 }
 
@@ -457,7 +478,7 @@ export const recordAdminLoginFailure = onCall(BROWSER_CALLABLE, async (request) 
 
   // Unauthenticated failures must never permanently lock an account (DoS).
   // Apply a time-bounded cooldown from password policy instead.
-  if (profile && (failedRecent + 1) >= policy.maxLoginAttempts) {
+  if (policy.lockoutEnabled && profile && (failedRecent + 1) >= policy.maxLoginAttempts) {
     loginStatus = 'Locked';
     eventType = 'Account Lock';
     locked = true;

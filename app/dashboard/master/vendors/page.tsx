@@ -372,15 +372,6 @@ export default function VendorMasterPage() {
                       onChange={e => setForm(f => ({ ...f, approval_date: e.target.value }))}
                     />
                   </div>
-                  <div>
-                    <Label className="text-xs font-medium">Approval Expiry Date</Label>
-                    <Input
-                      className="mt-1"
-                      type="date"
-                      value={form.approval_expiry_date}
-                      onChange={e => setForm(f => ({ ...f, approval_expiry_date: e.target.value }))}
-                    />
-                  </div>
                 </div>
               </div>
 

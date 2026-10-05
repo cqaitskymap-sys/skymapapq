@@ -847,7 +847,7 @@ export function RawMaterialMonitoringPage() {
                 <SelectContent>{formBatches.map((b) => <SelectItem key={b.id} value={b.batchNumber}>{b.batchNumber}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div><Label>Category *</Label>
+            <div><Label>Material Category *</Label>
               <Select
                 value={FORM_CATEGORY_OPTIONS.some((o) => o.value === form.materialType) ? form.materialType : ''}
                 onValueChange={(v) => setForm((f) => ({
@@ -857,7 +857,7 @@ export function RawMaterialMonitoringPage() {
                   materialName: '',
                 }))}
               >
-                <SelectTrigger className="mt-1"><SelectValue placeholder="Category" /></SelectTrigger>
+                <SelectTrigger className="mt-1"><SelectValue placeholder="Material Category" /></SelectTrigger>
                 <SelectContent>
                   {FORM_CATEGORY_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
                 </SelectContent>

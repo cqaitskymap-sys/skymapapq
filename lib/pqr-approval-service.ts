@@ -1,5 +1,6 @@
 import {
   collection, doc, addDoc, getDocs, getDoc, updateDoc, query, where, limit, orderBy, writeBatch,
+  type DocumentData, type UpdateData,
 } from 'firebase/firestore';
 import { getFirebaseFirestore, isFirebaseConfigured } from '@/lib/firebase';
 import { createAuditLog, writeAuditTrail } from '@/lib/audit-trail';
@@ -171,7 +172,10 @@ async function updatePqrRecordStatus(
   const payload = { ...updates, updatedAt: ts, updatedBy: actor.id };
   for (const coll of [PQR_APPROVAL_COLLECTIONS.records, PQR_APPROVAL_COLLECTIONS.recordsLegacy]) {
     try {
-      await updateDoc(doc(getFirebaseFirestore(), coll, pqrId), payload);
+      await updateDoc(
+        doc(getFirebaseFirestore(), coll, pqrId),
+        payload as UpdateData<DocumentData>,
+      );
       return;
     } catch {
       // try next collection

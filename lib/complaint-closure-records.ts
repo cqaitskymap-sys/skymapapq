@@ -95,9 +95,7 @@ export function capaDecisionComplete(
 ): boolean {
   return record.capa_required !== undefined
     || impact?.capa_required !== undefined
-    || inv?.capa_required !== undefined
-    || impact !== null
-    || inv !== null;
+    || inv?.capa_required !== undefined;
 }
 
 export function complaintApprovalWorkflowComplete(approvals: ComplaintApproval[]): boolean {

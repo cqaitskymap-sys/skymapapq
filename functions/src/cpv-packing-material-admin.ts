@@ -590,6 +590,7 @@ function sanitizePayload(data: Record<string, unknown>, existing?: DocumentData)
     ),
     dimensionCheck: optionalString(data.dimensionCheck ?? existing?.dimensionCheck, 'Dimension check', 40),
     sealIntegrity: optionalString(data.sealIntegrity ?? existing?.sealIntegrity, 'Seal integrity', 40),
+    stsNumber: optionalString(data.stsNumber ?? existing?.stsNumber, 'STS', 80),
     stpNumber: optionalString(data.stpNumber ?? existing?.stpNumber, 'STP', 80),
     testParameter: optionalString(data.testParameter ?? existing?.testParameter, 'Test parameter', 120),
     observedResult: observedResult ?? null,

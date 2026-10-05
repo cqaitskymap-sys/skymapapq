@@ -4,7 +4,9 @@ import {
   type DeviationRecord,
 } from '@/lib/deviation-types';
 
-const todayStr = () => new Date().toISOString().split('T')[0];
+import { localCalendarDate } from '@/lib/qms-record-guard';
+
+const todayStr = () => localCalendarDate();
 
 function daysBetween(from: string, to: string): number {
   const a = new Date(from);

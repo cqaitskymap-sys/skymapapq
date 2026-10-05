@@ -12,6 +12,7 @@ import {
   type CcActor, isCcClosed, calculateRpn, rpnToLevel, requiresHeadQaApproval, requiresRegulatoryReview,
 } from './change-control-types';
 import type { ChangeCreateInput } from './change-control-schemas';
+import { assertRecordMutable, localCalendarDate, omitUndefined } from './qms-record-guard';
 
 function now() { return new Date().toISOString(); }
 
@@ -184,12 +185,22 @@ export async function listChanges(filters?: CcFilters): Promise<ChangeControlRec
 }
 
 export async function updateChange(
-  id: string, patch: Partial<ChangeControlRecord>, actor: CcActor, workflow = false,
+  id: string,
+  patch: Partial<ChangeControlRecord>,
+  actor: CcActor,
+  workflow = false,
+  options?: { reopen?: boolean },
 ): Promise<ChangeControlRecord> {
   const existing = await getChangeById(id);
   if (!existing) throw new Error('Change control not found');
+  assertRecordMutable(existing.status, options, 'change control');
   if (!workflow && existing.status !== 'draft') throw new Error('Only draft records can be edited');
-  const payload = { ...patch, updated_by: actor.id, updated_by_name: actor.name, updated_at: now() };
+  const payload = omitUndefined({
+    ...patch,
+    updated_by: actor.id,
+    updated_by_name: actor.name,
+    updated_at: now(),
+  } as Record<string, unknown>) as Partial<ChangeControlRecord>;
   await updateDoc(doc(getFirebaseFirestore(), CC_COLLECTIONS.records, id), payload);
   await audit(actor, 'UPDATE', id, existing, { ...existing, ...payload });
   return { ...existing, ...payload } as ChangeControlRecord;
@@ -197,11 +208,12 @@ export async function updateChange(
 
 export async function syncOverdueChanges(): Promise<number> {
   const records = await listChanges();
-  const today = new Date().toISOString().split('T')[0];
+  const today = localCalendarDate();
   let count = 0;
   for (const r of records) {
     if (isCcClosed(r.status) || r.status === 'overdue') continue;
-    if (r.planned_implementation_date && r.planned_implementation_date < today
+    const due = r.target_closure_date || r.planned_implementation_date;
+    if (due && due < today
       && !['implemented', 'effectiveness_completed', 'approved', 'closed'].includes(r.status)) {
       await updateDoc(doc(getFirebaseFirestore(), CC_COLLECTIONS.records, r.id), { status: 'overdue', updated_at: now() });
       count++;
@@ -494,8 +506,8 @@ export async function closeChange(changeId: string, actor: CcActor, qaRemarks?: 
   if (!change) throw new Error('Change not found');
   if (change.effectiveness_check_required) {
     const eff = await getEffectivenessReview(changeId);
-    if (!eff || eff.result === 'Not Effective') {
-      throw new Error('Effectiveness review must be completed with acceptable result before closure');
+    if (!eff || eff.result !== 'Effective') {
+      throw new Error('Effectiveness review must be completed as Effective before closure');
     }
   }
   const updated = await updateChange(changeId, {

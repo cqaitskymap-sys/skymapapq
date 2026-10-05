@@ -567,9 +567,9 @@ export function PqrDashboardPage() {
               { label: 'Change Controls', value: kpis.changeControlCount },
               { label: 'Complaints', value: kpis.marketComplaintCount, tone: 'amber' as const },
               { label: 'Recalls', value: kpis.recallCount, tone: 'red' as const },
-              { label: 'Avg Yield %', value: `${kpis.averageYieldPct}%` },
-              { label: 'Avg Assay %', value: `${kpis.averageAssayPct}%` },
-              { label: 'Avg Cpk', value: kpis.averageCpk },
+              { label: 'Avg Yield %', value: kpis.averageYieldPct == null ? 'N/A' : `${kpis.averageYieldPct}%` },
+              { label: 'Avg Assay %', value: kpis.averageAssayPct == null ? 'N/A' : `${kpis.averageAssayPct}%` },
+              { label: 'Avg Cpk', value: kpis.averageCpk == null ? 'N/A' : kpis.averageCpk },
               { label: 'Open Risks', value: kpis.openRisks, tone: 'red' as const },
             ].map((k) => (
               <button

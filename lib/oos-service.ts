@@ -8,6 +8,7 @@ import { logAuditEvent } from '@/lib/admin/admin-service';
 import { generateDocumentNumber } from '@/lib/admin/document-numbering-service';
 import { downloadCsv } from '@/lib/export-utils';
 import { computeExtendedOosDashboardMetrics } from './oos-dashboard-records';
+import { assertRecordMutable, localCalendarDate, omitUndefined } from './qms-record-guard';
 import {
   OOS_COLLECTIONS, type OosRecord, type OosPhase1, type OosPhase2,
   type OosImpactAssessment, type OosCapaLink, type OosApproval, type OosAttachment,
@@ -377,7 +378,7 @@ export async function listOosRecords(filters?: OosFilters): Promise<OosRecord[]>
 
 function applyOverdueCheck(record: OosRecord): OosRecord {
   if (!record.target_closure_date || ['closed', 'approved'].includes(record.status)) return record;
-  const today = new Date().toISOString().split('T')[0];
+  const today = localCalendarDate();
   if (record.target_closure_date < today && isOpenOosStatus(record.status)) {
     return { ...record, status: 'overdue' };
   }
@@ -385,10 +386,11 @@ function applyOverdueCheck(record: OosRecord): OosRecord {
 }
 
 export async function updateOosRecord(
-  id: string, updates: Partial<OosRecord>, actor: OosActor, options?: { workflow?: boolean },
+  id: string, updates: Partial<OosRecord>, actor: OosActor, options?: { workflow?: boolean; reopen?: boolean },
 ): Promise<OosRecord> {
   const existing = await getOosById(id);
   if (!existing) throw new Error('OOS record not found');
+  assertRecordMutable(existing.status, options, 'OOS record');
 
   const workflowFields = new Set([
     'status', 'phase', 'root_cause', 'capa_required', 'linked_capa_number', 'linked_capa_id',
@@ -400,16 +402,22 @@ export async function updateOosRecord(
     if (keys.length > 0) throw new Error('Only draft OOS records can be fully edited');
   }
 
-  const payload: Partial<OosRecord> = {
+  const payload = omitUndefined({
     ...updates,
     updated_by: actor.id,
     updated_by_name: actor.name,
     updated_at: now(),
-  };
+  } as Record<string, unknown>) as Partial<OosRecord>;
 
-  if (updates.observed_result !== undefined && updates.spec_lower_limit !== undefined && updates.spec_upper_limit !== undefined) {
-    payload.result_status = computeResultStatus(updates.observed_result, updates.spec_lower_limit, updates.spec_upper_limit);
-    payload.obtained_result = String(updates.observed_result);
+  const limitsChanged = updates.observed_result !== undefined
+    || updates.spec_lower_limit !== undefined
+    || updates.spec_upper_limit !== undefined;
+  if (limitsChanged) {
+    const observed = updates.observed_result ?? existing.observed_result;
+    const lower = updates.spec_lower_limit ?? existing.spec_lower_limit;
+    const upper = updates.spec_upper_limit ?? existing.spec_upper_limit;
+    payload.result_status = computeResultStatus(observed, lower, upper);
+    if (updates.observed_result !== undefined) payload.obtained_result = String(updates.observed_result);
   }
 
   await updateDoc(doc(getFirebaseFirestore(), OOS_COLLECTIONS.records, id), payload);
@@ -607,14 +615,35 @@ export async function submitApproval(
 }
 
 export async function closeOos(id: string, actor: OosActor): Promise<OosRecord> {
-  const { validateOosCanClose } = await import('./oos-capa-service');
-  const check = await validateOosCanClose(id);
-  if (!check.canClose) throw new Error(check.reason || 'OOS cannot be closed — open mandatory CAPA exists.');
   const existing = await getOosById(id);
-  const updated = await updateOosRecord(id, { status: 'closed', actual_closure_date: now().split('T')[0] }, actor, { workflow: true });
-  if (existing?.batch_release_blocked && existing.batch_id) {
+  if (!existing) throw new Error('OOS record not found');
+  if (existing.status !== 'approved') throw new Error('OOS must be final approved before closure');
+
+  const { computeOosClosureReadiness } = await import('./oos-closure-records');
+  const { getCapaById } = await import('./capa-service');
+  const [phase1, phase2, impact, capaLink, approvals, attachments] = await Promise.all([
+    getPhase1(id),
+    getPhase2(id),
+    getImpactAssessment(id),
+    getCapaLink(id),
+    getApprovals(id),
+    getAttachments(id),
+  ]);
+  const capa = existing.linked_capa_id ? await getCapaById(existing.linked_capa_id) : null;
+  const readiness = computeOosClosureReadiness({
+    record: existing, phase1, phase2, impact, capa, capaLink, approvals, attachments,
+  });
+  if (!readiness.ready) {
+    throw new Error(`Cannot close: ${readiness.blockers.join('; ')}`);
+  }
+
+  const updated = await updateOosRecord(id, {
+    status: 'closed',
+    actual_closure_date: localCalendarDate(),
+    ...(existing.batch_release_blocked ? { batch_release_blocked: false } : {}),
+  }, actor, { workflow: true });
+  if (existing.batch_release_blocked && existing.batch_id) {
     await setBatchReleaseEligibility(existing.batch_id, false);
-    await updateOosRecord(id, { batch_release_blocked: false }, actor, { workflow: true });
   }
   await audit(actor, 'CLOSE', id, null, updated);
   return updated;

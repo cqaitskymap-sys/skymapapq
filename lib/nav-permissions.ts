@@ -11,6 +11,7 @@ export const ROUTE_MODULE_MAP: Array<{ prefix: string; module: AppModule }> = [
   { prefix: '/qms/oos', module: 'oos' },
   { prefix: '/qms/capa', module: 'capa' },
   { prefix: '/qms/change-control', module: 'change_control' },
+  { prefix: '/qms/risk-management', module: 'risk' },
   { prefix: '/qms/stability', module: 'stability' },
   { prefix: '/qms/complaints', module: 'complaints' },
   { prefix: '/qms/recall', module: 'recall' },

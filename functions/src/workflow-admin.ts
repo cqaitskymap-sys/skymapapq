@@ -6,6 +6,7 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https';
 import { type Firestore, type DocumentData, type WriteBatch,
 } from 'firebase-admin/firestore';
 import { getAdminFirestore } from './admin-app';
+import { approveChainHasCycle } from './account-guards';
 
 
 function requiredString(value: unknown, field: string, maxLength = 200): string {
@@ -247,6 +248,9 @@ function validateSteps(steps: unknown): StepInput[] {
     if (step.nextStepOnApprove === step.stepName || step.nextStepOnReject === step.stepName) {
       throw new HttpsError('invalid-argument', `Step "${step.stepName}" cannot route to itself`);
     }
+  }
+  if (approveChainHasCycle(validated)) {
+    throw new HttpsError('invalid-argument', 'Approval routing contains a cycle. An approve path must reach an end step.');
   }
 
   return validated;

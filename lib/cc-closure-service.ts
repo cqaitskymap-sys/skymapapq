@@ -501,7 +501,7 @@ export async function reopenCcClosure(
     await updateDoc(doc(getFirebaseFirestore(), CC_COLLECTIONS.closure, existing.id), payload);
   }
 
-  await updateChange(changeId, { status: 'implementation_in_progress' }, { id: actor.id, name: actor.name, role: actor.role || '' }, true);
+  await updateChange(changeId, { status: 'implementation_in_progress' }, { id: actor.id, name: actor.name, role: actor.role || '' }, true, { reopen: true });
   await saveEsignMetadata(ctx.change, eSignature, actor, 'Change Reopened');
   await audit(actor, 'change reopened', changeId, reason);
   await audit(actor, 'e-signature success', changeId, eSignature);

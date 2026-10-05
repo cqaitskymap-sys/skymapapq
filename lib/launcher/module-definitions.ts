@@ -52,8 +52,8 @@ export const LAUNCHER_MODULES: LauncherModule[] = [
     iconBg: 'bg-blue-50 text-[#2563EB] dark:bg-blue-950/50 dark:text-blue-400',
     navGroupLabel: 'QMS',
     keywords: ['qms', 'quality', 'deviation', 'capa', 'change control', 'audit'],
-    permissionModules: ['qms', 'deviation', 'capa', 'change_control', 'audit'],
-    submoduleCount: 17,
+    permissionModules: ['qms', 'deviation', 'capa', 'change_control', 'risk', 'audit'],
+    submoduleCount: 18,
   },
   {
     id: 'cpv',

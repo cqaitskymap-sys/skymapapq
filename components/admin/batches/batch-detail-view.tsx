@@ -73,7 +73,6 @@ export function BatchDetailView({ id }: { id: string }) {
 
   const overviewFields = [
     { label: 'Batch ID', value: batch.batchId },
-    { label: 'Batch Code', value: batch.batchCode },
     { label: 'Product Code', value: batch.productCode },
     { label: 'Product Name', value: batch.productName },
     { label: 'Product Version', value: batch.productVersion },
@@ -82,7 +81,6 @@ export function BatchDetailView({ id }: { id: string }) {
     { label: 'Strength', value: batch.strength },
     { label: 'Dosage Form', value: batch.dosageForm },
     { label: 'Market', value: batch.market },
-    { label: 'Manufacturing Order', value: batch.manufacturingOrder },
     { label: 'Batch Size', value: `${batch.batchSize} ${batch.batchSizeUnit || batch.unit || ''}` },
     { label: 'Planned Quantity', value: batch.plannedQuantity },
     { label: 'Actual Quantity', value: batch.actualQuantity },

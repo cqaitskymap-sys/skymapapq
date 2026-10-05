@@ -784,7 +784,7 @@ export function canViewDepartmentUsers(role?: string | null): boolean {
 
 export type AppModule =
   | 'admin' | 'cpv' | 'pqr' | 'qms' | 'deviation' | 'oos' | 'capa' | 'change_control'
-  | 'stability' | 'complaints' | 'recall' | 'dms' | 'audit' | 'vendors'
+  | 'stability' | 'complaints' | 'recall' | 'dms' | 'audit' | 'vendors' | 'risk'
   | 'validation' | 'csv' | 'equipment' | 'monitoring' | 'warehouse' | 'ebmr';
 
 const MODULE_ROLE_ACCESS: Record<AppModule, AdminRoleId[]> = {
@@ -803,6 +803,7 @@ const MODULE_ROLE_ACCESS: Record<AppModule, AdminRoleId[]> = {
   oos: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'qc_manager'],
   capa: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'qc_manager', 'production_manager'],
   change_control: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'regulatory_affairs'],
+  risk: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'qc_manager', 'regulatory_affairs'],
   stability: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'qc_manager'],
   complaints: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'regulatory_affairs'],
   recall: ['super_admin', 'admin', 'head_qa', 'qa_manager', 'regulatory_affairs'],
@@ -823,7 +824,7 @@ export function canAccessModule(role: string | null | undefined, module: AppModu
   if (r === 'super_admin') return true;
   if (['auditor', 'viewer'].includes(r)) {
     return ['audit', 'qms', 'pqr', 'dms', 'stability', 'complaints', 'recall',
-      'deviation', 'oos', 'capa', 'change_control', 'cpv', 'vendors', 'validation', 'csv',
+      'deviation', 'oos', 'capa', 'change_control', 'risk', 'cpv', 'vendors', 'validation', 'csv',
       'equipment', 'monitoring', 'warehouse', 'ebmr'].includes(module);
   }
   if (r === 'document_controller') return module === 'dms';

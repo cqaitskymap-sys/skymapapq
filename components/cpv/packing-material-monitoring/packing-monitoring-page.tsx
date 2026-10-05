@@ -56,7 +56,7 @@ type EsignAction = 'approve' | 'delete' | 'qa-override';
 
 function buildPackingExportRows(records: PackingMaterialMonitoringRecord[]) {
   const headers = [
-    'PM ID', 'Product Code', 'Product', 'Batch', 'Material Code', 'Material', 'Category', 'Type',
+    'PM ID', 'Product Code', 'Product', 'Batch', 'Material Code', 'Category', 'Material', 'Type',
     'Vendor', 'AR No', 'GRN', 'Lot', 'Standard Qty', 'Used', 'Rejected', 'Returned', 'Balance',
     'Recon', 'Unit', 'QC Status', 'Compliance', 'Risk', 'AVL', 'Review Status', 'MFG', 'EXP',
     'Deviation', 'CAPA', 'OOS',
@@ -630,6 +630,7 @@ export function PackingMonitoringPage() {
       printingVerified: '',
       dimensionCheck: '',
       sealIntegrity: '',
+      stsNumber: '',
       stpNumber: row.material.stpNo || '',
       testParameter: '',
       testUnit: '',
@@ -652,8 +653,8 @@ export function PackingMonitoringPage() {
 
   const columns: ColumnDef<PackingMaterialMonitoringRecord>[] = [
     { key: 'batchNumber', header: 'Batch' },
-    { key: 'materialName', header: 'Material' },
-    { key: 'materialCategory', header: 'Category' },
+    { key: 'materialName', header: 'Category' },
+    { key: 'materialCategory', header: 'Material' },
     { key: 'usedQuantity', header: 'Used' },
     { key: 'reconciliationStatus', header: 'Recon', render: (r) => <ReconBadge status={r.reconciliationStatus} /> },
     { key: 'complianceStatus', header: 'Compliance', render: (r) => <ComplianceBadges record={r} /> },
@@ -848,8 +849,8 @@ export function PackingMonitoringPage() {
               <SelectContent><SelectItem value="all">All Batches</SelectItem>{batchNumbers.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent></Select>
             <Select value={typeFilter} onValueChange={setTypeFilter}><SelectTrigger><SelectValue placeholder="Type" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All Types</SelectItem>{PM_MATERIAL_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent></Select>
-            <Select value={categoryFilter} onValueChange={setCategoryFilter}><SelectTrigger><SelectValue placeholder="Category" /></SelectTrigger>
-              <SelectContent><SelectItem value="all">All Categories</SelectItem>{PM_MATERIAL_CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
+            <Select value={categoryFilter} onValueChange={setCategoryFilter}><SelectTrigger><SelectValue placeholder="Material" /></SelectTrigger>
+              <SelectContent><SelectItem value="all">All Materials</SelectItem>{PM_MATERIAL_CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
             <Select value={qcFilter} onValueChange={setQcFilter}><SelectTrigger><SelectValue placeholder="QC" /></SelectTrigger>
               <SelectContent><SelectItem value="all">All QC</SelectItem>{PM_QC_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
             <Select value={complianceFilter} onValueChange={setComplianceFilter}><SelectTrigger><SelectValue placeholder="Compliance" /></SelectTrigger>
@@ -940,21 +941,25 @@ export function PackingMonitoringPage() {
                 <SelectContent>{formBatches.map((b) => <SelectItem key={b.id} value={b.batchNumber}>{b.batchNumber}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div><Label>Material *</Label>
+            <div><Label>Category *</Label>
               <Select
                 value={PM_FORM_MATERIAL_OPTIONS.includes(form.materialName as typeof PM_FORM_MATERIAL_OPTIONS[number]) ? form.materialName : ''}
                 onValueChange={onMaterialChange}
                 disabled={Boolean(editing)}
               >
-                <SelectTrigger className="mt-1"><SelectValue placeholder="Material" /></SelectTrigger>
+                <SelectTrigger className="mt-1"><SelectValue placeholder="Category" /></SelectTrigger>
                 <SelectContent>{PM_FORM_MATERIAL_OPTIONS.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div><Label>Category *</Label>
+            <div><Label>Material *</Label>
               <Select value={form.materialCategory || ''} onValueChange={(v) => setForm((f) => ({ ...f, materialCategory: v as PackingMaterialMonitoringFormData['materialCategory'] }))}>
                 <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                 <SelectContent>{PM_MATERIAL_CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
               </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>STS</Label><Input className="mt-1" value={form.stsNumber || ''} onChange={(e) => setForm((f) => ({ ...f, stsNumber: e.target.value }))} /></div>
+              <div><Label>STP</Label><Input className="mt-1" value={form.stpNumber || ''} onChange={(e) => setForm((f) => ({ ...f, stpNumber: e.target.value }))} /></div>
             </div>
             <div><Label>Vendor *</Label>
               <Select value={form.vendorId || ''} onValueChange={onVendorChange}>

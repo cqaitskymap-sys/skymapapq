@@ -17,6 +17,7 @@ import {
   type DeviationFilters, type DeviationDashboardMetrics, type DeviationActor,
   criticalityToLegacy, isOpenStatus, computeCapaRequired, requiresHeadQaApproval,
 } from './deviation-types';
+import { assertRecordMutable, omitUndefined } from './qms-record-guard';
 
 function now() { return new Date().toISOString(); }
 
@@ -319,10 +320,11 @@ export async function updateDeviation(
   id: string,
   updates: Partial<DeviationRecord>,
   actor: DeviationActor,
-  options?: { workflow?: boolean },
+  options?: { workflow?: boolean; reopen?: boolean },
 ): Promise<DeviationRecord> {
   const existing = await getDeviationById(id);
   if (!existing) throw new Error('Deviation not found');
+  assertRecordMutable(existing.status, options, 'deviation');
   const workflowFields = new Set([
     'status', 'root_cause', 'capa_required', 'actual_closure_date', 'deviation_type',
     'risk_assessment', 'assigned_investigator', 'assigned_investigator_name',
@@ -337,12 +339,12 @@ export async function updateDeviation(
   }
 
   const timestamp = now();
-  const payload: Partial<DeviationRecord> = {
+  const payload = omitUndefined({
     ...updates,
     updated_by: actor.id,
     updated_by_name: actor.name,
     updated_at: timestamp,
-  };
+  } as Record<string, unknown>) as Partial<DeviationRecord>;
   if (updates.criticality) {
     payload.deviation_type = criticalityToLegacy(updates.criticality as DeviationRecord['criticality']);
   }

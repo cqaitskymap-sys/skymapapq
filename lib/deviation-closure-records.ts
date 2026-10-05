@@ -91,18 +91,17 @@ export function computeClosureReadiness(input: {
   form?: Partial<ClosureFormInput>;
 }): ClosureReadiness {
   const { record, investigation, impact, capa, capaLink, approvals, attachments, form } = input;
-  const capaRequired = record.capa_required || form?.capa_required;
-  const capaLinked = Boolean(record.linked_capa_number || capaLink?.capa_number || form?.capa_linked);
+  const capaRequired = Boolean(record.capa_required || impact?.capa_required);
+  const capaLinked = Boolean(record.linked_capa_number || capaLink?.capa_number);
   const capaOk = isCapaSatisfiedForClosure(capa, capaRequired);
-  const invComplete = form?.investigation_completed ?? investigationIsComplete(investigation);
-  const impactComplete = form?.impact_assessment_completed ?? impactAssessmentIsComplete(impact);
-  const rootCause = form?.root_cause_identified ?? rootCauseIdentified(investigation, record);
+  const invComplete = investigationIsComplete(investigation);
+  const impactComplete = impactAssessmentIsComplete(impact);
+  const rootCause = rootCauseIdentified(investigation, record);
   const capaDecisionDone = record.capa_required !== undefined || impact?.capa_required !== undefined;
   const effectivenessOk = !capa?.effectiveness_check_required
-    || form?.effectiveness_check_completed
     || ['Effective', 'N/A'].includes(capa?.effectiveness_result || '');
   const qaApprovalDone = approvalWorkflowComplete(approvals);
-  const attachmentsOk = form?.all_attachments_reviewed ?? attachments.length > 0;
+  const attachmentsOk = attachments.length > 0 && form?.all_attachments_reviewed !== false;
   const noCriticalRisk = !hasCriticalRiskOpen(record, impact);
 
   const items: ClosureChecklistItem[] = [
@@ -111,7 +110,7 @@ export function computeClosureReadiness(input: {
     { key: 'impact', label: 'Impact assessment completed', complete: impactComplete, required: true },
     { key: 'capa_decision', label: 'CAPA decision completed', complete: capaDecisionDone, required: true },
     { key: 'capa_linked', label: 'Mandatory CAPA linked', complete: !capaRequired || capaLinked, required: Boolean(capaRequired) },
-    { key: 'capa_implemented', label: 'CAPA implemented if required', complete: !capaRequired || (capaOk && (form?.capa_completed ?? capaOk)), required: Boolean(capaRequired) },
+    { key: 'capa_implemented', label: 'CAPA implemented if required', complete: !capaRequired || capaOk, required: Boolean(capaRequired) },
     { key: 'effectiveness', label: 'Effectiveness check completed if required', complete: effectivenessOk, required: Boolean(capa?.effectiveness_check_required) },
     { key: 'qa_approval', label: 'QA approval completed', complete: qaApprovalDone, required: true },
     { key: 'attachments', label: 'Required attachments uploaded', complete: attachmentsOk, required: true },

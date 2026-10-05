@@ -296,6 +296,7 @@ export async function createPackingMaterial(input: PackingMaterialInput, actor: 
     printingVerified: '',
     dimensionCheck: '',
     sealIntegrity: '',
+    stsNumber: '',
     stpNumber: '',
     testParameter: '',
     testUnit: '',

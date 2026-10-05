@@ -201,7 +201,12 @@ export function formatCompliancePct(value: number, total: number): string {
 
 function isOpenStatus(status: string): boolean {
   const s = status.toLowerCase();
+  if (!s || s.includes('incomplete') || s.includes('not complete') || s.includes('not closed')) return true;
   return !s.includes('closed') && !s.includes('complete') && !s.includes('resolved');
+}
+
+function recordStatus(raw: Record<string, unknown>): string {
+  return str(raw.status || raw.capa_status || raw.document_status || raw.recall_status);
 }
 
 function isCritical(raw: Record<string, unknown>): boolean {
@@ -263,10 +268,10 @@ export function buildSummaryMetrics(data: ConsolidatedReviewData): PqrSummaryMet
   const envCompliant = data.utilityEnv.filter((r) => !r.isDeleted && r.reviewType === 'Environmental Review' && r.complianceStatus === 'Complies').length;
   const envTotal = data.utilityEnv.filter((r) => !r.isDeleted && r.reviewType === 'Environmental Review').length;
 
-  const openDev = data.deviations.filter((d) => isOpenStatus(str(d.status))).length;
-  const openOos = data.oos.filter((d) => isOpenStatus(str(d.status))).length;
-  const openCapa = data.capa.filter((d) => isOpenStatus(str(d.status))).length;
-  const openCc = data.changeControls.filter((d) => isOpenStatus(str(d.status))).length;
+  const openDev = data.deviations.filter((d) => isOpenStatus(recordStatus(d))).length;
+  const openOos = data.oos.filter((d) => isOpenStatus(recordStatus(d))).length;
+  const openCapa = data.capa.filter((d) => isOpenStatus(recordStatus(d))).length;
+  const openCc = data.changeControls.filter((d) => isOpenStatus(recordStatus(d))).length;
   const closedDev = data.deviations.length - openDev;
   const closedOos = data.oos.length - openOos;
   const closedCapa = data.capa.length - openCapa;

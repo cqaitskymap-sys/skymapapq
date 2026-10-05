@@ -13,6 +13,7 @@ import {
 import { generateDocumentNumber } from '@/lib/admin/document-numbering-service';
 import { computeExtendedCapaDashboardMetrics } from './capa-dashboard-records';
 import type { CapaCreateInput } from './capa-schemas';
+import { addCalendarDays, assertRecordMutable, isClosedStatus, localCalendarDate, omitUndefined } from './qms-record-guard';
 
 function now() { return new Date().toISOString(); }
 
@@ -227,13 +228,24 @@ export async function createCapa(
   if (record.deviation_id) {
     await writeSourceLink(ref.id, 'Deviation', record.deviation_id, input.source_reference_number, actor);
     try {
-      await updateDoc(doc(getFirebaseFirestore(), CAPA_COLLECTIONS.deviations, record.deviation_id), {
+      const deviationSnap = await getDoc(doc(getFirebaseFirestore(), CAPA_COLLECTIONS.deviations, record.deviation_id));
+      const deviationStatus = deviationSnap.exists() ? String(deviationSnap.data().status || '') : '';
+      const deviationPatch: {
+        linked_capa_number: string;
+        linked_capa_id: string;
+        capa_required: boolean;
+        updated_at: string;
+        status?: string;
+      } = {
         linked_capa_number: capaNumber,
         linked_capa_id: ref.id,
         capa_required: true,
-        status: 'capa_required',
         updated_at: timestamp,
-      });
+      };
+      if (deviationStatus && !isClosedStatus(deviationStatus) && !['approved', 'rejected'].includes(deviationStatus)) {
+        deviationPatch.status = 'capa_required';
+      }
+      await updateDoc(doc(getFirebaseFirestore(), CAPA_COLLECTIONS.deviations, record.deviation_id), deviationPatch);
     } catch { /* optional */ }
   }
   if (record.oos_id) {
@@ -289,12 +301,11 @@ export async function listCapas(filters?: CapaFilters): Promise<CapaRecord[]> {
       );
     }
     if (filters?.due_this_week) {
-      const weekEnd = new Date();
-      weekEnd.setDate(weekEnd.getDate() + 7);
+      const today = localCalendarDate();
+      const weekEnd = addCalendarDays(today, 7);
       records = records.filter((r) => {
-        if (!r.target_completion_date || isCapaClosed(r.capa_status)) return false;
-        const due = new Date(r.target_completion_date);
-        return due <= weekEnd;
+        if (!r.target_completion_date || isClosedStatus(r.capa_status) || r.capa_status === 'rejected') return false;
+        return r.target_completion_date >= today && r.target_completion_date <= weekEnd;
       });
     }
     return records;
@@ -308,20 +319,21 @@ export async function updateCapa(
   id: string,
   patch: Partial<CapaRecord>,
   actor: CapaActor,
-  options?: { workflow?: boolean },
+  options?: { workflow?: boolean; reopen?: boolean },
 ): Promise<CapaRecord> {
   const existing = await getCapaById(id);
   if (!existing) throw new Error('CAPA not found');
+  assertRecordMutable(existing.capa_status, options, 'CAPA');
   if (!options?.workflow && existing.capa_status !== 'draft') {
     throw new Error('Only draft CAPAs can be edited directly');
   }
   const timestamp = now();
-  const payload = {
+  const payload = omitUndefined({
     ...patch,
     updated_by: actor.id,
     updated_by_name: actor.name,
     updated_at: timestamp,
-  };
+  } as Record<string, unknown>) as Partial<CapaRecord>;
   await updateDoc(doc(getFirebaseFirestore(), CAPA_COLLECTIONS.records, id), payload);
   await audit(actor, 'UPDATE', id, existing, { ...existing, ...payload });
   return { ...existing, ...payload } as CapaRecord;
@@ -329,7 +341,7 @@ export async function updateCapa(
 
 export async function syncOverdueCapas(): Promise<number> {
   const records = await listCapas();
-  const today = new Date().toISOString().split('T')[0];
+  const today = localCalendarDate();
   let count = 0;
   for (const r of records) {
     if (isCapaClosed(r.capa_status) || r.capa_status === 'overdue') continue;

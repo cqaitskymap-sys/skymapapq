@@ -97,7 +97,9 @@ export interface RiskFmeaChartData {
 }
 
 export function clampScore(n: number): number {
-  return Math.max(1, Math.min(10, Math.round(n)));
+  const value = Number(n);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.max(1, Math.min(10, Math.round(value)));
 }
 
 export function riskPriorityFromRpn(rpn: number): 'Low' | 'Medium' | 'High' | 'Critical' {
@@ -108,18 +110,22 @@ export function riskPriorityFromRpn(rpn: number): 'Low' | 'Medium' | 'High' | 'C
 }
 
 export function calculateRpn(severity: number, occurrence: number, detection: number): number {
-  return clampScore(severity) * clampScore(occurrence) * clampScore(detection);
+  const scores = [clampScore(severity), clampScore(occurrence), clampScore(detection)];
+  if (scores.some((score) => score <= 0)) return 0;
+  return scores[0] * scores[1] * scores[2];
 }
 
 export function enrichFmeaRow(row: FmeaRow): FmeaRow {
   const sev = clampScore(row.severity);
   const occ = clampScore(row.occurrence);
   const det = clampScore(row.detection);
-  const residualSev = clampScore(row.residual_severity || sev);
-  const residualOcc = clampScore(row.residual_occurrence || occ);
-  const residualDet = clampScore(row.residual_detection || det);
+  const residualProvided = [row.residual_severity, row.residual_occurrence, row.residual_detection]
+    .every((score) => Number.isFinite(Number(score)) && Number(score) > 0);
+  const residualSev = residualProvided ? clampScore(row.residual_severity) : 0;
+  const residualOcc = residualProvided ? clampScore(row.residual_occurrence) : 0;
+  const residualDet = residualProvided ? clampScore(row.residual_detection) : 0;
   const rpn = calculateRpn(sev, occ, det);
-  const residualRpn = calculateRpn(residualSev, residualOcc, residualDet);
+  const residualRpn = residualProvided ? calculateRpn(residualSev, residualOcc, residualDet) : 0;
   return {
     ...row,
     severity: sev,
@@ -130,8 +136,8 @@ export function enrichFmeaRow(row: FmeaRow): FmeaRow {
     residual_detection: residualDet,
     rpn,
     residual_rpn: residualRpn,
-    risk_priority: riskPriorityFromRpn(rpn),
-    residual_risk_priority: riskPriorityFromRpn(residualRpn),
+    risk_priority: rpn > 0 ? riskPriorityFromRpn(rpn) : 'Invalid',
+    residual_risk_priority: residualProvided ? riskPriorityFromRpn(residualRpn) : 'Not Assessed',
     mitigation_required: row.mitigation_required || rpn >= 101,
   };
 }

@@ -1,6 +1,7 @@
 import {
   collection, doc, getDoc, getDocs, addDoc, updateDoc, deleteDoc,
   query, where, orderBy, limit, writeBatch,
+  type DocumentData, type UpdateData,
 } from 'firebase/firestore';
 import { EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { getFirebaseAuth, getFirebaseFirestore } from '@/lib/firebase';
@@ -11,6 +12,7 @@ import {
   PQR_COLLECTIONS, PqrDocument, PqrApproval, PqrDataSnapshot, PqrDocumentStatus, ESignPayload,
 } from '@/lib/pqr-types';
 import { createAuditLog } from '@/lib/audit-trail';
+import { canTransitionPqrStatus, isTerminalPqrStatus } from '@/lib/pqr-dashboard-records';
 import { enrichAiClient } from '@/lib/ai/client';
 
 type Actor = { id?: string; name?: string; role?: string; email?: string };
@@ -20,15 +22,21 @@ function now() {
 }
 
 function inDateRange(dateStr: string | undefined, from: string, to: string): boolean {
-  if (!dateStr) return true;
+  if (!dateStr) return false;
   const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return false;
   return d >= new Date(from) && d <= new Date(to + 'T23:59:59');
 }
 
 function matchesProduct(record: Record<string, unknown>, productName: string): boolean {
-  const fields = ['product_name', 'productName', 'product'];
-  const q = productName.toLowerCase();
-  return fields.some((f) => String(record[f] || '').toLowerCase().includes(q) || q.includes(String(record[f] || '').toLowerCase()));
+  const q = productName.trim().toLowerCase();
+  if (q.length < 2) return false;
+  const fields = ['product_name', 'productName', 'product', 'product_code', 'productCode'];
+  return fields.some((f) => {
+    const val = String(record[f] || '').trim().toLowerCase();
+    if (val.length < 2) return false;
+    return val === q || val.includes(q);
+  });
 }
 
 async function readCollection(name: string, max = 500): Promise<Record<string, unknown>[]> {
@@ -228,8 +236,14 @@ export async function buildPqrSnapshot(pqr: PqrDocument): Promise<PqrDataSnapsho
   const filterRecords = (records: Record<string, unknown>[]) =>
     records.filter((r) => matchesProduct(r, product) && (
       inDateRange(String(
-        r.manufacturing_date || r.manufacturingDate || r.test_date || r.testDate
-        ||         r.startDateTime || r.start_date_time || r.detected_date || r.created_at || r.createdAt || '',
+        r.deviation_date || r.deviationDate
+        || r.oos_date || r.detected_date
+        || r.complaint_date || r.received_date
+        || r.change_date || r.recall_date
+        || r.manufacturing_date || r.manufacturingDate
+        || r.test_date || r.testDate
+        || r.startDateTime || r.start_date_time
+        || r.created_at || r.createdAt || '',
       ), from, to)
     ));
 
@@ -507,27 +521,47 @@ export async function createPqrDocument(
 }
 
 export async function updatePqrDocument(id: string, updates: Partial<PqrDocument>, actor?: Actor) {
-  await updateDoc(doc(getFirebaseFirestore(), PQR_COLLECTIONS.documents, id), {
-    ...updates,
-    updated_at: now(),
-    updated_by: actor?.id,
-  });
+  const existingSnap = await getDoc(doc(getFirebaseFirestore(), PQR_COLLECTIONS.documents, id));
+  if (!existingSnap.exists()) throw new Error('PQR not found');
+  const current = String(existingSnap.data().document_status || 'draft');
+  const nextStatus = updates.document_status;
+  if (isTerminalPqrStatus(current)) {
+    if (!nextStatus || !canTransitionPqrStatus(current, nextStatus)) {
+      throw new Error('Approved, closed, or archived PQR documents cannot be modified without a controlled status change.');
+    }
+    const extraKeys = Object.keys(updates).filter((key) => key !== 'document_status' && updates[key as keyof PqrDocument] !== undefined);
+    if (extraKeys.length) {
+      throw new Error('Only status can change on an approved, closed, or archived PQR.');
+    }
+  }
+  const payload: Record<string, unknown> = { updated_at: now() };
+  for (const [key, value] of Object.entries(updates)) {
+    if (value !== undefined) payload[key] = value;
+  }
+  if (actor?.id) payload.updated_by = actor.id;
+  await updateDoc(
+    doc(getFirebaseFirestore(), PQR_COLLECTIONS.documents, id),
+    payload as UpdateData<DocumentData>,
+  );
 }
 
 export async function updatePqrStatus(id: string, status: PqrDocumentStatus, actor: Actor) {
+  const existingSnap = await getDoc(doc(getFirebaseFirestore(), PQR_COLLECTIONS.documents, id));
+  if (!existingSnap.exists()) throw new Error('PQR not found');
+  const current = String(existingSnap.data().document_status || 'draft');
+  if (!canTransitionPqrStatus(current, status)) {
+    throw new Error(`Cannot change PQR from ${current} to ${status}.`);
+  }
   await updatePqrDocument(id, { document_status: status }, actor);
-  await addDoc(collection(getFirebaseFirestore(), 'audit_logs'), {
-    dateTime: now(),
-    userId: actor.id,
-    userName: actor.name,
-    module: 'PQR',
+  await createAuditLog({
+    moduleName: 'PQR',
+    collectionName: PQR_COLLECTIONS.documents,
     recordId: id,
-    action: 'STATUS_CHANGE',
+    actionType: 'STATUS_CHANGE',
+    actionDescription: `Status changed from ${current} to ${status}`,
+    oldValue: current,
     newValue: status,
-    oldValue: '',
-    reason: `Status changed to ${status}`,
-    ipAddress: 'client',
-    device: typeof navigator !== 'undefined' ? navigator.userAgent : 'server',
+    user: { id: actor.id, name: actor.name },
     status: 'Success',
   });
 }

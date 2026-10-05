@@ -115,6 +115,7 @@ export const packingMaterialMonitoringFormSchema = z.object({
   printingVerified: z.string().trim().default(''),
   dimensionCheck: z.string().trim().default(''),
   sealIntegrity: z.string().trim().default(''),
+  stsNumber: z.string().trim().default(''),
   stpNumber: z.string().trim().default(''),
   testParameter: z.string().trim().default(''),
   observedResult: z.union([z.coerce.number(), z.string()]).optional(),

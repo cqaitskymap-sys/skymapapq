@@ -15,6 +15,7 @@ import {
 } from './complaint-types';
 import { computeComplaintDashboardMetrics } from './complaint-dashboard-records';
 import type { ComplaintCreateInput } from './complaint-schemas';
+import { assertRecordMutable, omitUndefined } from './qms-record-guard';
 
 function now() { return new Date().toISOString(); }
 
@@ -223,12 +224,22 @@ function applyFilters(records: ComplaintRecord[], filters?: ComplaintFilters): C
 }
 
 export async function updateComplaint(
-  id: string, patch: Partial<ComplaintRecord>, actor: ComplaintActor, workflow = false,
+  id: string,
+  patch: Partial<ComplaintRecord>,
+  actor: ComplaintActor,
+  workflow = false,
+  options?: { reopen?: boolean },
 ): Promise<ComplaintRecord> {
   const existing = await getComplaintById(id);
   if (!existing) throw new Error('Complaint not found');
+  assertRecordMutable(existing.status, options, 'complaint');
   if (!workflow && existing.status !== 'draft') throw new Error('Only draft complaints can be edited');
-  const payload = { ...patch, updated_by: actor.id, updated_by_name: actor.name, updated_at: now() };
+  const payload = omitUndefined({
+    ...patch,
+    updated_by: actor.id,
+    updated_by_name: actor.name,
+    updated_at: now(),
+  } as Record<string, unknown>) as Partial<ComplaintRecord>;
   await updateDoc(doc(getFirebaseFirestore(), COMPLAINT_COLLECTIONS.records, id), payload);
   await audit(actor, 'UPDATE', id, existing, { ...existing, ...payload });
   return { ...existing, ...payload } as ComplaintRecord;

@@ -9,9 +9,9 @@ import { BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { useAuth } from '@/contexts/auth-context';
 import { cpvPermissions } from '@/lib/cpv';
 import {
-  summarizeEnvironmentalRecords, buildEnvironmentalChartSeries, CLEANROOM_GRADES, ISO_CLASSES,
-  EM_MONITORING_TYPES, EM_PROCESS_STAGES, EM_STATUSES, EM_DATA_SOURCES,
-  evaluateEnvironmentalStatus, environmentalMonitoringFormSchema,
+  summarizeEnvironmentalRecords, buildEnvironmentalChartSeries, CLEANROOM_GRADES,
+  EM_MONITORING_TYPES, EM_PROCESS_STAGES, EM_STATUSES,
+  environmentalMonitoringFormSchema,
   type EnvironmentalMonitoringFormData, type EnvironmentalMonitoringRecord,
 } from '@/lib/cpv-environmental-monitoring';
 import {
@@ -198,20 +198,6 @@ export function EnvironmentalMonitoringPage() {
     { href: '/cpv/reports-analytics', label: 'Reports' }, { href: '/cpv/statistical-process-control', label: 'SPC' },
     { href: '/cpv/trend-analysis', label: 'Trends' },
   ], [productQuery, batchQuery]);
-
-  const formStatus = useMemo(() => {
-    if (!form.observedValue || form.lowerLimit === undefined || form.upperLimit === undefined) return '';
-    return evaluateEnvironmentalStatus(
-      form.observedValue,
-      Number(form.lowerLimit),
-      Number(form.upperLimit),
-      form.resultType || 'Numeric',
-      form.alertLimitLow,
-      form.alertLimitHigh,
-      form.actionLimitLow,
-      form.actionLimitHigh,
-    );
-  }, [form]);
 
   const onFormProductChange = async (productId: string) => {
     setFormProductId(productId);
@@ -692,55 +678,7 @@ export function EnvironmentalMonitoringPage() {
               <div><Label>Unit *</Label><Input className="mt-1" value={form.unit || ''} onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))} /></div>
               <div><Label>Lower Limit</Label><Input className="mt-1" type="number" value={form.lowerLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, lowerLimit: Number(e.target.value) }))} /></div>
               <div><Label>Upper Limit</Label><Input className="mt-1" type="number" value={form.upperLimit ?? ''} onChange={(e) => setForm((f) => ({ ...f, upperLimit: Number(e.target.value) }))} /></div>
-              <div><Label>Alert Low</Label><Input className="mt-1" type="number" value={form.alertLimitLow ?? ''} onChange={(e) => setForm((f) => ({ ...f, alertLimitLow: e.target.value ? Number(e.target.value) : undefined }))} /></div>
-              <div><Label>Alert High</Label><Input className="mt-1" type="number" value={form.alertLimitHigh ?? ''} onChange={(e) => setForm((f) => ({ ...f, alertLimitHigh: e.target.value ? Number(e.target.value) : undefined }))} /></div>
-              <div><Label>Action Low</Label><Input className="mt-1" type="number" value={form.actionLimitLow ?? ''} onChange={(e) => setForm((f) => ({ ...f, actionLimitLow: e.target.value ? Number(e.target.value) : undefined }))} /></div>
-              <div><Label>Action High</Label><Input className="mt-1" type="number" value={form.actionLimitHigh ?? ''} onChange={(e) => setForm((f) => ({ ...f, actionLimitHigh: e.target.value ? Number(e.target.value) : undefined }))} /></div>
-              <div><Label>Date *</Label><Input className="mt-1" type="date" value={form.monitoringDate || ''} onChange={(e) => setForm((f) => ({ ...f, monitoringDate: e.target.value }))} /></div>
-              <div><Label>Time *</Label><Input className="mt-1" type="time" value={form.monitoringTime || ''} onChange={(e) => setForm((f) => ({ ...f, monitoringTime: e.target.value }))} /></div>
-              <div><Label>Building</Label><Input className="mt-1" value={form.building || ''} onChange={(e) => setForm((f) => ({ ...f, building: e.target.value }))} /></div>
-              <div><Label>Block</Label><Input className="mt-1" value={form.block || ''} onChange={(e) => setForm((f) => ({ ...f, block: e.target.value }))} /></div>
-              <div><Label>Floor</Label><Input className="mt-1" value={form.floor || ''} onChange={(e) => setForm((f) => ({ ...f, floor: e.target.value }))} /></div>
-              <div><Label>Site</Label><Input className="mt-1" value={form.site || ''} onChange={(e) => setForm((f) => ({ ...f, site: e.target.value }))} /></div>
-              <div><Label>Department</Label><Input className="mt-1" value={form.department || ''} onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))} /></div>
-              <div><Label>Shift</Label><Input className="mt-1" value={form.shift || ''} onChange={(e) => setForm((f) => ({ ...f, shift: e.target.value }))} /></div>
-              <div><Label>Zone</Label><Input className="mt-1" value={form.zone || ''} onChange={(e) => setForm((f) => ({ ...f, zone: e.target.value }))} /></div>
-              <div><Label>AHU ID</Label><Input className="mt-1" value={form.ahuId || ''} onChange={(e) => setForm((f) => ({ ...f, ahuId: e.target.value }))} /></div>
-              <div><Label>AHU Name</Label><Input className="mt-1" value={form.ahuName || ''} onChange={(e) => setForm((f) => ({ ...f, ahuName: e.target.value }))} /></div>
-              <div><Label>ISO Class</Label>
-                <Select
-                  value={form.isoClass || 'N/A'}
-                  onValueChange={(v) => setForm((f) => ({ ...f, isoClass: v as EnvironmentalMonitoringFormData['isoClass'] }))}
-                >
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>{ISO_CLASSES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <div><Label>Data Source</Label>
-                <Select value={form.dataSource || 'Manual'} onValueChange={(v) => setForm((f) => ({ ...f, dataSource: v as EnvironmentalMonitoringFormData['dataSource'] }))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>{EM_DATA_SOURCES.map((source) => <SelectItem key={source} value={source}>{source}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <div><Label>Sensor ID</Label><Input className="mt-1" value={form.sensorId || ''} onChange={(e) => setForm((f) => ({ ...f, sensorId: e.target.value }))} /></div>
-              <div><Label>Alarm Status</Label><Input className="mt-1" value={form.alarmStatus || ''} onChange={(e) => setForm((f) => ({ ...f, alarmStatus: e.target.value }))} /></div>
-              <div><Label>Communication</Label>
-                <Select value={form.communicationStatus || 'OK'} onValueChange={(v) => setForm((f) => ({ ...f, communicationStatus: v }))}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>{['OK', 'Degraded', 'Disconnected', 'Failed'].map((status) => <SelectItem key={status} value={status}>{status}</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-              <div><Label>Equipment ID</Label><Input className="mt-1" value={form.equipmentId || ''} onChange={(e) => setForm((f) => ({ ...f, equipmentId: e.target.value }))} /></div>
-              <div><Label>Equipment Name</Label><Input className="mt-1" value={form.equipmentName || ''} onChange={(e) => setForm((f) => ({ ...f, equipmentName: e.target.value }))} /></div>
-              <div><Label>Monitoring Point Code</Label><Input className="mt-1" value={form.monitoringPointCode || ''} onChange={(e) => setForm((f) => ({ ...f, monitoringPointCode: e.target.value }))} /></div>
-              <div><Label>Monitoring Point Name</Label><Input className="mt-1" value={form.monitoringPointName || ''} onChange={(e) => setForm((f) => ({ ...f, monitoringPointName: e.target.value }))} /></div>
-              <div><Label>Spec Number</Label><Input className="mt-1" value={form.specificationNumber || ''} onChange={(e) => setForm((f) => ({ ...f, specificationNumber: e.target.value }))} /></div>
-              <div><Label>Version</Label><Input className="mt-1" value={form.version || '1.0'} onChange={(e) => setForm((f) => ({ ...f, version: e.target.value }))} /></div>
-              <div><Label>Effective Date</Label><Input className="mt-1" type="date" value={form.effectiveDate || ''} onChange={(e) => setForm((f) => ({ ...f, effectiveDate: e.target.value }))} /></div>
-              <div><Label>Recorded By *</Label><Input className="mt-1" value={form.recordedBy || ''} onChange={(e) => setForm((f) => ({ ...f, recordedBy: e.target.value }))} /></div>
-              <div><Label>Status (auto)</Label><div className="mt-2">{formStatus ? <StatusBadge status={formStatus} /> : '—'}</div></div>
             </div>
-            <div><Label>Description</Label><Textarea className="mt-1" value={form.description || ''} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></div>
             <div><Label>Remarks</Label><Textarea className="mt-1" value={form.remarks || ''} onChange={(e) => setForm((f) => ({ ...f, remarks: e.target.value }))} /></div>
             <div><Label>Change Reason *</Label><Textarea className="mt-1" value={form.changeReason || ''} onChange={(e) => setForm((f) => ({ ...f, changeReason: e.target.value }))} placeholder="Minimum 5 characters (ALCOA+)" /></div>
             <div className="flex justify-end gap-2 pt-2">

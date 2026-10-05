@@ -317,12 +317,12 @@ export async function closeOosWithClosure(
     await updateOosRecord(oosId, {
       status: 'closed',
       actual_closure_date: today(),
+      ...(ctx.record.batch_release_blocked ? { batch_release_blocked: false } : {}),
     }, toOosActor(actor), { workflow: true });
 
     let batchUpdated = false;
     if (ctx.record.batch_release_blocked && ctx.record.batch_id) {
       await setBatchReleaseEligibility(ctx.record.batch_id, false);
-      await updateOosRecord(oosId, { batch_release_blocked: false }, toOosActor(actor), { workflow: true });
       batchUpdated = true;
       await audit(actor, 'Batch Release Eligibility Updated', oosId, 'Batch release unblocked after OOS closure');
     }
@@ -393,7 +393,7 @@ export async function reopenOosClosure(
     await updateOosRecord(oosId, {
       status: 'final_qa_review',
       actual_closure_date: null,
-    }, toOosActor(actor), { workflow: true });
+    }, toOosActor(actor), { workflow: true, reopen: true });
     await audit(actor, 'OOS Reopened', oosId, reason);
     await audit(actor, 'E-Sign Success', oosId, eSignature);
     await notifyUser('OOS Reopened', record.oos_number, oosId, record.created_by);

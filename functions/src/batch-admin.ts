@@ -76,7 +76,7 @@ const BATCH_STATUS_TRANSITIONS: Record<string, readonly string[]> = {
 const RELEASE_STATUSES = ['Pending', 'Released', 'Rejected', 'On Hold', 'Not Applicable'] as const;
 const QC_STATUSES = ['Pending', 'In Progress', 'Approved', 'Rejected', 'On Hold', 'Not Applicable'] as const;
 const QA_STATUSES = ['Pending', 'In Review', 'Approved', 'Rejected', 'On Hold', 'Not Applicable'] as const;
-const BATCH_SIZE_UNITS = ['Vials', 'Tablets', 'Capsules', 'Bottles', 'Kg', 'L', 'Units'] as const;
+const BATCH_SIZE_UNITS = ['Vials', 'Ampoule', 'Tablets', 'Capsules', 'Bottles', 'Kg', 'L', 'Units'] as const;
 
 const LINKED_BATCH_COLLECTIONS: Array<{ name: string; idField: string; numberField?: string }> = [
   { name: 'deviations', idField: 'batch_id', numberField: 'batch_number' },

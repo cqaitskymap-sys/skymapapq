@@ -1,4 +1,5 @@
 import { normalizeRole } from '@/lib/permissions';
+import { localCalendarDate } from '@/lib/qms-record-guard';
 import {
   CHANGE_CATEGORIES,
   CHANGE_PRIORITIES,
@@ -116,15 +117,20 @@ export function isCcOpen(status: string): boolean {
   return !TERMINAL_STATUSES.has(status);
 }
 
-export function isRecordOverdue(r: ChangeControlRecord, today = new Date().toISOString().split('T')[0]): boolean {
-  if (!isCcOpen(r.status) || r.status === 'overdue') return r.status === 'overdue';
-  if (!r.planned_implementation_date) return false;
-  return r.planned_implementation_date < today && r.status !== 'closed';
+function ccDueDate(r: ChangeControlRecord): string {
+  return r.target_closure_date || r.planned_implementation_date || '';
 }
 
-export function daysOverdue(r: ChangeControlRecord, today = new Date().toISOString().split('T')[0]): number {
+export function isRecordOverdue(r: ChangeControlRecord, today = localCalendarDate()): boolean {
+  if (!isCcOpen(r.status) || r.status === 'overdue') return r.status === 'overdue';
+  const due = ccDueDate(r);
+  if (!due) return false;
+  return due < today;
+}
+
+export function daysOverdue(r: ChangeControlRecord, today = localCalendarDate()): number {
   if (!isRecordOverdue(r, today) && r.status !== 'overdue') return 0;
-  const due = r.planned_implementation_date;
+  const due = ccDueDate(r);
   if (!due) return 0;
   const diff = new Date(`${today}T00:00:00`).getTime() - new Date(`${due}T00:00:00`).getTime();
   return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
@@ -154,7 +160,7 @@ export function toDashboardRow(
     change_priority: r.change_priority || '—',
     status: r.status || 'draft',
     owner: r.assigned_owner_name || r.assigned_owner || r.initiated_by_name || '—',
-    due_date: r.planned_implementation_date || r.target_closure_date || '—',
+    due_date: ccDueDate(r) || '—',
     days_overdue: daysOverdue(r),
     validation_impact: !!r.validation_impact,
     csv_impact: !!r.csv_impact,

@@ -9,6 +9,8 @@ import { sendInAppNotification } from '@/lib/notification-service';
 import { downloadCsv } from '@/lib/export-utils';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
 import { CPV_PRODUCT_COLLECTION } from '@/lib/cpv-product-master';
+import { statusMeansRejected, statusMeansReleased } from '@/lib/pqr-batch-review-records';
+import { canTransitionPqrStatus, isTerminalPqrStatus } from '@/lib/pqr-dashboard-records';
 import {
   PQR_CREATE_COLLECTIONS, PQR_CREATE_MODULE, PQR_SECTION_DEFINITIONS,
   SCOPE_TO_SECTIONS, ALWAYS_INCLUDED_SECTIONS,
@@ -61,11 +63,13 @@ function inDateRange(raw: string | undefined, from: string, to: string): boolean
 }
 
 function matchesProduct(record: Record<string, unknown>, productName: string, productCode: string): boolean {
-  const names = [productName, productCode].map((s) => s.toLowerCase()).filter(Boolean);
+  const names = [productName, productCode].map((s) => s.trim().toLowerCase()).filter((name) => name.length >= 2);
+  if (!names.length) return false;
   const fields = ['productName', 'product_name', 'product', 'productCode', 'product_code'];
   return fields.some((f) => {
-    const val = str(record[f]).toLowerCase();
-    return names.some((n) => val.includes(n) || n.includes(val));
+    const val = str(record[f]).trim().toLowerCase();
+    if (val.length < 2) return false;
+    return names.some((name) => val === name || val.includes(name));
   });
 }
 
@@ -276,7 +280,7 @@ export async function checkPqrConflicts(input: {
         result.warning = `An approved PQR (${result.existingPqrNumber}) already covers this period.`;
       }
 
-      if (ACTIVE_DRAFT_STATUSES.has(rStatus)) {
+      if (ACTIVE_DRAFT_STATUSES.has(rStatus) && datesOverlap(input.from, input.to, rFrom, rTo)) {
         result.activeDraft = true;
         if (!result.existingPqrNumber) {
           result.existingPqrNumber = str(r.pqrNumber || r.pqr_number);
@@ -354,16 +358,27 @@ function filterByProductAndDate(
   return records.filter((r) =>
     matchesProduct(r, productName, productCode)
     && inDateRange(str(
-      r.manufacturingDate || r.manufacturing_date || r.testDate || r.test_date
-      || r.recordedDate || r.createdAt || r.created_at,
+      r.deviation_date || r.deviationDate
+      || r.oos_date || r.detected_date || r.occurrence_date
+      || r.complaint_date || r.received_date
+      || r.change_date || r.initiation_date
+      || r.recall_date
+      || r.manufacturingDate || r.manufacturing_date
+      || r.testDate || r.test_date
+      || r.recordedDate || r.recorded_date
+      || r.createdAt || r.created_at,
     ), from, to),
   );
 }
 
 function countBatchStatus(batches: Record<string, unknown>[], type: 'released' | 'rejected'): number {
   return batches.filter((b) => {
-    const rs = str(b.releaseStatus || b.release_status || b.batchStatus || b.status).toLowerCase();
-    return type === 'released' ? rs.includes('release') && !rs.includes('reject') : rs.includes('reject');
+    const batchStatus = str(b.batchStatus || b.batch_status || b.status);
+    const releaseStatus = str(b.releaseStatus || b.release_status);
+    const rejected = statusMeansRejected(batchStatus) || statusMeansRejected(releaseStatus);
+    if (type === 'rejected') return rejected;
+    if (rejected) return false;
+    return statusMeansReleased(releaseStatus) || statusMeansReleased(batchStatus);
   }).length;
 }
 
@@ -500,7 +515,10 @@ export async function collectPqrData(
       averageCpk,
       openCriticalOos: countOpenCritical(oosRecords, 'oos'),
       openCriticalDeviations: countOpenCritical(deviationRecords, 'deviation'),
-      openCapa: capaRecords.filter((c) => !str(c.status).toLowerCase().includes('closed')).length,
+      openCapa: capaRecords.filter((c) => {
+        const status = str(c.capa_status || c.capaStatus || c.status).toLowerCase();
+        return status !== 'closed' && status !== 'rejected' && !status.includes('cancelled');
+      }).length,
     };
 
     const hasData = batches.length > 0 || rawMaterials.length > 0 || oosRecords.length > 0
@@ -540,7 +558,7 @@ export function computeOverallAssessment(data: PqrCollectedSummary): {
   recommendations: string;
 } {
   const {
-    rejectedBatches, recalls, openCriticalOos, openCriticalDeviations, openCapa,
+    rejectedBatches, releasedBatches, totalBatches, recalls, openCriticalOos, openCriticalDeviations, openCapa,
     oos, averageCpk, stabilityRecords,
   } = data;
 
@@ -562,13 +580,21 @@ export function computeOverallAssessment(data: PqrCollectedSummary): {
     recommendations.push('Review process capability and implement improvement actions.');
   }
 
+  const batchSentence = totalBatches === 0
+    ? 'No batches were identified for the selected review period.'
+    : rejectedBatches === 0 && recalls === 0 && releasedBatches === totalBatches
+      ? 'All batches manufactured during the review period were released and no batch was rejected.'
+      : rejectedBatches > 0
+        ? `${rejectedBatches} batch(es) rejected during the review period; remediation documented.`
+        : `${releasedBatches} of ${totalBatches} batches were released. Remaining batches were not released during the review period.`;
+  const recallSentence = recalls > 0 ? `${recalls} recall record(s) fall in this review period.` : '';
+
   // FIX: stabilityOk must NOT be always-true. If no records, cannot claim within spec.
   const stabilityOk = stabilityRecords > 0;
 
   const conclusionParts = [
-    rejectedBatches === 0 && recalls === 0
-      ? 'All batches manufactured during the review period were released and no batch was rejected.'
-      : `${rejectedBatches} batch(es) rejected during the review period; remediation documented.`,
+    batchSentence,
+    recallSentence,
     openCriticalOos === 0 && oos === 0
       ? 'No OOS was observed during the review period.'
       : `${oos} OOS investigation(s) recorded during the review period.`,
@@ -578,10 +604,12 @@ export function computeOverallAssessment(data: PqrCollectedSummary): {
     stabilityOk
       ? 'Stability data reviewed during the period indicates that the product remains within approved specification.'
       : 'Stability data not available for this period; continued monitoring recommended.',
-    averageCpk >= 1.33
-      ? 'Based on the reviewed data, the process is considered to be in a state of control.'
-      : 'Process capability requires review against predefined acceptance criteria.',
-  ];
+    averageCpk <= 0
+      ? 'Process capability data was not available for this review period.'
+      : averageCpk >= 1.33
+        ? 'Based on the reviewed data, the process is considered to be in a state of control.'
+        : 'Process capability requires review against predefined acceptance criteria.',
+  ].filter(Boolean);
 
   return {
     overallQualityStatus,
@@ -814,6 +842,12 @@ export async function createAnnualPqrDraft(input: {
   });
   if (conflicts.duplicateNumber) {
     return { pqrId: '', pqrNumber: '', sections: [], error: `PQR number "${input.pqrNumber}" is already in use.` };
+  }
+  if (!input.qaOverride && conflicts.overlap) {
+    return { pqrId: '', pqrNumber: '', sections: [], error: conflicts.warning || 'An approved PQR already covers this product and review period.' };
+  }
+  if (!input.qaOverride && conflicts.activeDraft) {
+    return { pqrId: '', pqrNumber: '', sections: [], error: conflicts.warning || 'An active PQR already exists for this product and overlapping review period.' };
   }
 
   const assessment = computeOverallAssessment(input.collectedData.summary);
@@ -1113,6 +1147,15 @@ export async function savePqrDraft(
 ): Promise<{ error?: string }> {
   if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
   try {
+    const existing = await getDoc(doc(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records, pqrId));
+    if (!existing.exists()) return { error: 'PQR not found' };
+    const current = str(existing.data().status || existing.data().document_status);
+    if (isTerminalPqrStatus(current)) {
+      return { error: 'Approved, closed, or archived PQRs cannot be edited. Use the controlled reopen workflow.' };
+    }
+    if (updates.status && !canTransitionPqrStatus(current, updates.status)) {
+      return { error: `Cannot change PQR from ${current} to ${updates.status}.` };
+    }
     await updateDoc(doc(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records, pqrId), {
       ...updates,
       updatedAt: nowIso(),
@@ -1129,6 +1172,13 @@ export async function savePqrDraft(
 export async function submitPqrForReview(pqrId: string, actor: PqrCreateActor): Promise<{ error?: string }> {
   if (!isFirebaseConfigured()) return { error: 'Firebase is not configured.' };
   try {
+    const pqrDoc = await getDoc(doc(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records, pqrId));
+    if (!pqrDoc.exists()) return { error: 'PQR not found' };
+    const currentStatus = str(pqrDoc.data().status || pqrDoc.data().document_status);
+    if (isTerminalPqrStatus(currentStatus)) {
+      return { error: 'Approved, closed, or archived PQRs cannot be submitted again.' };
+    }
+
     // Ensure summary_conclusion section exists
     const sectionsSnap = await getDocs(query(
       collection(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.sections),
@@ -1153,7 +1203,6 @@ export async function submitPqrForReview(pqrId: string, actor: PqrCreateActor): 
     // Dynamic import to avoid circular dependency
     try {
       const { submitPqrForApproval } = await import('@/lib/pqr-approval-service');
-      const pqrDoc = await getDoc(doc(getFirebaseFirestore(), PQR_CREATE_COLLECTIONS.records, pqrId));
       if (pqrDoc.exists()) {
         const data = pqrDoc.data();
         await submitPqrForApproval({

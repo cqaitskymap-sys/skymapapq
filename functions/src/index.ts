@@ -14,6 +14,11 @@ import * as logger from 'firebase-functions/logger';
 
 import { type Firestore, type DocumentData, type WriteBatch } from 'firebase-admin/firestore';
 import { getAdminAuth, getAdminFirestore, initializeAdmin } from './admin-app';
+import {
+  passwordPolicyError,
+  redactSensitiveFields,
+  wouldRemoveLastSuperAdmin,
+} from './account-guards';
 
 // Keep Gen2 footprint bounded so large function sets fit Cloud Run quotas.
 setGlobalOptions({
@@ -278,17 +283,10 @@ export const createAdminUser = onCall(async (request) => {
   if (profilePhoto && !/^https:\/\//i.test(profilePhoto)) {
     throw new HttpsError('invalid-argument', 'Profile picture URL must use HTTPS');
   }
-  if (
-    password.length < 12
-    || !/[A-Z]/.test(password)
-    || !/[a-z]/.test(password)
-    || !/\d/.test(password)
-    || !/[^A-Za-z0-9]/.test(password)
-  ) {
-    throw new HttpsError(
-      'invalid-argument',
-      'Temporary password must be at least 12 characters and include upper, lower, number, and special characters',
-    );
+  const settingsSnap = await firestore.collection('system_settings').doc('global').get();
+  const passwordError = passwordPolicyError(password, settingsSnap.data() || {});
+  if (passwordError) {
+    throw new HttpsError('invalid-argument', passwordError);
   }
 
   await validateUserMasterAssignments(firestore, input);
@@ -609,6 +607,37 @@ export const updateAdminUser = onCall(async (request) => {
   }
 
   const authUid = String(target.authUid || userId);
+  const nextRoleForGuard = String(updates.role ?? target.role ?? 'viewer');
+  const requestedNextStatusEarly = String(updates.userStatus ?? target.userStatus ?? target.status ?? 'Inactive');
+  const nextLockedEarly = Boolean(updates.accountLocked ?? target.accountLocked) || requestedNextStatusEarly === 'Locked';
+  const nextDeletedEarly = Boolean(updates.isDeleted ?? target.isDeleted);
+  const remainsActiveSuperAdmin = nextRoleForGuard === 'super_admin'
+    && requestedNextStatusEarly === 'Active'
+    && !nextLockedEarly
+    && !nextDeletedEarly;
+  const targetIsActiveSuperAdmin = String(target.role || '') === 'super_admin'
+    && String(target.userStatus || target.status || '') === 'Active'
+    && target.accountLocked !== true
+    && target.isDeleted !== true;
+  if (targetIsActiveSuperAdmin && !remainsActiveSuperAdmin) {
+    const superAdmins = await firestore.collection('users').where('role', '==', 'super_admin').limit(25).get();
+    const activeSuperAdminCount = superAdmins.docs.filter((document) => {
+      const data = document.data();
+      return data.isDeleted !== true
+        && String(data.userStatus || data.status || '') === 'Active'
+        && data.accountLocked !== true;
+    }).length;
+    if (wouldRemoveLastSuperAdmin({
+      targetIsActiveSuperAdmin,
+      remainsActiveSuperAdmin,
+      activeSuperAdminCount,
+    })) {
+      throw new HttpsError(
+        'failed-precondition',
+        'The last active Super Admin cannot be deactivated, locked, retired, or reassigned',
+      );
+    }
+  }
   if (
     authUid === request.auth.uid
     && ['role', 'userStatus', 'status', 'accountLocked', 'isDeleted']
@@ -695,8 +724,8 @@ export const updateAdminUser = onCall(async (request) => {
       module: 'User Management',
       recordId: userId,
       action: auditAction,
-      oldValue: JSON.stringify(target),
-      newValue: JSON.stringify({ ...target, ...updates, email: nextEmail }),
+      oldValue: JSON.stringify(redactSensitiveFields(target as Record<string, unknown>)),
+      newValue: JSON.stringify(redactSensitiveFields({ ...target, ...updates, email: nextEmail })),
       changedFields,
       reason,
       ipAddress: request.rawRequest.ip || 'server',

@@ -95,7 +95,7 @@ const BATCH_STATUS_TRANSITIONS: Record<string, readonly string[]> = {
 
 const RELEASE_STATUSES = ['Pending', 'Released', 'Rejected', 'On Hold', 'Not Applicable'] as const;
 const REVIEW_FREQUENCIES = ['Monthly', 'Quarterly', 'Half Yearly', 'Yearly'] as const;
-const BATCH_SIZE_UNITS = ['Vials', 'Tablets', 'Capsules', 'Bottles', 'Kg', 'L', 'Units'] as const;
+const BATCH_SIZE_UNITS = ['Vials', 'Ampoule', 'Tablets', 'Capsules', 'Bottles', 'Kg', 'L', 'Units'] as const;
 const CRITICAL_STATUSES = new Set(['Released', 'Rejected', 'Hold', 'Archived', 'Closed']);
 
 function assertViewer(actor: DocumentData | undefined, role: string) {
@@ -447,7 +447,7 @@ function sanitizePayload(data: Record<string, unknown>, existing?: DocumentData)
     finishedProductBatchNumber: optionalString(
       data.finishedProductBatchNumber ?? existing?.finishedProductBatchNumber,
       'FP batch',
-      80,
+      500,
     ),
     packingBatchNumber: optionalString(
       data.packingBatchNumber ?? existing?.packingBatchNumber,
@@ -459,7 +459,7 @@ function sanitizePayload(data: Record<string, unknown>, existing?: DocumentData)
       'Manufactured for',
       200,
     ),
-    customerName: optionalString(data.customerName ?? existing?.customerName, 'Customer', 200),
+    customerName: optionalString(data.customerName ?? existing?.customerName, 'Customer', 500),
     equipmentIds: Array.isArray(data.equipmentIds)
       ? (data.equipmentIds as unknown[]).map(String).slice(0, 100)
       : Array.isArray(existing?.equipmentIds)

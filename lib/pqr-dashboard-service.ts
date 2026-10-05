@@ -17,6 +17,7 @@ import {
   type PqrDashboardKpis, type PqrDueRow, type PqrFindingRow,
   type PqrPendingApprovalRow, type PqrProductAnalysisRow, type PqrRecordRow,
 } from '@/lib/pqr-dashboard-records';
+import { statusMeansRejected, statusMeansReleased } from '@/lib/pqr-batch-review-records';
 
 export type PqrDashboardActor = { id: string; name: string; role?: string };
 
@@ -426,10 +427,17 @@ function computeKpis(
 
   const products = new Set(pqrs.map((p) => p.product).filter(Boolean));
 
-  const released = batches.filter((b) => str(b.releaseStatus || b.release_status, '').toLowerCase().includes('release')).length;
-  const rejected = batches.filter((b) => str(b.releaseStatus || b.release_status, '').toLowerCase().includes('reject')).length;
+  const released = batches.filter((b) => statusMeansReleased(str(b.releaseStatus || b.release_status, '')) && !statusMeansRejected(str(b.batchStatus || b.batch_status || b.status, ''))).length;
+  const rejected = batches.filter((b) => statusMeansRejected(str(b.releaseStatus || b.release_status, '')) || statusMeansRejected(str(b.batchStatus || b.batch_status || b.status, ''))).length;
 
-  const yieldVals = yields.map((y) => num(y.yieldPercentage || y.yieldPercent || y.observedValue)).filter((v) => v > 0);
+  const yieldVals = yields
+    .map((y) => {
+      const raw = y.yieldPercentage ?? y.yieldPercent ?? y.observedValue;
+      if (raw === null || raw === undefined || raw === '') return null;
+      const n = Number(raw);
+      return Number.isFinite(n) && n >= 0 ? n : null;
+    })
+    .filter((v): v is number => v != null);
   const assayVals = cqa.filter((r) => str(r.parameterName || r.testParameter).toLowerCase().includes('assay'))
     .map((r) => num(r.resultValue || r.observedValue)).filter((v) => v > 0);
   const cpkVals = capability.map((c) => num(c.cpk || c.Cpk)).filter((v) => v > 0);
@@ -477,9 +485,9 @@ function computeKpis(
     changeControlCount: changeControls.length,
     marketComplaintCount: complaints.length,
     recallCount: recalls.length,
-    averageYieldPct: yieldVals.length ? round(yieldVals.reduce((a, b) => a + b, 0) / yieldVals.length) : 0,
-    averageAssayPct: assayVals.length ? round(assayVals.reduce((a, b) => a + b, 0) / assayVals.length) : 0,
-    averageCpk: cpkVals.length ? round(cpkVals.reduce((a, b) => a + b, 0) / cpkVals.length, 2) : 0,
+    averageYieldPct: yieldVals.length ? round(yieldVals.reduce((a, b) => a + b, 0) / yieldVals.length) : null,
+    averageAssayPct: assayVals.length ? round(assayVals.reduce((a, b) => a + b, 0) / assayVals.length) : null,
+    averageCpk: cpkVals.length ? round(cpkVals.reduce((a, b) => a + b, 0) / cpkVals.length, 2) : null,
     openRisks,
   };
 }

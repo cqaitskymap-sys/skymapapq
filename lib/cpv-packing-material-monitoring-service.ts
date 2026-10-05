@@ -140,6 +140,7 @@ export function normalizePackingRecord(raw: Record<string, unknown>): PackingMat
     printingVerified: str(raw.printingVerified || raw.printing_verified),
     dimensionCheck: str(raw.dimensionCheck || raw.dimension_check),
     sealIntegrity: str(raw.sealIntegrity || raw.seal_integrity),
+    stsNumber: str(raw.stsNumber || raw.sts_number || raw.stsNo),
     stpNumber: str(raw.stpNumber || raw.stp_number || raw.stpNo),
     testParameter: str(raw.testParameter || raw.test_parameter),
     observedResult: ((): string | number | undefined => {
@@ -511,6 +512,7 @@ export async function importPackingFromWarehouseReceipt(
     printingVerified: '',
     dimensionCheck: '',
     sealIntegrity: '',
+    stsNumber: '',
     stpNumber: '',
     testParameter: '',
     testUnit: '',

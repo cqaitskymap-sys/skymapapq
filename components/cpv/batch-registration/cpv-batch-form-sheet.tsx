@@ -25,7 +25,7 @@ import {
 import { cpvProductToBatchAutofill } from '@/lib/cpv-batch-registration-service';
 import type { CpvProductRecord } from '@/lib/cpv-product-master';
 
-function splitBprNumbers(value: string): string[] {
+function splitList(value: string): string[] {
   const parts = value
     .split(/[,;\n]+/)
     .map((s) => s.trim())
@@ -33,8 +33,71 @@ function splitBprNumbers(value: string): string[] {
   return parts.length > 0 ? parts : [''];
 }
 
-function joinBprNumbers(values: string[]): string {
+function joinList(values: string[]): string {
   return values.map((s) => s.trim()).filter(Boolean).join(', ');
+}
+
+function RepeatableTextRows({
+  label,
+  addLabel,
+  placeholder,
+  rows,
+  locked,
+  onChange,
+}: {
+  label: string;
+  addLabel: string;
+  placeholder: string;
+  rows: string[];
+  locked: boolean;
+  onChange: (rows: string[]) => void;
+}) {
+  return (
+    <FormItem className="sm:col-span-2">
+      <div className="flex items-center justify-between gap-2">
+        <FormLabel>{label}</FormLabel>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={locked}
+          onClick={() => onChange([...rows, ''])}
+        >
+          <Plus className="mr-1 h-3.5 w-3.5" />
+          {addLabel}
+        </Button>
+      </div>
+      <div className="space-y-2">
+        {rows.map((row, index) => (
+          <div key={`${placeholder}-${index}`} className="flex gap-2">
+            <FormControl>
+              <Input
+                value={row}
+                placeholder={`${placeholder} ${index + 1}`}
+                readOnly={locked}
+                onChange={(e) => {
+                  const next = [...rows];
+                  next[index] = e.target.value;
+                  onChange(next);
+                }}
+              />
+            </FormControl>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={locked || rows.length <= 1}
+              onClick={() => onChange(rows.filter((_, i) => i !== index))}
+              aria-label={`Remove ${placeholder} ${index + 1}`}
+            >
+              <Trash2 className="h-4 w-4 text-red-500" />
+            </Button>
+          </div>
+        ))}
+      </div>
+      <FormMessage />
+    </FormItem>
+  );
 }
 
 interface CpvBatchFormSheetProps {
@@ -56,6 +119,8 @@ export function CpvBatchFormSheet({
 }: CpvBatchFormSheetProps) {
   const locked = editing ? isBatchFieldLocked(editing.batchStatus) : false;
   const [bprRows, setBprRows] = useState<string[]>(['']);
+  const [fpBatchRows, setFpBatchRows] = useState<string[]>(['']);
+  const [customerRows, setCustomerRows] = useState<string[]>(['']);
 
   const form = useForm<CpvBatchFormData>({
     resolver: zodResolver(cpvBatchFormSchema),
@@ -115,7 +180,9 @@ export function CpvBatchFormSheet({
   useEffect(() => {
     if (!open) return;
     if (editing) {
-      setBprRows(splitBprNumbers(editing.bprNumber || ''));
+      setBprRows(splitList(editing.bprNumber || ''));
+      setFpBatchRows(splitList(editing.finishedProductBatchNumber || ''));
+      setCustomerRows(splitList(editing.customerName || ''));
       form.reset({
         cpvProductId: editing.cpvProductId,
         batchNumber: editing.batchNumber,
@@ -169,9 +236,13 @@ export function CpvBatchFormSheet({
       });
     } else {
       setBprRows(['']);
+      setFpBatchRows(['']);
+      setCustomerRows(['']);
       form.reset({
         ...form.getValues(),
         bprNumber: '',
+        finishedProductBatchNumber: '',
+        customerName: '',
         changeReason: 'Register CPV Batch',
         batchStatus: 'Planned',
         releaseStatus: 'Pending',
@@ -183,7 +254,19 @@ export function CpvBatchFormSheet({
   const updateBprRows = (next: string[]) => {
     const rows = next.length > 0 ? next : [''];
     setBprRows(rows);
-    form.setValue('bprNumber', joinBprNumbers(rows), { shouldDirty: true });
+    form.setValue('bprNumber', joinList(rows), { shouldDirty: true });
+  };
+
+  const updateFpBatchRows = (next: string[]) => {
+    const rows = next.length > 0 ? next : [''];
+    setFpBatchRows(rows);
+    form.setValue('finishedProductBatchNumber', joinList(rows), { shouldDirty: true });
+  };
+
+  const updateCustomerRows = (next: string[]) => {
+    const rows = next.length > 0 ? next : [''];
+    setCustomerRows(rows);
+    form.setValue('customerName', joinList(rows), { shouldDirty: true });
   };
 
   const handleProductSelect = (productId: string) => {
@@ -195,14 +278,16 @@ export function CpvBatchFormSheet({
       if (val !== undefined) form.setValue(key as keyof CpvBatchFormData, val as never);
     });
     if (typeof fill.bprNumber === 'string') {
-      setBprRows(splitBprNumbers(fill.bprNumber));
+      setBprRows(splitList(fill.bprNumber));
     }
   };
 
   const submit = form.handleSubmit(async (values) => {
     await onSubmit({
       ...values,
-      bprNumber: joinBprNumbers(bprRows),
+      bprNumber: joinList(bprRows),
+      finishedProductBatchNumber: joinList(fpBatchRows),
+      customerName: joinList(customerRows),
       changeReason: values.changeReason?.trim() || (editing ? 'Update CPV Batch' : 'Register CPV Batch'),
     });
   });
@@ -264,7 +349,7 @@ export function CpvBatchFormSheet({
               )} />
               <FormField control={form.control} name="manufacturingDate" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Mfg Start *</FormLabel>
+                  <FormLabel>MFG DATE *</FormLabel>
                   <FormControl>
                     <Input
                       type="month"
@@ -303,56 +388,34 @@ export function CpvBatchFormSheet({
                 <FormItem><FormLabel>BMR</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
               )} />
               <FormField control={form.control} name="bprNumber" render={() => (
-                <FormItem className="sm:col-span-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <FormLabel>BPR Number</FormLabel>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={locked}
-                      onClick={() => updateBprRows([...bprRows, ''])}
-                    >
-                      <Plus className="mr-1 h-3.5 w-3.5" />
-                      Add BPR
-                    </Button>
-                  </div>
-                  <div className="space-y-2">
-                    {bprRows.map((row, index) => (
-                      <div key={`bpr-${index}`} className="flex gap-2">
-                        <FormControl>
-                          <Input
-                            value={row}
-                            placeholder={`BPR Number ${index + 1}`}
-                            readOnly={locked}
-                            onChange={(e) => {
-                              const next = [...bprRows];
-                              next[index] = e.target.value;
-                              updateBprRows(next);
-                            }}
-                          />
-                        </FormControl>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          disabled={locked || bprRows.length <= 1}
-                          onClick={() => updateBprRows(bprRows.filter((_, i) => i !== index))}
-                          aria-label={`Remove BPR ${index + 1}`}
-                        >
-                          <Trash2 className="h-4 w-4 text-red-500" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                  <FormMessage />
-                </FormItem>
+                <RepeatableTextRows
+                  label="BPR Number"
+                  addLabel="Add BPR"
+                  placeholder="BPR Number"
+                  rows={bprRows}
+                  locked={locked}
+                  onChange={updateBprRows}
+                />
               )} />
-              <FormField control={form.control} name="finishedProductBatchNumber" render={({ field }) => (
-                <FormItem><FormLabel>Finished Product Batch</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              <FormField control={form.control} name="finishedProductBatchNumber" render={() => (
+                <RepeatableTextRows
+                  label="Finished Product Batch"
+                  addLabel="Add Batch"
+                  placeholder="Finished Product Batch"
+                  rows={fpBatchRows}
+                  locked={locked}
+                  onChange={updateFpBatchRows}
+                />
               )} />
-              <FormField control={form.control} name="customerName" render={({ field }) => (
-                <FormItem><FormLabel>Customer Name</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>
+              <FormField control={form.control} name="customerName" render={() => (
+                <RepeatableTextRows
+                  label="Customer Name"
+                  addLabel="Add Customer"
+                  placeholder="Customer Name"
+                  rows={customerRows}
+                  locked={locked}
+                  onChange={updateCustomerRows}
+                />
               )} />
             </div>
 

@@ -510,7 +510,7 @@ export async function reopenCapaRecord(
     await updateCapa(capaId, {
       capa_status: 'qa_review',
       is_locked: false,
-    }, { id: actor.id, name: actor.name, role: actor.role || '' }, { workflow: true });
+    }, { id: actor.id, name: actor.name, role: actor.role || '' }, { workflow: true, reopen: true });
     await audit(actor, 'CAPA Reopened', capaId, reason);
     await saveHistory({
       capa_id: capaId,

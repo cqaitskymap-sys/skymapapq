@@ -704,6 +704,7 @@ export function computeResultStatus(
   lower: number,
   upper: number,
 ): ResultStatus {
+  if (![observed, lower, upper].every((value) => Number.isFinite(value))) return 'Under Review';
   if (observed >= lower && observed <= upper) return 'Pass';
   return 'OOS';
 }

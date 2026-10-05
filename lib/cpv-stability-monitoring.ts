@@ -270,6 +270,19 @@ export function buildStabilityMonitoringId(
   return `STB-${batchNumber}-${interval}-${parameterCode}`.replace(/\s+/g, '-').toUpperCase();
 }
 
+function qualitativeStabilityStatus(observed: number | string): 'Complies' | 'OOS' | null {
+  const value = String(observed).trim().toLowerCase();
+  if (['pass', 'passed', 'complies', 'comply', 'compliant'].includes(value)) return 'Complies';
+  if (
+    ['fail', 'failed', 'oos'].includes(value)
+    || value.includes('not comply')
+    || value.includes('does not comply')
+    || value.includes('non-comply')
+    || value.includes('non comply')
+  ) return 'OOS';
+  return null;
+}
+
 export function evaluateStabilityStatus(
   observed: number | string,
   lower: number,
@@ -280,20 +293,13 @@ export function evaluateStabilityStatus(
   actionLow?: number,
   actionHigh?: number,
 ): string {
-  if (resultType === 'Pass/Fail') {
-    const v = String(observed).toLowerCase();
-    return v === 'pass' ? 'Complies' : 'OOS';
-  }
-  if (resultType === 'Complies/Does Not Comply') {
-    const v = String(observed).toLowerCase();
-    return v.includes('comply') && !v.includes('not') ? 'Complies' : 'OOS';
+  const qualitative = qualitativeStabilityStatus(observed);
+  if (resultType === 'Pass/Fail' || resultType === 'Complies/Does Not Comply') {
+    return qualitative ?? 'Under Review';
   }
   const num = Number(observed);
   if (!Number.isFinite(num)) {
-    const v = String(observed).toLowerCase();
-    if (v === 'pass' || v === 'complies') return 'Complies';
-    if (v === 'fail' || v.includes('not comply')) return 'OOS';
-    return 'Complies';
+    return qualitative ?? 'Under Review';
   }
   if (num < lower || num > upper) return 'OOS';
   if (Number.isFinite(actionLow) && num < Number(actionLow)) return 'Action';

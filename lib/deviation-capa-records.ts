@@ -1,5 +1,6 @@
 import { normalizeRole } from '@/lib/permissions';
-import { CLOSED_CAPA_STATUSES, type CapaRecord } from '@/lib/capa-types';
+import { type CapaRecord } from '@/lib/capa-types';
+import { localCalendarDate } from '@/lib/qms-record-guard';
 import { computeCapaRequired, type DeviationCapaLink, type DeviationRecord } from '@/lib/deviation-types';
 
 export type CapaLinkActor = { id: string; name: string; role?: string; email?: string };
@@ -25,14 +26,12 @@ export function computeCapaMandatory(record: Partial<DeviationRecord>): boolean 
 export function mapCapaRecordToDisplayStatus(capaStatus?: string, targetDate?: string | null): string {
   const s = (capaStatus || 'draft').toLowerCase();
   if (s === 'overdue') return 'Overdue';
-  if (s === 'closed' || s === 'approved') return 'Closed';
+  if (s === 'closed') return 'Closed';
+  if (s !== 'rejected' && targetDate && targetDate < localCalendarDate()) return 'Overdue';
+  if (s === 'approved') return 'Approved';
   if (s === 'draft') return 'Draft';
   if (['effectiveness_pending', 'effectiveness_completed'].includes(s)) return 'Effectiveness Pending';
   if (['under_implementation', 'implemented'].includes(s)) return 'Under Implementation';
-  if (targetDate && !CLOSED_CAPA_STATUSES.includes(s as typeof CLOSED_CAPA_STATUSES[number])) {
-    const today = new Date().toISOString().split('T')[0];
-    if (targetDate < today) return 'Overdue';
-  }
   return 'Open';
 }
 
@@ -47,8 +46,7 @@ export function isCapaLinkOverdue(link?: DeviationCapaLink | null): boolean {
 export function isCapaSatisfiedForClosure(capa?: CapaRecord | null, capaRequired?: boolean): boolean {
   if (!capaRequired) return true;
   if (!capa) return false;
-  const status = (capa.capa_status || '').toLowerCase();
-  if (!['closed', 'approved'].includes(status)) return false;
+  if ((capa.capa_status || '').toLowerCase() !== 'closed') return false;
   if (capa.effectiveness_check_required) {
     return ['Effective', 'N/A'].includes(capa.effectiveness_result);
   }

@@ -840,7 +840,7 @@ export const QA_STATUSES = [
   'Pending', 'In Review', 'Approved', 'Rejected', 'On Hold', 'Not Applicable',
 ] as const;
 
-export const BATCH_SIZE_UNITS = ['Vials', 'Tablets', 'Capsules', 'Bottles', 'Kg', 'L', 'Units'] as const;
+export const BATCH_SIZE_UNITS = ['Vials', 'Ampoule', 'Tablets', 'Capsules', 'Bottles', 'Kg', 'L', 'Units'] as const;
 
 export const BATCH_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 

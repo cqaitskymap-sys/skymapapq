@@ -98,18 +98,16 @@ export function computeCapaClosureReadiness(input: {
   const { capa, investigationStatus, correctiveActions, preventiveActions, effectiveness, approvals, attachmentCount, form } = input;
 
   const rcaApproved = isInvestigationApproved(investigationStatus);
-  const caComplete = form?.corrective_actions_completed ?? allCorrectiveActionsClosed(correctiveActions);
-  const paComplete = form?.preventive_actions_completed ?? allPreventiveActionsClosed(preventiveActions);
-  const evidenceOk = form?.evidence_uploaded ?? attachmentCount > 0;
+  const caComplete = allCorrectiveActionsClosed(correctiveActions);
+  const paComplete = allPreventiveActionsClosed(preventiveActions);
+  const evidenceOk = attachmentCount > 0 && form?.evidence_uploaded !== false;
   const effRequired = capa.effectiveness_check_required;
-  const effResult = form?.effectiveness_result || effectiveness?.effectiveness_result || effectiveness?.result || capa.effectiveness_result || 'Pending';
-  const effComplete = form?.effectiveness_check_completed ?? (
-    !effRequired || ['Effective', 'Partially Effective'].includes(String(effResult))
-  );
-  const effApproved = !effRequired || effResult === 'Effective' || effResult === 'Partially Effective';
-  const trainingOk = form?.training_completed ?? trainingRequirementsMet(preventiveActions);
-  const sopOk = form?.sop_updated ?? sopRequirementsMet(preventiveActions);
-  const ccOk = form?.change_control_completed ?? changeControlRequirementsMet(preventiveActions);
+  const effResult = effectiveness?.effectiveness_result || effectiveness?.result || capa.effectiveness_result || 'Pending';
+  const effComplete = !effRequired || effResult === 'Effective' || effResult === 'N/A';
+  const effApproved = effComplete && effResult !== 'Not Effective' && effResult !== 'Partially Effective';
+  const trainingOk = trainingRequirementsMet(preventiveActions);
+  const sopOk = sopRequirementsMet(preventiveActions);
+  const ccOk = changeControlRequirementsMet(preventiveActions);
   const qaApprovalDone = !getCurrentPendingCapaApproval(approvals);
 
   const trainingRequired = preventiveActions.some((a) => !a.is_deleted && a.training_required);

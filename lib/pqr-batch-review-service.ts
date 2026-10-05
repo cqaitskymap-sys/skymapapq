@@ -116,26 +116,26 @@ function matchesProductCode(record: Record<string, unknown>, productCode: string
 
 function normalizeBatchStatus(raw: string): string {
   const s = raw.toLowerCase();
+  if (s.includes('not release') || s.includes('unreleased') || s.includes('pending')) return 'Manufactured';
+  if (s.includes('reject') && !s.includes('not reject')) return 'Rejected';
   if (s.includes('release')) return 'Released';
-  if (s.includes('reject')) return 'Rejected';
   if (s.includes('hold')) return 'Hold';
   if (s.includes('rework')) return 'Reworked';
   if (s.includes('reprocess')) return 'Reprocessed';
   if (s.includes('cancel')) return 'Cancelled';
   if (s.includes('qc')) return 'Under QC Testing';
   if (s.includes('qa')) return 'Under QA Review';
-  if (s.includes('pending')) return 'Manufactured';
   if (s.includes('manufactur') || s.includes('planned') || s.includes('active')) return 'Manufactured';
   return raw || 'Manufactured';
 }
 
 function normalizeReleaseStatus(raw: string): string {
   const s = raw.toLowerCase();
-  if (s.includes('release') && !s.includes('reject')) return 'Released';
-  if (s.includes('reject')) return 'Rejected';
+  if (!s || s.includes('pending') || s.includes('not release') || s.includes('unreleased')) return 'Pending';
+  if (s.includes('reject') && !s.includes('not reject')) return 'Rejected';
   if (s.includes('hold')) return 'On Hold';
-  if (s.includes('pending') || !s) return 'Pending';
   if (s.includes('n/a') || s.includes('not applicable')) return 'Not Applicable';
+  if (s.includes('release')) return 'Released';
   return raw || 'Pending';
 }
 

@@ -1,5 +1,6 @@
 import { normalizeRole } from '@/lib/permissions';
-import { CLOSED_CAPA_STATUSES, type CapaRecord } from '@/lib/capa-types';
+import { type CapaRecord } from '@/lib/capa-types';
+import { localCalendarDate } from '@/lib/qms-record-guard';
 import {
   isCriticalOosTest,
   type OosImpactAssessment,
@@ -58,7 +59,7 @@ export interface OosCapaTimelineEntry {
   user?: string;
 }
 
-const today = () => new Date().toISOString().split('T')[0];
+const today = () => localCalendarDate();
 
 export function impactYes(value?: string): boolean {
   return value === 'Yes' || Boolean(value?.toLowerCase().includes('yes'));
@@ -67,14 +68,13 @@ export function impactYes(value?: string): boolean {
 export function mapCapaRecordToOosDisplayStatus(capaStatus?: string, targetDate?: string | null): string {
   const s = (capaStatus || 'draft').toLowerCase();
   if (s === 'overdue') return 'Overdue';
-  if (['closed', 'approved'].includes(s)) return 'Closed';
+  if (s === 'closed') return 'Closed';
+  if (s !== 'rejected' && targetDate && targetDate < today()) return 'Overdue';
+  if (s === 'approved') return 'Approved';
   if (s === 'draft') return 'Draft';
   if (['effectiveness_pending', 'effectiveness_completed'].includes(s)) return 'Effectiveness Check Pending';
   if (s === 'implemented' || s === 'qa_review') return 'Pending Verification';
   if (['under_implementation', 'assigned'].includes(s)) return 'Under Implementation';
-  if (targetDate && !CLOSED_CAPA_STATUSES.includes(s as typeof CLOSED_CAPA_STATUSES[number])) {
-    if (targetDate < today()) return 'Overdue';
-  }
   return 'Open';
 }
 
@@ -150,7 +150,7 @@ export function isCapaSatisfiedForOosClosure(capa?: CapaRecord | null, link?: Oo
   const effRequired = link?.effectiveness_check_required ?? capa?.effectiveness_check_required;
   if (effRequired) {
     const result = link?.effectiveness_result || capa?.effectiveness_result || '';
-    return ['Effective', 'Partially Effective', 'N/A'].includes(result);
+    return ['Effective', 'N/A'].includes(result);
   }
   return true;
 }

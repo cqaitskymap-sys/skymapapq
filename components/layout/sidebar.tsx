@@ -113,6 +113,7 @@ const navItems: NavItem[] = [
       { label: 'OOS Management', href: '/qms/oos', icon: TestTube },
       { label: 'CAPA Management', href: '/qms/capa', icon: CheckSquare },
       { label: 'Change Control', href: '/qms/change-control', icon: RefreshCw },
+      { label: 'Risk Management', href: '/qms/risk-management', icon: ShieldAlert },
       { label: 'Stability Management', href: '/qms/stability', icon: LineChart },
       { label: 'Complaint Management', href: '/qms/complaints', icon: MessageSquare },
       { label: 'Product Recall', href: '/qms/recall', icon: RotateCcw },

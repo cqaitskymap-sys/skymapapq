@@ -364,7 +364,7 @@ export async function reopenDeviationClosure(
       status: 'qa_review',
       actual_closure_date: null,
       qa_remarks: reason,
-    }, { id: actor.id, name: actor.name, role: actor.role || 'head_qa' }, { workflow: true });
+    }, { id: actor.id, name: actor.name, role: actor.role || 'head_qa' }, { workflow: true, reopen: true });
     await audit(actor, 'Deviation Reopened', deviationId, reason);
     await audit(actor, 'E-Sign Success', deviationId, eSignature);
     await notify(record.created_by, 'Deviation Reopened', record.deviation_number, deviationId);

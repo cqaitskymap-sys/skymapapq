@@ -1,5 +1,6 @@
 import { normalizeRole } from '@/lib/permissions';
-import { CLOSED_CAPA_STATUSES, type CapaRecord } from '@/lib/capa-types';
+import { type CapaRecord } from '@/lib/capa-types';
+import { localCalendarDate } from '@/lib/qms-record-guard';
 import type { ComplaintCapaLink, ComplaintImpactAssessment, ComplaintRecord } from '@/lib/complaint-types';
 
 export const COMPLAINT_CAPA_MODULE = 'Complaint CAPA Link';
@@ -42,17 +43,15 @@ export function computeComplaintCapaMandatory(
 export function mapCapaRecordToComplaintDisplayStatus(capaStatus?: string, targetDate?: string | null): string {
   const s = (capaStatus || 'draft').toLowerCase();
   if (s === 'overdue') return 'Overdue';
-  if (s === 'closed' || s === 'approved') return 'Closed';
+  if (s === 'closed') return 'Closed';
+  if (s !== 'rejected' && targetDate && targetDate < localCalendarDate()) return 'Overdue';
+  if (s === 'approved') return 'Approved';
   if (s === 'draft') return 'Draft';
   if (['pending_verification', 'qa_review', 'verification_pending'].includes(s)) return 'Pending Verification';
   if (['effectiveness_pending', 'effectiveness_completed', 'effectiveness check pending'].includes(s)) {
     return 'Effectiveness Check Pending';
   }
   if (['under_implementation', 'implemented', 'in_progress'].includes(s)) return 'Under Implementation';
-  if (targetDate && !CLOSED_CAPA_STATUSES.includes(s as typeof CLOSED_CAPA_STATUSES[number])) {
-    const today = new Date().toISOString().split('T')[0];
-    if (targetDate < today) return 'Overdue';
-  }
   if (['submitted', 'open', 'assigned'].includes(s)) return 'Open';
   return 'Open';
 }
@@ -68,10 +67,9 @@ export function isComplaintCapaLinkOverdue(link?: ComplaintCapaLink | null): boo
 export function isComplaintCapaSatisfiedForClosure(capa?: CapaRecord | null, capaRequired?: boolean): boolean {
   if (!capaRequired) return true;
   if (!capa) return false;
-  const status = (capa.capa_status || '').toLowerCase();
-  if (!['closed', 'approved'].includes(status)) return false;
+  if ((capa.capa_status || '').toLowerCase() !== 'closed') return false;
   if (capa.effectiveness_check_required) {
-    return ['Effective', 'N/A', 'Partially Effective'].includes(capa.effectiveness_result);
+    return ['Effective', 'N/A'].includes(capa.effectiveness_result);
   }
   return true;
 }

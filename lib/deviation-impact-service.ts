@@ -39,11 +39,20 @@ async function audit(actor: ImpactAssessmentActor, actionType: string, deviation
   }
 }
 
-async function notify(title: string, message: string, deviationId: string, userId: string) {
+const ROLE_RECIPIENTS = new Set(['qa', 'qa_manager', 'head_qa', 'qc', 'qc_manager', 'admin', 'production_manager']);
+
+async function notify(title: string, message: string, deviationId: string, recipient: string) {
   if (!isFirebaseConfigured()) return;
   try {
+    const roleTarget = ROLE_RECIPIENTS.has(recipient);
     await addDoc(collection(getFirebaseFirestore(), DEVIATION_COLLECTIONS.notifications), {
-      title, message, module: 'Deviation', record_id: deviationId, user_id: userId, read: false, created_at: nowIso(),
+      title,
+      message,
+      module: 'Deviation',
+      record_id: deviationId,
+      ...(roleTarget ? { target_role: recipient } : { user_id: recipient }),
+      read: false,
+      created_at: nowIso(),
     });
   } catch (e) {
     console.error('impact notify', e);

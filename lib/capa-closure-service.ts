@@ -483,7 +483,7 @@ export async function reopenCapaClosure(
   await updateCapa(capaId, {
     capa_status: 'qa_review',
     is_locked: false,
-  }, { id: actor.id, name: actor.name, role: actor.role || '' }, { workflow: true });
+  }, { id: actor.id, name: actor.name, role: actor.role || '' }, { workflow: true, reopen: true });
 
   const payload = {
     closure_status: 'Reopened',
