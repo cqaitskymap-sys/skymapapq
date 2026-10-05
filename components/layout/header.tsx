@@ -90,7 +90,7 @@ export function Header() {
   };
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 min-h-14 items-center gap-2 border-b bg-background/95 px-2 backdrop-blur-sm xs:gap-3 xs:px-3 sm:h-16 sm:min-h-16 sm:px-4 sm:gap-4">
+    <header className="sticky top-0 z-30 flex h-14 min-h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-2 backdrop-blur-sm xs:gap-3 xs:px-3 sm:h-16 sm:min-h-16 sm:px-4 sm:gap-4">
       <MobileNav />
       <div className="flex min-w-0 items-center gap-2 lg:hidden">
         <div className="relative h-7 shrink-0 sm:h-8">

@@ -237,7 +237,7 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
 
   if (permLoading) {
     return (
-      <aside className="hidden h-dvh w-[260px] items-center justify-center border-r sidebar-bg lg:flex">
+      <aside className="hidden h-full min-h-0 w-[260px] items-center justify-center overflow-hidden border-r sidebar-bg lg:flex">
         <span className="text-muted-foreground text-sm">Loading menu...</span>
       </aside>
     );
@@ -302,8 +302,8 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
   return (
     <TooltipProvider delayDuration={0}>
       <aside className={cn(
-        'h-dvh flex-col sidebar-bg border-r transition-all duration-300 ease-in-out flex-shrink-0',
-        embedded ? 'flex w-full' : 'hidden lg:flex',
+        'min-h-0 flex-col overflow-hidden sidebar-bg border-r transition-all duration-300 ease-in-out flex-shrink-0',
+        embedded ? 'flex h-dvh w-full' : 'hidden h-full lg:flex',
         !embedded && (collapsed ? 'w-[64px]' : 'w-[260px]')
       )} style={{ borderColor: 'hsl(var(--sidebar-border))' }}>
         <div className="flex items-center h-16 border-b px-4 flex-shrink-0" style={{ borderColor: 'hsl(var(--sidebar-border))' }}>
@@ -323,7 +323,7 @@ export function Sidebar({ collapsed, onToggle, embedded = false }: SidebarProps)
           </div>
         </div>
 
-        <nav className="flex-1 overflow-y-auto sidebar-scroll py-3 px-2 space-y-0.5">
+        <nav className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain sidebar-scroll py-3 px-2 space-y-0.5">
           {!collapsed && (
             <>
               <Link

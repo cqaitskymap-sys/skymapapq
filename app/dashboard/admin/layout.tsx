@@ -30,11 +30,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       >
         Skip to content
       </a>
-      <div className="flex h-dvh max-h-dvh overflow-hidden bg-slate-100/50 dark:bg-slate-950">
+      <div className="fixed inset-0 flex overflow-hidden bg-slate-100/50 dark:bg-slate-950">
         <AdminSidebar collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <Header />
-          <main id="main-content" className={cn('min-w-0 flex-1 overflow-x-hidden overflow-y-auto scrollbar-thin')}>
+          <main id="main-content" className={cn('min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain scrollbar-thin')}>
             <div className="mx-auto min-h-full max-w-[1600px] p-3 xs:p-4 sm:p-6">
               {children}
             </div>

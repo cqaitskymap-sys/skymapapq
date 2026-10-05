@@ -23,18 +23,18 @@ export function AppShell({ children, className }: AppShellProps) {
   }, [pathname]);
 
   return (
-    <div className="flex h-dvh max-h-dvh flex-col overflow-hidden bg-background">
+    <div className="fixed inset-0 flex flex-col overflow-hidden bg-background">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:shadow-md"
       >
         Skip to content
       </a>
-      <div className="flex min-w-0 flex-1 overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <Header />
-          <main id="main-content" className={cn('min-w-0 flex-1 overflow-x-hidden overflow-y-auto', className)}>
+          <main id="main-content" className={cn('min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain', className)}>
             <PageTransition routeKey={pathname ?? 'app'} variant="fade" className="mx-auto min-h-full max-w-[1600px] p-3 xs:p-4 md:p-6">
               {children}
             </PageTransition>

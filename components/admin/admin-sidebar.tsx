@@ -142,12 +142,12 @@ export function AdminSidebar({ collapsed, onToggle, embedded = false }: AdminSid
   return (
     <aside
       className={cn(
-        'h-full flex-col border-r bg-slate-50 transition-all duration-300 dark:bg-slate-950',
-        embedded ? 'flex w-full' : 'hidden lg:flex',
+        'min-h-0 flex-col overflow-hidden border-r bg-slate-50 transition-all duration-300 dark:bg-slate-950',
+        embedded ? 'flex h-dvh w-full' : 'hidden h-full lg:flex',
         !embedded && (collapsed ? 'w-[68px]' : 'w-[280px]')
       )}
     >
-      <div className="h-16 flex items-center justify-between px-4 border-b bg-white dark:bg-slate-900">
+      <div className="flex h-16 shrink-0 items-center justify-between border-b bg-white px-4 dark:bg-slate-900">
         {!collapsed && (
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-6 w-6 text-blue-600" />
@@ -163,14 +163,14 @@ export function AdminSidebar({ collapsed, onToggle, embedded = false }: AdminSid
       </div>
 
       {!collapsed && (
-        <div className="px-4 py-3 border-b">
+        <div className="shrink-0 border-b px-4 py-3">
           <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
             {role.replace(/_/g, ' ').toUpperCase()}
           </Badge>
         </div>
       )}
 
-      <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
+      <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-y-contain px-2 py-2">
         {!collapsed && (
           <>
             <Link
@@ -227,7 +227,7 @@ export function AdminSidebar({ collapsed, onToggle, embedded = false }: AdminSid
       </nav>
 
       {!collapsed && (
-        <div className="p-4 border-t text-xs text-muted-foreground">
+        <div className="shrink-0 border-t p-4 text-xs text-muted-foreground">
           <p>GxP control framework enabled</p>
           <p className="mt-1">Validation evidence must be maintained</p>
         </div>
