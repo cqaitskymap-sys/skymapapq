@@ -96,7 +96,10 @@ export function EquipmentReviewFormDialog({
   const selectedEquipmentName = form.watch('equipmentName');
   const selectedBatchNumber = form.watch('batchNumber');
   const selectedManufacturingLine = form.watch('manufacturingLine');
-  const batchOptions = batchByProduct[selectedProduct] || [];
+  const batchOptions = useMemo(
+    () => batchByProduct[selectedProduct] || [],
+    [batchByProduct, selectedProduct],
+  );
   const equipmentSelected = Boolean(selectedEquipmentId || selectedEquipmentName);
 
   const toQualificationStatus = (status?: string): EquipmentReviewFormData['qualificationStatus'] => (

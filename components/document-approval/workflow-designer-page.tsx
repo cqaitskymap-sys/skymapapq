@@ -11,6 +11,7 @@ import { normalizeRole } from '@/lib/permissions';
 import { fetchApprovalWorkflowDefinitions, saveApprovalWorkflowDefinition } from '@/lib/document-approval-service';
 import type { ApprovalWorkflowDefinition } from '@/lib/document-approval-types';
 import { APPROVAL_TYPES } from '@/lib/document-approval-types';
+import { PageLoader } from '@/components/loading/loaders';
 
 export function ApprovalWorkflowDesignerPage() {
   const { user, profile } = useAuth();
@@ -32,7 +33,7 @@ export function ApprovalWorkflowDesignerPage() {
     } catch (e) { toast.error(e instanceof Error ? e.message : 'Save failed'); }
   };
 
-  if (loading) return <p className="text-muted-foreground">Loading workflows...</p>;
+  if (loading) return <PageLoader message="Loading workflows..." />;
 
   return (
     <div className="space-y-6 max-w-3xl">

@@ -30,6 +30,7 @@ import { KpiCard } from '@/components/cpv/cpv-ui';
 import { ErrorCard } from '@/components/admin/dashboard/error-card';
 import { EmptyState } from '@/components/admin/dashboard/empty-state';
 import { LoadingSkeleton } from '@/components/admin/dashboard/loading-skeleton';
+import { DialogLoader } from '@/components/loading/loaders';
 import { PqrDashboardAccessGuard } from './pqr-dashboard-access-guard';
 import { PqrRiskBadge, PqrStatusBadge } from './pqr-dashboard-badges';
 import { ActivityTimeline } from './activity-timeline';
@@ -89,7 +90,7 @@ function SafeChart({
       </CardHeader>
       <CardContent className={height} role="img" aria-label={title}>
         {loading ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading chart…</div>
+          <div className="flex h-full items-center justify-center"><DialogLoader message="Loading chart..." /></div>
         ) : empty ? (
           <EmptyState title="No data" message="No records for the selected filters." />
         ) : children}

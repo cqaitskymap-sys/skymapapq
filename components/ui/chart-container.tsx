@@ -3,7 +3,7 @@
 import { memo, ReactNode } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { ChartSkeleton } from '@/components/loading';
+import { DialogLoader } from '@/components/loading/loaders';
 
 function ChartContainerInner({
   children,
@@ -21,7 +21,11 @@ function ChartContainerInner({
   className?: string;
 }) {
   if (loading) {
-    return <ChartSkeleton height={height} className={className} />;
+    return (
+      <div className={className} style={{ height }}>
+        <DialogLoader message="Loading chart..." />
+      </div>
+    );
   }
 
   if (empty) {

@@ -6,6 +6,7 @@ import { AdminDataTable, type ColumnDef } from '@/components/admin/admin-data-ta
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { DialogLoader } from '@/components/loading/loaders';
 import { StatusBadge } from '@/components/cpv/cpv-ui';
 
 interface ResponsiveDataTableProps<T extends { id?: string }> {
@@ -93,7 +94,7 @@ export function ResponsiveDataTable<T extends { id?: string }>({
           </div>
         )}
         {loading ? (
-          <p className="text-sm text-muted-foreground">Loading...</p>
+          <DialogLoader message="Loading records..." />
         ) : filteredMobileData.length === 0 ? (
           <p className="text-center text-sm text-muted-foreground py-8">{emptyMessage || 'No records found'}</p>
         ) : (

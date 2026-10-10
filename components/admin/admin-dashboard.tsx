@@ -28,12 +28,17 @@ import { LoadingSkeleton } from './dashboard/loading-skeleton';
 import { EmptyState } from './dashboard/empty-state';
 import { ErrorCard } from './dashboard/error-card';
 import { PageHeader } from './dashboard/page-header';
+import { DialogLoader } from '@/components/loading/loaders';
 
 const DashboardChartCard = dynamic(
   () => import('./dashboard/chart-card').then((module) => module.DashboardChartCard),
   {
     ssr: false,
-    loading: () => <div className="h-[312px] animate-pulse rounded-xl bg-muted" role="status" aria-label="Loading chart" />,
+    loading: () => (
+      <div className="flex h-[312px] items-center justify-center" role="status" aria-label="Loading chart">
+        <DialogLoader message="Loading chart..." />
+      </div>
+    ),
   },
 );
 

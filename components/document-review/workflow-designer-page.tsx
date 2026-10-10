@@ -11,6 +11,7 @@ import { normalizeRole } from '@/lib/permissions';
 import { fetchWorkflowDefinitions, saveWorkflowDefinition } from '@/lib/document-review-service';
 import type { ReviewWorkflowDefinition } from '@/lib/document-review-types';
 import { REVIEW_MODES } from '@/lib/document-review-types';
+import { PageLoader } from '@/components/loading/loaders';
 
 export function WorkflowDesignerPage() {
   const { user, profile } = useAuth();
@@ -32,7 +33,7 @@ export function WorkflowDesignerPage() {
     } catch (e) { toast.error(e instanceof Error ? e.message : 'Save failed'); }
   };
 
-  if (loading) return <p className="text-muted-foreground">Loading workflows...</p>;
+  if (loading) return <PageLoader message="Loading workflows..." />;
 
   return (
     <div className="space-y-6 max-w-3xl">

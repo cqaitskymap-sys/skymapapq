@@ -1,6 +1,7 @@
 'use client';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { DialogLoader } from '@/components/loading/loaders';
 import type { DataLoadState } from '@/lib/pqr-create-records';
 
 export function DataPreviewCard({
@@ -20,7 +21,7 @@ export function DataPreviewCard({
     return (
       <Card className="shadow-sm">
         <CardHeader className="pb-2"><CardTitle className="text-sm">{title}</CardTitle></CardHeader>
-        <CardContent><p className="text-xs text-muted-foreground">Loading…</p></CardContent>
+        <CardContent><DialogLoader message="Loading..." /></CardContent>
       </Card>
     );
   }

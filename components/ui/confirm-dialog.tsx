@@ -4,6 +4,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { ButtonLoader } from '@/components/loading/button-loaders';
 
 export function ConfirmDialog({
   open,
@@ -43,7 +44,7 @@ export function ConfirmDialog({
               void onConfirm();
             }}
           >
-            {loading ? 'Processing...' : confirmLabel}
+            <ButtonLoader loading={loading} loadingText="Processing...">{confirmLabel}</ButtonLoader>
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

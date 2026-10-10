@@ -1,5 +1,6 @@
 'use client';
 
+import { PageLoader } from '@/components/loading/loaders';
 import { cn } from '@/lib/utils';
 import { watermarkStatusColor } from '@/lib/watermark-types';
 import type {
@@ -252,12 +253,6 @@ export function RuleEngineTable({
   );
 }
 
-export function LoadingSkeleton({ rows = 6 }: { rows?: number }) {
-  return (
-    <div className="space-y-3 animate-pulse">
-      {Array.from({ length: rows }).map((_, i) => (
-        <div key={i} className="h-12 rounded-lg bg-muted" />
-      ))}
-    </div>
-  );
+export function LoadingSkeleton(_props: { rows?: number } = {}) {
+  return <PageLoader message="Loading..." />;
 }

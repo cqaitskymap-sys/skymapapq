@@ -1,5 +1,6 @@
 'use client';
 
+import { PageLoader } from '@/components/loading/loaders';
 import { cn } from '@/lib/utils';
 import { auditStatusColor, riskLevelColor } from '@/lib/document-audit-trail-types';
 import type { DocumentAuditEntry, AuditExportRecord } from '@/lib/document-audit-trail-types';
@@ -192,10 +193,6 @@ export function AuditDetailPanel({ entry, verification }: {
   );
 }
 
-export function LoadingSkeleton({ rows = 6 }: { rows?: number }) {
-  return (
-    <div className="space-y-3 animate-pulse">
-      {Array.from({ length: rows }).map((_, i) => <div key={i} className="h-12 rounded-lg bg-muted" />)}
-    </div>
-  );
+export function LoadingSkeleton(_props: { rows?: number } = {}) {
+  return <PageLoader message="Loading..." />;
 }

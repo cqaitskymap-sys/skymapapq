@@ -88,7 +88,7 @@ export function PremiumFullScreenLoader({
     <motion.div
       className={cn(
         'premium-loader-shell flex w-full items-center justify-center',
-        compact ? 'min-h-[18rem]' : 'min-h-[calc(100vh-9rem)]',
+        compact ? 'min-h-[12rem]' : 'min-h-[calc(100vh-9rem)]',
         className
       )}
       initial={reducedMotion ? false : { opacity: 0, scale: 0.98, y: 8 }}
@@ -135,8 +135,8 @@ export function PremiumFullScreenLoader({
         </div>
 
         {showProgress && (
-          <div className="w-full max-w-[12rem] mx-auto space-y-2">
-            <div className="h-1.5 overflow-hidden rounded-full bg-foreground/10" aria-hidden="true">
+          <div className="w-full max-w-[8.5rem] mx-auto space-y-1">
+            <div className="h-1 overflow-hidden rounded-full bg-foreground/10" aria-hidden="true">
               <motion.div
                 className="h-full rounded-full bg-gradient-to-r from-blue-600 via-indigo-500 to-violet-500 shadow-[0_0_10px_rgba(79,70,229,0.45)]"
                 initial={false}

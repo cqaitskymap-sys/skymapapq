@@ -2909,6 +2909,94 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "ebmr_records",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "batch_status", "order": "ASCENDING" },
+        { "fieldPath": "updated_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ebmr_line_clearance",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ebmr_doc_id", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ebmr_dispensing",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ebmr_doc_id", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ebmr_manufacturing_steps",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ebmr_doc_id", "order": "ASCENDING" },
+        { "fieldPath": "step_number", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ebmr_equipment_usage",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ebmr_doc_id", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ebmr_cpp_records",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ebmr_doc_id", "order": "ASCENDING" },
+        { "fieldPath": "recorded_time", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ebmr_ipc_checks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ebmr_doc_id", "order": "ASCENDING" },
+        { "fieldPath": "check_datetime", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ebmr_reviews",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ebmr_doc_id", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ebmr_release",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ebmr_doc_id", "order": "ASCENDING" },
+        { "fieldPath": "created_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "ebmr_attachments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "ebmr_doc_id", "order": "ASCENDING" },
+        { "fieldPath": "uploaded_at", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "audit_logs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "recordId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

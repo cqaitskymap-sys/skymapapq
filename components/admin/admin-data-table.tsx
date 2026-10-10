@@ -8,7 +8,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Skeleton } from '@/components/ui/skeleton';
+import { DialogLoader } from '@/components/loading/loaders';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -69,13 +69,7 @@ export function AdminDataTable<T extends { id?: string; status?: string }>({
   const paginated = filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
 
   if (loading) {
-    return (
-      <div className="space-y-3">
-        {[1, 2, 3, 4].map((i) => (
-          <Skeleton key={i} className="h-12 w-full" />
-        ))}
-      </div>
-    );
+    return <DialogLoader message="Loading records..." />;
   }
 
   return (

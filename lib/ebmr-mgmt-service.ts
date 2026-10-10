@@ -1,6 +1,6 @@
 import {
   addDoc, collection, doc, getDoc, getDocs, limit, orderBy, query, updateDoc, where,
-  type QueryConstraint,
+  type DocumentData, type QueryConstraint, type UpdateData,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { getFirebaseFirestore, getFirebaseStorage } from '@/lib/firebase';
@@ -142,7 +142,7 @@ export async function listEbmr(filters?: EbmrFilters): Promise<EbmrRecord[]> {
 
 export async function updateEbmr(id: string, input: Partial<EbmrCreateInput>, actor: EbmrActor): Promise<EbmrRecord> {
   const existing = await getEbmrOrThrow(id);
-  const updates = { ...input, updated_at: now() };
+  const updates = { ...input, updated_at: now() } as UpdateData<DocumentData>;
   await updateDoc(doc(getFirebaseFirestore(), EBMR_COLLECTIONS.records, id), updates);
   await auditLog(actor, 'UPDATE', id, existing, updates);
   return { ...(await getEbmrById(id))! };
