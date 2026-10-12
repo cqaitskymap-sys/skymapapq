@@ -181,7 +181,7 @@ export function AdminDashboard({ basePath = '/admin' }: AdminDashboardProps) {
         actions={
           <div className="flex flex-wrap gap-2">
             {isReadOnly && (
-              <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+              <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
                 Read-Only Mode
               </Badge>
             )}
@@ -232,7 +232,7 @@ export function AdminDashboard({ basePath = '/admin' }: AdminDashboardProps) {
       {canAct && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base font-semibold text-slate-800">Quick Actions</CardTitle>
+            <CardTitle className="text-base font-semibold text-foreground">Quick Actions</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
             <Button asChild size="sm" variant="outline"><Link href="/admin/users/create"><Plus className="h-4 w-4 mr-1" />Add User</Link></Button>
@@ -325,22 +325,22 @@ export function AdminDashboard({ basePath = '/admin' }: AdminDashboardProps) {
         </Card>
 
         {/* Recent Admin Actions */}
-        <Card>
-          <CardHeader><CardTitle className="text-base">Recent Admin Actions</CardTitle></CardHeader>
-          <CardContent>
+        <Card className="flex h-full flex-col">
+          <CardHeader className="shrink-0"><CardTitle className="text-base">Recent Admin Actions</CardTitle></CardHeader>
+          <CardContent className="flex min-h-0 flex-1 flex-col">
             {data.recentActions.length === 0 ? (
               <EmptyState title="No audit events" message="Admin actions will be logged here automatically." />
             ) : (
-              <div className="space-y-2 max-h-80 overflow-y-auto">
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
                 {data.recentActions.map((act, i) => (
-                  <div key={act.id || i} className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 p-3 border rounded-lg text-sm">
-                    <div>
+                  <div key={act.id || i} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 border rounded-lg text-sm">
+                    <div className="min-w-0">
                       <p className="font-medium">{act.action} — {act.module}</p>
                       <p className="text-xs text-muted-foreground">{act.userName}</p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <StatusBadge status={act.status} />
-                      <span className="text-xs text-muted-foreground">
+                      <span className="text-xs text-muted-foreground whitespace-nowrap">
                         {act.dateTime ? new Date(act.dateTime).toLocaleString() : '-'}
                       </span>
                     </div>

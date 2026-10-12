@@ -728,3 +728,68 @@
     transform: scale(1);
   }
 }
+
+/*
+ * Hardcoded light neutrals (bg-white, bg-slate-50, text-slate-800, …) are used
+ * across list pages, table headers, and section titles. In dark mode they stay
+ * bright or turn into dark-on-dark text. Map them onto the same surfaces as
+ * cards and outline buttons. :where() keeps hover utilities able to win.
+ * Login (.light-canvas) and print/PDF sheets stay on their own palette.
+ */
+@layer utilities {
+  .dark :where(
+    .bg-white:not([class*="dark:bg-"]):not(.light-canvas):not(.light-canvas *):not([id*="pdf"]):not([id*="pdf"] *),
+    .bg-white\/80:not([class*="dark:bg-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .bg-white\/90:not([class*="dark:bg-"]):not(.light-canvas *):not([id*="pdf"] *)
+  ) {
+    background-color: hsl(var(--card));
+  }
+
+  .dark :where(
+    .bg-slate-50:not([class*="dark:bg-"]):not(.light-canvas):not(.light-canvas *):not([id*="pdf"]):not([id*="pdf"] *),
+    .bg-slate-50\/50:not([class*="dark:bg-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .bg-slate-50\/80:not([class*="dark:bg-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .bg-gray-50:not([class*="dark:bg-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .bg-slate-100:not([class*="dark:bg-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .bg-gray-100:not([class*="dark:bg-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .bg-slate-200:not([class*="dark:bg-"]):not(.light-canvas *):not([id*="pdf"] *)
+  ) {
+    background-color: hsl(var(--muted));
+  }
+
+  .dark :where(
+    .text-slate-900:not([class*="dark:text-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .text-slate-800:not([class*="dark:text-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .text-gray-900:not([class*="dark:text-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .text-gray-800:not([class*="dark:text-"]):not(.light-canvas *):not([id*="pdf"] *)
+  ) {
+    color: hsl(var(--foreground));
+  }
+
+  .dark :where(
+    .text-slate-700:not([class*="dark:text-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .text-slate-600:not([class*="dark:text-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .text-gray-700:not([class*="dark:text-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .text-gray-600:not([class*="dark:text-"]):not(.light-canvas *):not([id*="pdf"] *)
+  ) {
+    color: hsl(var(--muted-foreground));
+  }
+
+  .dark :where(
+    .border-slate-100:not([class*="dark:border-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .border-slate-200:not([class*="dark:border-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .border-slate-300:not([class*="dark:border-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .border-gray-200:not([class*="dark:border-"]):not(.light-canvas *):not([id*="pdf"] *),
+    .border-gray-300:not([class*="dark:border-"]):not(.light-canvas *):not([id*="pdf"] *)
+  ) {
+    border-color: hsl(var(--border));
+  }
+
+  .dark .hover\:bg-slate-50:where(:not([class*="dark:hover:bg-"]):not(.light-canvas *):not([id*="pdf"] *)):hover,
+  .dark .hover\:bg-slate-100:where(:not([class*="dark:hover:bg-"]):not(.light-canvas *):not([id*="pdf"] *)):hover,
+  .dark .hover\:bg-white:where(:not([class*="dark:hover:bg-"]):not(.light-canvas *):not([id*="pdf"] *)):hover,
+  .dark .hover\:bg-gray-50:where(:not([class*="dark:hover:bg-"]):not(.light-canvas *):not([id*="pdf"] *)):hover,
+  .dark .hover\:bg-slate-50\/50:where(:not([class*="dark:hover:bg-"]):not(.light-canvas *):not([id*="pdf"] *)):hover {
+    background-color: hsl(var(--accent));
+  }
+}

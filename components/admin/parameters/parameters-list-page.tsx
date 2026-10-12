@@ -43,7 +43,7 @@ import {
   canImportParameters, canActivateParameters, canViewCppParametersOnly,
 } from '@/lib/permissions';
 import {
-  PARAMETER_TYPES, PARAMETER_CATEGORIES, PROCESS_STAGES,
+  PARAMETER_TYPES, PROCESS_STAGES,
   CRITICALITY_OPTIONS, RECORD_STATUSES,
 } from '@/lib/admin/constants';
 import type { Parameter } from '@/lib/admin/schemas';
@@ -73,7 +73,6 @@ export function ParametersListPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
-  const [categoryFilter, setCategoryFilter] = useState('all');
   const [stageFilter, setStageFilter] = useState('all');
   const [criticalityFilter, setCriticalityFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -130,13 +129,12 @@ export function ParametersListPage() {
         p.parameterGroup?.toLowerCase().includes(q) ||
         p.moduleName?.toLowerCase().includes(q);
       const matchType = typeFilter === 'all' || p.parameterType === typeFilter;
-      const matchCategory = categoryFilter === 'all' || p.parameterCategory === categoryFilter;
       const matchStage = stageFilter === 'all' || p.processStage === stageFilter;
       const matchCriticality = criticalityFilter === 'all' || p.criticality === criticalityFilter;
       const matchStatus = statusFilter === 'all' || p.status === statusFilter;
-      return matchSearch && matchType && matchCategory && matchStage && matchCriticality && matchStatus;
+      return matchSearch && matchType && matchStage && matchCriticality && matchStatus;
     });
-  }, [roleFiltered, search, typeFilter, categoryFilter, stageFilter, criticalityFilter, statusFilter]);
+  }, [roleFiltered, search, typeFilter, stageFilter, criticalityFilter, statusFilter]);
 
   const categoryGroups = useMemo(() => buildParameterCategoryGroups(filtered), [filtered]);
   const stats = getParameterSummaryCounts(roleFiltered);
@@ -319,7 +317,7 @@ export function ParametersListPage() {
                 <div className="relative flex-1 min-w-[200px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
-                    placeholder="Search code, name, group, module, product..."
+                    placeholder="Search by code, name, or product"
                     value={search}
                     onChange={(e) => { setSearch(e.target.value); setPage(0); }}
                     className="pl-9"
@@ -330,13 +328,6 @@ export function ParametersListPage() {
                   <SelectContent>
                     <SelectItem value="all">All Types</SelectItem>
                     {PARAMETER_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-                <Select value={categoryFilter} onValueChange={(v) => { setCategoryFilter(v); setPage(0); }}>
-                  <SelectTrigger className="w-[180px]"><SelectValue placeholder="Category" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Categories</SelectItem>
-                    {PARAMETER_CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                   </SelectContent>
                 </Select>
                 <Select value={stageFilter} onValueChange={(v) => { setStageFilter(v); setPage(0); }}>
@@ -390,7 +381,7 @@ export function ParametersListPage() {
                       <TableHead>Code</TableHead>
                       <TableHead>Name</TableHead>
                       <TableHead>Type</TableHead>
-                      <TableHead>Category / Group</TableHead>
+                      <TableHead>When checked</TableHead>
                       <TableHead>Product</TableHead>
                       <TableHead>Limits</TableHead>
                       <TableHead>Criticality</TableHead>
@@ -419,10 +410,7 @@ export function ParametersListPage() {
                             {row.isArchived && <span className="text-xs text-amber-600">Archived</span>}
                           </TableCell>
                           <TableCell><ParameterTypeBadge type={row.parameterType} /></TableCell>
-                          <TableCell className="text-xs">
-                            <div>{row.parameterCategory || '-'}</div>
-                            <div className="text-muted-foreground">{row.parameterGroup || '-'}</div>
-                          </TableCell>
+                          <TableCell className="text-xs">{row.processStage || '-'}</TableCell>
                           <TableCell><ProductLinkBadge product={row.productLink} /></TableCell>
                           <TableCell className="text-xs text-muted-foreground">
                             {row.lowerLimit && row.upperLimit ? `${row.lowerLimit} – ${row.upperLimit} ${row.unit}` : row.unit || '-'}

@@ -53,7 +53,7 @@ function CreateParameterContent() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Create Parameter" description="Define CPP, CQA, IPC, utility or environmental monitoring parameter" basePath="/admin" />
+      <PageHeader title="Create Parameter" description="Add a check that production or quality will record, such as temperature, pH, or assay." basePath="/admin" />
       <ParameterForm products={products} onSubmit={onSubmit} onCancel={() => router.push('/admin/parameters')} submitting={submitting} />
     </div>
   );

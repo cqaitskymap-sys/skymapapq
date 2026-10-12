@@ -276,6 +276,27 @@ export async function getExtendedSystemHealth(): Promise<{
   return { overall, score, checks, checkedAt: new Date().toISOString() };
 }
 
+function adminActionKey(action: AdminActionRow): string {
+  return [
+    action.action.trim().toLowerCase(),
+    action.module.trim().toLowerCase(),
+    action.userName.trim().toLowerCase(),
+    action.dateTime,
+  ].join('|');
+}
+
+function dedupeAdminActions(actions: AdminActionRow[]): AdminActionRow[] {
+  const seen = new Set<string>();
+  const unique: AdminActionRow[] = [];
+  for (const action of actions) {
+    const key = adminActionKey(action);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(action);
+  }
+  return unique;
+}
+
 export async function fetchAdminDashboardData(
   dateRange?: { startDate?: string; endDate?: string },
 ): Promise<AdminDashboardData> {
@@ -391,13 +412,16 @@ export async function fetchAdminDashboardData(
     module: String(l.module ?? 'Admin'),
     action: String(l.action ?? '-'),
     userName: String(l.userName ?? '-'),
-    dateTime: String(l.dateTime ?? ''),
+    dateTime: String(l.dateTime ?? l.timestamp ?? ''),
     status: String(l.status ?? 'Success'),
   }));
 
-  let recentActions = [...trailActions, ...logActions]
-    .sort((a, b) => String(b.dateTime).localeCompare(String(a.dateTime)))
-    .slice(0, 15);
+  // audit_trail and audit_logs store the same event (compliance dual-write).
+  // Keep one row per action, module, user, and timestamp.
+  let recentActions = dedupeAdminActions(
+    [...trailActions, ...logActions]
+      .sort((a, b) => String(b.dateTime).localeCompare(String(a.dateTime))),
+  ).slice(0, 15);
 
   const pendingApprovals: PendingApprovalRow[] = [];
 

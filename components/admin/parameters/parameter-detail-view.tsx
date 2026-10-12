@@ -72,45 +72,25 @@ export function ParameterDetailView({ id }: { id: string }) {
   }
 
   const overviewFields = [
-    { label: 'Parameter ID', value: param.parameterId },
-    { label: 'Parameter Code', value: param.parameterCode },
-    { label: 'Short Name', value: param.shortName },
+    { label: 'Code', value: param.parameterCode },
+    { label: 'Name', value: param.parameterName },
     { label: 'Description', value: param.description },
-    { label: 'Category', value: param.parameterCategory },
-    { label: 'Group', value: param.parameterGroup },
-    { label: 'Module', value: param.moduleName },
-    { label: 'Sub Module', value: param.subModule },
-    { label: 'Process Stage', value: param.processStage },
-    { label: 'Department', value: param.department },
-    { label: 'Product Category', value: param.productCategory },
-    { label: 'Test Method / STP', value: param.testMethodStp },
-    { label: 'Specification No', value: param.specificationNo },
-    { label: 'Data Type', value: param.dataType },
-    { label: 'Result Type', value: param.resultType },
-    { label: 'Calculation Type', value: param.calculationType },
+    { label: 'Checked during', value: param.processStage },
+    { label: 'Product', value: param.productLink || 'All products' },
+    { label: 'Test method', value: param.testMethodStp },
+    { label: 'Specification', value: param.specificationNo },
+    { label: 'Result is written as', value: param.resultType },
     { label: 'Unit', value: param.unit },
-    { label: 'Frequency', value: param.frequency },
-    { label: 'Target Value', value: param.targetValue },
-    { label: 'Default Value', value: param.defaultValue },
-    { label: 'Lower Limit', value: param.lowerLimit },
-    { label: 'Upper Limit', value: param.upperLimit },
-    { label: 'Alert Limit Low', value: param.alertLimitLow },
-    { label: 'Alert Limit High', value: param.alertLimitHigh },
-    { label: 'Action Limit Low', value: param.actionLimitLow },
-    { label: 'Action Limit High', value: param.actionLimitHigh },
-    { label: 'Critical Limit', value: param.criticalLimit },
-    { label: 'Precision', value: param.precision },
-    { label: 'Formula', value: param.formula },
-    { label: 'Mandatory', value: param.mandatory ? 'Yes' : 'No' },
-    { label: 'Display Order', value: param.displayOrder },
-    { label: 'Sequence Number', value: param.sequenceNumber },
-    { label: 'Applicable Site', value: param.applicableSite },
-    { label: 'Business Unit', value: param.businessUnit },
-    { label: 'Created By', value: param.createdBy },
-    { label: 'Created At', value: param.createdAt },
-    { label: 'Updated By', value: param.updatedBy },
-    { label: 'Updated At', value: param.updatedAt },
-  ];
+    { label: 'How often', value: param.frequency },
+    { label: 'Target', value: param.targetValue },
+    { label: 'Lowest allowed', value: param.lowerLimit },
+    { label: 'Highest allowed', value: param.upperLimit },
+    { label: 'Warn if below', value: param.alertLimitLow },
+    { label: 'Warn if above', value: param.alertLimitHigh },
+    { label: 'Take action if below', value: param.actionLimitLow },
+    { label: 'Take action if above', value: param.actionLimitHigh },
+    { label: 'Required on every batch', value: param.mandatory ? 'Yes' : 'No' },
+  ].filter((field) => String(field.value ?? '').trim() !== '');
 
   const handleExport = () => {
     const csv = exportParametersCsv([param]);
@@ -182,10 +162,10 @@ export function ParameterDetailView({ id }: { id: string }) {
             <CardHeader><CardTitle className="text-base">Automation Rules</CardTitle></CardHeader>
             <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               {[
-                { label: 'OOT Applicable', value: param.ootApplicable },
-                { label: 'OOS Applicable', value: param.oosApplicable },
-                { label: 'Auto Deviation', value: param.autoDeviationRequired },
-                { label: 'Auto CAPA', value: param.autoCapaRequired },
+                { label: 'Flag an unusual trend', value: param.ootApplicable },
+                { label: 'Flag a result outside limits', value: param.oosApplicable },
+                { label: 'Open a deviation automatically', value: param.autoDeviationRequired },
+                { label: 'Open a CAPA automatically', value: param.autoCapaRequired },
               ].map((f) => (
                 <div key={f.label}>
                   <p className="text-xs text-muted-foreground">{f.label}</p>
