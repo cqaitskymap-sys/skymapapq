@@ -112,11 +112,8 @@ function normalizeSchedule(raw: Record<string, unknown>): StabilityScheduleRecor
   const dueDate = str(raw.samplePullingDueDate || raw.sample_pulling_due_date || raw.scheduled_date);
   const actualPull = str(raw.actualPullingDate || raw.actual_pulling_date || raw.actualSamplePullingDate);
   const resultEntry = str(raw.resultEntryStatus || raw.result_entry_status, 'Pending');
-  const cancelled = str(raw.scheduleStatus) === 'Cancelled';
-  const scheduleStatus = str(
-    raw.scheduleStatus || raw.schedule_status,
-    computeScheduleStatus(dueDate, actualPull, resultEntry, cancelled),
-  );
+  const cancelled = str(raw.scheduleStatus || raw.schedule_status) === 'Cancelled';
+  const scheduleStatus = computeScheduleStatus(dueDate, actualPull, resultEntry, cancelled);
   return {
     id: str(raw.id),
     studyId: str(raw.studyId || raw.study_id),
@@ -400,12 +397,6 @@ export async function updateSchedulePull(
     console.error('updateSchedulePull failed', e);
     return { result: null, error: cfErrorMessage(e, 'Failed to update sample pull.') };
   }
-}
-
-export async function refreshScheduleStatuses(_actor: StabilityActor): Promise<void> {
-  if (!isFirebaseConfigured()) return;
-  const fn = httpsCallable(getFirebaseFunctions(), 'refreshAdminStabilitySchedules');
-  await fn({});
 }
 
 export async function createStabilityResult(

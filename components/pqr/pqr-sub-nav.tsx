@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Plus, Package, Beaker, PackageSearch, Cog, LineChart,
-  AlertTriangle, TestTube, CheckSquare, RefreshCw, BarChart3, FileText,
+  AlertTriangle, TestTube, CheckSquare, RefreshCw, FileText,
   CheckCircle, FileDown, ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -38,20 +38,19 @@ const globalNav = [
 function sectionNav(pqrId: string) {
   const base = `/dashboard/pqr/${pqrId}`;
   return [
-    { label: 'PQR Overview', href: base, icon: LayoutDashboard },
-    { label: 'Batch Review', href: `${base}/batches`, icon: Package },
-    { label: 'Material Review', href: `${base}/materials`, icon: Beaker },
-    { label: 'Packaging Review', href: `${base}/packaging`, icon: PackageSearch },
-    { label: 'Equipment Review', href: `${base}/equipment`, icon: Cog },
-    { label: 'Stability Review', href: `${base}/stability`, icon: LineChart },
-    { label: 'Deviations Review', href: `${base}/deviations`, icon: AlertTriangle },
-    { label: 'OOS Review', href: `${base}/oos`, icon: TestTube },
-    { label: 'CAPA Review', href: `${base}/capa`, icon: CheckSquare },
-    { label: 'Change Control Review', href: `${base}/change-control`, icon: RefreshCw },
-    { label: 'Trend Analysis', href: `${base}/trends`, icon: BarChart3 },
-    { label: 'Summary & Conclusion', href: `${base}/summary`, icon: FileText },
-    { label: 'Approval Workflow', href: `${base}/approval`, icon: CheckCircle },
-    { label: 'PDF Generation', href: `${base}/pdf`, icon: FileDown },
+    { label: 'PQR Document (Print)', href: `${base}/pdf`, icon: FileDown },
+    { label: '1–5.1 Product Information', href: base, icon: LayoutDashboard },
+    { label: '5.2 Batch Manufacturing', href: `${base}/batches`, icon: Package },
+    { label: '5.4–5.6 Materials', href: `${base}/materials`, icon: Beaker },
+    { label: '5.7–5.9 Packing Material', href: `${base}/packaging`, icon: PackageSearch },
+    { label: '5.3 Equipment Qualification', href: `${base}/equipment`, icon: Cog },
+    { label: '10.0 Stability Review', href: `${base}/stability`, icon: LineChart },
+    { label: '9.0 Deviations', href: `${base}/deviations`, icon: AlertTriangle },
+    { label: '6.0 OOS', href: `${base}/oos`, icon: TestTube },
+    { label: '15.0 CAPA', href: `${base}/capa`, icon: CheckSquare },
+    { label: '8.0 Change Control', href: `${base}/change-control`, icon: RefreshCw },
+    { label: '24.0 Summary', href: `${base}/summary`, icon: FileText },
+    { label: '31.0 PQR Approval', href: `${base}/approval`, icon: CheckCircle },
   ];
 }
 

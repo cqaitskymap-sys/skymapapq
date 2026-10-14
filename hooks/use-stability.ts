@@ -51,10 +51,10 @@ export function useStabilityStudies(filters?: StabilityFilters) {
     setLoading(true);
     setError(null);
     try {
-      await syncSampleDueNotifications();
       const [data, pullData, resultData] = await Promise.all([
         listStudies(stableFilters), listAllSamplePulls(), listAllResults(),
       ]);
+      void syncSampleDueNotifications().catch(() => undefined);
       setRecords(data);
       setPulls(pullData);
       setResults(resultData);

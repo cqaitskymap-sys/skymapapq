@@ -199,10 +199,48 @@ service cloud.firestore {
         ];
     }
 
+    // Module collections the app reads and writes directly. Missing these
+    // makes every list query fail with "Missing or insufficient permissions."
+    function isAppDataCollection(name) {
+      return name in [
+        'audit_approvals', 'audit_attachments', 'audit_capa_links', 'audit_checklists',
+        'audit_findings', 'audit_schedule',
+        'capa_actions', 'capa_approval_history', 'capa_approvals', 'capa_attachments',
+        'capa_closure', 'capa_corrective_actions', 'capa_effectiveness', 'capa_investigations',
+        'capa_preventive_actions', 'capa_root_cause_analysis', 'capa_source_links',
+        'change_approval_history', 'change_approvals', 'change_attachments', 'change_closure',
+        'change_effectiveness_reviews',
+        'cleaning_validation',
+        'complaint_approval_history', 'complaint_approvals', 'complaint_attachments',
+        'complaint_capa_links', 'complaint_closure', 'complaint_impact_assessment',
+        'complaint_investigations', 'complaint_trends',
+        'csv_assessments', 'csv_attachments', 'csv_design_specification', 'csv_frs',
+        'csv_gxp_assessment', 'csv_part11_assessment', 'csv_periodic_reviews',
+        'csv_risk_assessment', 'csv_system_inventory', 'csv_test_scripts',
+        'csv_traceability_matrix', 'csv_urs', 'csv_validation', 'csv_validation_reports',
+        'deviation_approval_history', 'deviation_approvals', 'deviation_attachments',
+        'deviation_capa_links', 'deviation_closure', 'deviation_impact_assessments',
+        'deviation_investigations', 'deviation_trends',
+        'document_categories', 'document_metadata', 'document_tags',
+        'document_training_links', 'document_types',
+        'employees', 'equipment', 'exports',
+        'packaging_reconciliation', 'packaging_reviews', 'packaging_vendor_review',
+        'plants', 'process_validation',
+        'review_assignments', 'review_templates',
+        'risk_approvals', 'risk_closure', 'risk_fmea', 'risk_mitigations',
+        'sites',
+        'stability_approvals', 'stability_attachments', 'stability_sample_pulling',
+        'training_assignments', 'training_records',
+        'validation_approvals', 'validation_assessments', 'validation_attachments',
+        'validation_execution', 'validation_protocols'
+      ];
+    }
+
     function isRegisteredCollection(name) {
       return isCpvOperationalCollection(name)
         || isPqrOperationalCollection(name)
         || isEbmrCollection(name)
+        || isAppDataCollection(name)
         || name in [
           'users', 'roles', 'permissions', 'user_permissions', 'products', 'batches',
           'cpv_reviews', 'cpp_parameters', 'cpp_results',
@@ -349,7 +387,8 @@ service cloud.firestore {
         || (isWarehouseRole() && name in ['warehouse_materials', 'warehouse_records', 'material_master', 'recall_distribution', 'recall_recovery'])
         || (isRegulatoryRole() && name in ['change_controls', 'change_control', 'recalls', 'recall_records', 'recall_regulatory_notifications', 'documents', 'dms_documents', 'document_revisions', 'document_versions', 'document_approvals', 'document_distribution', 'distribution_lists', 'distribution_groups', 'document_acknowledgements', 'read_confirmations', 'document_attachments', 'document_lifecycle', 'document_reviews', 'review_workflows', 'review_steps', 'review_comments', 'review_checklists', 'approval_delegations', 'approval_escalations', 'approval_comments', 'electronic_signatures', 'document_effective_dates', 'periodic_reviews', 'review_schedules', 'review_decisions', 'document_archives', 'document_archive', 'archive_jobs', 'archive_policies', 'archive_requests', 'archive_restoration_requests', 'archive_locations', 'retention_policies', 'retention_schedules', 'retention_reviews', 'retention_events', 'disposal_requests', 'disposal_approvals', 'disposal_certificates', 'legal_holds', 'regulatory_holds', 'external_documents', 'external_document_versions', 'external_document_reviews', 'external_document_distribution', 'external_document_sources', 'external_document_categories', 'supplier_documents', 'regulatory_documents', 'standards_documents', 'safety_documents', 'linked_internal_documents', 'print_requests', 'printed_documents', 'print_copies', 'print_locations', 'print_distribution', 'print_reconciliation', 'print_returns', 'print_destruction', 'watermark_templates', 'watermark_rules', 'watermark_history', 'document_watermarks', 'audit_events', 'audit_exports', 'audit_filters', 'document_obsolete', 'sop_master', 'sop_versions', 'sop_reviews', 'sop_approvals', 'sop_training_links', 'sop_distribution', 'sop_acknowledgements', 'sop_periodic_reviews', 'sop_archive', 'sop_management', 'work_instructions', 'wi_versions', 'wi_reviews', 'wi_approvals', 'wi_training_links', 'wi_distribution', 'wi_acknowledgements', 'wi_periodic_reviews', 'wi_archive', 'forms_templates', 'form_versions', 'form_reviews', 'form_approvals', 'form_distribution', 'form_acknowledgements', 'form_periodic_reviews', 'form_archive', 'production_lines', 'pqr_records'])
         || (isNotReadOnly() && isCpvOperationalCollection(name))
-        || (isNotReadOnly() && isPqrOperationalCollection(name));
+        || (isNotReadOnly() && isPqrOperationalCollection(name))
+        || (isNotReadOnly() && isAppDataCollection(name));
     }
 
     // ── Profiles & Users ──
@@ -1337,8 +1376,6 @@ service cloud.firestore {
           'alerts', 'alert_rules', 'alert_notifications', 'alert_escalations',
           'cpv_configuration', 'cpv_config_products', 'cpv_limit_rules', 'cpv_review_frequency',
           'cpv_alert_rules', 'cpv_report_templates', 'cpv_workflows', 'cpv_integration_mapping',
-          'stability_studies', 'stability_schedules', 'stability_results',
-          'stability_monitoring', 'cpv_stability_studies',
           'product_compositions', 'product_packing_details', 'product_attachments',
           'batch_attachments', 'parameters'
         ]);
@@ -1366,8 +1403,6 @@ service cloud.firestore {
           'alerts', 'alert_rules', 'alert_notifications', 'alert_escalations',
           'cpv_configuration', 'cpv_config_products', 'cpv_limit_rules', 'cpv_review_frequency',
           'cpv_alert_rules', 'cpv_report_templates', 'cpv_workflows', 'cpv_integration_mapping',
-          'stability_studies', 'stability_schedules', 'stability_results',
-          'stability_monitoring', 'cpv_stability_studies',
           'product_compositions', 'product_packing_details', 'product_attachments',
           'batch_attachments', 'parameters'
         ]);
@@ -1393,8 +1428,6 @@ service cloud.firestore {
           'alerts', 'alert_rules', 'alert_notifications', 'alert_escalations',
           'cpv_configuration', 'cpv_config_products', 'cpv_limit_rules', 'cpv_review_frequency',
           'cpv_alert_rules', 'cpv_report_templates', 'cpv_workflows', 'cpv_integration_mapping',
-          'stability_studies', 'stability_schedules', 'stability_results',
-          'stability_monitoring', 'cpv_stability_studies',
           'product_compositions', 'product_packing_details', 'product_attachments',
           'batch_attachments', 'parameters'
         ]);

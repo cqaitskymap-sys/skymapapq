@@ -8,6 +8,7 @@ import { getFirebaseAuth, getFirebaseFirestore } from '@/lib/firebase';
 import { CPV_COLLECTIONS } from '@/lib/cpv';
 import { getPackagingReviews } from '@/lib/packaging-service';
 import { getMaterialReviewsByPQR } from '@/lib/material-service';
+import { fetchEquipmentReviewRecords } from '@/lib/pqr-equipment-review-service';
 import {
   PQR_COLLECTIONS, PqrDocument, PqrApproval, PqrDataSnapshot, PqrDocumentStatus, ESignPayload,
 } from '@/lib/pqr-types';
@@ -138,6 +139,13 @@ export async function getPqrDocument(id: string): Promise<PqrDocument | null> {
       generic_name: String(r.genericName || ''),
       strength: String(r.strength || ''),
       dosage_form: String(r.dosageForm || ''),
+      brand_name: String(r.brandName || ''),
+      shelf_life: String(r.shelfLife || ''),
+      standard_batch_size: String(r.standardBatchSize || r.batchSize || ''),
+      manufacturing_license_no: String(r.manufacturingLicenseNumber || ''),
+      final_packing_details: String(r.packSize || ''),
+      market: String(r.market || ''),
+      label_claim: String(r.labelClaim || ''),
       created_by: String(r.createdByName || r.createdBy || ''),
       created_at: String(r.createdAt || ''),
       updated_at: String(r.updatedAt || ''),
@@ -215,7 +223,7 @@ export async function buildPqrSnapshot(pqr: PqrDocument): Promise<PqrDataSnapsho
   const to = pqr.review_period_to;
   const product = pqr.product_name;
 
-  const [pqrBatches, allBatches, cppRaw, cqaRaw, deviationsRaw, oosRaw, capaRaw, ccRaw, stabilityRaw, holdTimeRaw, capabilityRaw, trendAnalysisRaw, spcRaw, packagingReviews, materialReviews] = await Promise.all([
+  const [pqrBatches, allBatches, cppRaw, cqaRaw, deviationsRaw, oosRaw, capaRaw, ccRaw, stabilityRaw, holdTimeRaw, capabilityRaw, trendAnalysisRaw, spcRaw, packagingReviews, materialReviews, equipmentReviews, batchReviewRows] = await Promise.all([
     getPqrBatches(pqr.id!),
     readFirstAvailable(['pqr_batches', 'batches', PQR_COLLECTIONS.batches]),
     readCollection(CPV_COLLECTIONS.cpp),
@@ -231,6 +239,8 @@ export async function buildPqrSnapshot(pqr: PqrDocument): Promise<PqrDataSnapsho
     readFirstAvailable(['control_charts', 'cpv_control_charts']),
     getPackagingReviews({ pqrId: pqr.id! }),
     getMaterialReviewsByPQR(pqr.id!).catch(() => []),
+    fetchEquipmentReviewRecords(pqr.id!).catch(() => []),
+    getDocs(query(collection(getFirebaseFirestore(), 'pqr_batch_review'), where('pqrId', '==', pqr.id!))).then((snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() }))).catch(() => [] as Record<string, unknown>[]),
   ]);
 
   const filterRecords = (records: Record<string, unknown>[]) =>
@@ -271,7 +281,8 @@ export async function buildPqrSnapshot(pqr: PqrDocument): Promise<PqrDataSnapsho
       ), from, to)
     ));
 
-  const batches = [...pqrBatches, ...filterRecords(allBatches as Record<string, unknown>[])];
+  const reviewedBatches = (batchReviewRows as Record<string, unknown>[]).filter((r) => r.isDeleted !== true);
+  const batches = [...reviewedBatches, ...pqrBatches, ...filterRecords(allBatches as Record<string, unknown>[])];
 
   const countByStatus = (records: Record<string, unknown>[], statusField: string, statusVal: string) =>
     records.filter((r) => String(r[statusField] || r.batch_status || r.status || '').toLowerCase().includes(statusVal)).length;
@@ -382,7 +393,13 @@ export async function buildPqrSnapshot(pqr: PqrDocument): Promise<PqrDataSnapsho
     },
     materials: { total: materials.length, records: materials, summary: `${materials.length} material review entries documented.` },
     packaging: { total: packaging.length, records: packaging as Record<string, unknown>[], summary: `${packaging.length} packaging material reviews completed.` },
-    equipment: { total: 0, records: [], summary: 'Equipment qualification status reviewed; all critical equipment within qualification validity.' },
+    equipment: {
+      total: equipmentReviews.length,
+      records: equipmentReviews as unknown as Record<string, unknown>[],
+      summary: equipmentReviews.length
+        ? `${equipmentReviews.length} equipment qualification record(s) reviewed.`
+        : 'Equipment qualification status reviewed; all critical equipment within qualification validity.',
+    },
     trends: {
       monthlyBatches: [],
       oosTrend: [],

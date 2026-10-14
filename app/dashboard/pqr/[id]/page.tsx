@@ -13,7 +13,7 @@ export default function PqrDetailPage() {
   const pqrId = params.id as string;
 
   return (
-    <PqrSectionPage pqrId={pqrId} title="PQR Overview" description="Annual Product Quality Review hub with auto-aggregated module data">
+    <PqrSectionPage pqrId={pqrId} title="Product Information" description="Sections 1 to 5.1 — introduction, objective, scope, responsibility and product details">
       {({ document, snapshot, refreshing, refreshData }) => (
         <>
           <div className="flex flex-wrap gap-2 mb-4">
@@ -62,9 +62,22 @@ export default function PqrDetailPage() {
             <CardHeader><CardTitle className="text-base">PQR Sections</CardTitle></CardHeader>
             <CardContent>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {['batches', 'materials', 'packaging', 'equipment', 'stability', 'deviations', 'oos', 'capa', 'change-control', 'trends', 'summary', 'approval', 'pdf'].map((s) => (
-                  <Link key={s} href={`/dashboard/pqr/${pqrId}/${s}`} className="text-sm px-3 py-2 rounded-md border hover:bg-blue-50 hover:border-blue-200 capitalize">
-                    {s.replace(/-/g, ' ')}
+                {[
+                  ['pdf', 'PQR Document (Print)'],
+                  ['batches', '5.2 Batch Manufacturing'],
+                  ['materials', '5.4–5.6 Materials'],
+                  ['packaging', '5.7–5.9 Packing Material'],
+                  ['equipment', '5.3 Equipment'],
+                  ['stability', '10.0 Stability'],
+                  ['deviations', '9.0 Deviations'],
+                  ['oos', '6.0 OOS'],
+                  ['capa', '15.0 CAPA'],
+                  ['change-control', '8.0 Change Control'],
+                  ['summary', '24.0 Summary'],
+                  ['approval', '31.0 Approval'],
+                ].map(([href, label]) => (
+                  <Link key={href} href={`/dashboard/pqr/${pqrId}/${href}`} className="text-sm px-3 py-2 rounded-md border hover:bg-blue-50 hover:border-blue-200">
+                    {label}
                   </Link>
                 ))}
               </div>

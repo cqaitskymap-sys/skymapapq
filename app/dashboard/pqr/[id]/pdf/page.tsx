@@ -11,7 +11,7 @@ export default function PqrPdfPage() {
   const pqrId = useParams().id as string;
 
   return (
-    <PqrSectionPage pqrId={pqrId} title="PDF Generation" description="Professional pharmaceutical PQR document — print or save as PDF" showRefresh={false}>
+    <PqrSectionPage pqrId={pqrId} title="PDF Generation" description="Format SOP/QA/055/F01-03 — printout matches the controlled PQR" showRefresh={false}>
       {({ document, approvals, snapshot }) => (
         <div className="space-y-4">
           <div className="flex gap-2 no-print">

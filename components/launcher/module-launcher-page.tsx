@@ -118,7 +118,7 @@ export function ModuleLauncherPage() {
 
       <LauncherHeader searchQuery={search} onSearchChange={setSearch} />
 
-      <main className="mx-auto max-w-[1600px] px-3 py-5 xs:px-4 sm:px-6 sm:py-8">
+      <main className="w-full px-4 py-5 sm:px-6 sm:py-8 lg:px-8">
         <motion.section
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}

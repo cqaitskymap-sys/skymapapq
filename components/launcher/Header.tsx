@@ -31,7 +31,7 @@ export function LauncherHeader({ searchQuery = '', onSearchChange }: LauncherHea
 
   return (
     <header className="sticky top-0 z-50 border-b border-border/40 bg-white/75 shadow-[0_1px_0_0_rgba(37,99,235,0.06)] backdrop-blur-xl dark:bg-background/80">
-      <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-2 px-3 sm:h-16 sm:gap-4 sm:px-6">
+      <div className="flex h-14 w-full items-center gap-2 px-4 sm:h-16 sm:gap-4 sm:px-6 lg:px-8">
         {/* Logo & Brand */}
         <Link href="/launcher" className="flex min-w-fit items-center gap-2.5 transition-opacity hover:opacity-90">
           <div className="relative h-8">

@@ -1,9 +1,10 @@
 'use client';
 
 import {
-  CartesianGrid, Legend, Line, LineChart, ReferenceLine,
+  Area, CartesianGrid, ComposedChart, Legend, Line, ReferenceLine,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
+import { SkyTooltip } from '@/components/charts/sky-chart';
 
 export function YieldTrendChart({
   data,
@@ -25,19 +26,25 @@ export function YieldTrendChart({
     <div className="h-[220px] w-full">
       {title && <p className="mb-2 text-sm font-medium">{title}</p>}
       <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-          <YAxis domain={[0, 100]} />
-          <Tooltip />
+        <ComposedChart data={data} margin={{ top: 10, right: 20, left: 0, bottom: 10 }}>
+          <defs>
+            <linearGradient id="yield-area" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#2563EB" stopOpacity={0.32} />
+              <stop offset="100%" stopColor="#2563EB" stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} strokeDasharray="4 8" />
+          <XAxis dataKey="label" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+          <YAxis domain={[0, 100]} axisLine={false} tickLine={false} width={36} />
+          <Tooltip content={<SkyTooltip />} />
           <Legend />
-          {lower != null && <ReferenceLine y={lower} stroke="#dc2626" strokeDasharray="4 4" label="LSL" />}
-          {upper != null && <ReferenceLine y={upper} stroke="#dc2626" strokeDasharray="4 4" label="USL" />}
-          <Line type="monotone" dataKey="yield" name="Yield %" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
+          {lower != null && <ReferenceLine y={lower} stroke="#F43F5E" strokeDasharray="4 4" label="LSL" />}
+          {upper != null && <ReferenceLine y={upper} stroke="#F43F5E" strokeDasharray="4 4" label="USL" />}
+          <Area type="monotone" dataKey="yield" name="Yield %" stroke="#2563EB" strokeWidth={2.5} fill="url(#yield-area)" dot={{ r: 3, strokeWidth: 2, fill: '#fff', stroke: '#2563EB' }} />
           {data.some((d) => d.target != null) && (
-            <Line type="monotone" dataKey="target" name="Target" stroke="#059669" strokeDasharray="5 5" dot={false} />
+            <Line type="monotone" dataKey="target" name="Target" stroke="#14B8A6" strokeDasharray="5 5" strokeWidth={2} dot={false} />
           )}
-        </LineChart>
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );

@@ -22,7 +22,7 @@ import {
 import {
   fetchStabilityStudies, fetchStabilitySchedules, fetchStabilityResults,
   fetchStabilityBatchesForProduct, createStabilityStudy, updateStabilityStudy,
-  generateStabilitySchedule, updateSchedulePull, refreshScheduleStatuses,
+  generateStabilitySchedule, updateSchedulePull,
   createStabilityResult, updateStabilityResult, approveStabilityResult, reviewStabilityResult, softDeleteStabilityResult,
   bulkCreateStabilityResults, logStabilityExport, stabilityParameterTrendData,
   buildStabilityComputedFields, defaultStabilityParameters,
@@ -170,13 +170,12 @@ export function StabilityMonitoringPage() {
       setSchedules(scheduleRows);
       setResults(resultRows);
       setProducts(prods);
-      await refreshScheduleStatuses(actor);
     } catch {
       setError('Failed to load stability monitoring data.');
     } finally {
       setLoading(false);
     }
-  }, [actor]);
+  }, []);
 
   useEffect(() => { void load(); }, [load]);
 

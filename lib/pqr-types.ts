@@ -53,6 +53,13 @@ export interface PqrDocument {
   generic_name?: string;
   strength?: string;
   dosage_form?: string;
+  brand_name?: string;
+  shelf_life?: string;
+  standard_batch_size?: string;
+  manufacturing_license_no?: string;
+  final_packing_details?: string;
+  market?: string;
+  label_claim?: string;
   snapshot_id?: string;
   last_refreshed_at?: string;
   created_by?: string;
