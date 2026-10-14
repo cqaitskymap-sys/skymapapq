@@ -381,8 +381,8 @@ export function PqrPdfDocument({
   const rejected = batches.filter((row) => /reject/i.test(row.remark));
   const rework = (snapshot?.batches.records || []).filter((row) => row.reworkRequired === true || row.reprocessRequired === true || /rework|reprocess/i.test(text(row.batchStatus || row.status)));
 
-  const batchGroups = [...groupBy(batches, (row) => row.sf || row.finish).entries()];
-  const excipientGroups = [...groupBy(excipientRows, (row) => pick(row, ['materialName', 'material_name'], 'Excipient')).entries()];
+  const batchGroups = Array.from(groupBy(batches, (row) => row.sf || row.finish).entries());
+  const excipientGroups = Array.from(groupBy(excipientRows, (row) => pick(row, ['materialName', 'material_name'], 'Excipient')).entries());
 
   const dispensing = cpp.filter((row) => {
     const stage = pick(row, ['process_stage', 'processStage', 'stage'], '');
@@ -392,7 +392,7 @@ export function PqrPdfDocument({
     return includesAny(parameter, ['balance', 'relative humidity', 'rh%', 'dispensing temperature', 'room temperature']);
   });
   const manufacturing = cpp.filter((row) => !dispensing.includes(row));
-  const mfgStages = [...groupBy(manufacturing, (row) => pick(row, ['process_stage', 'processStage', 'stage'], 'Manufacturing')).entries()];
+  const mfgStages = Array.from(groupBy(manufacturing, (row) => pick(row, ['process_stage', 'processStage', 'stage'], 'Manufacturing')).entries());
 
   const inProcess = cqa.filter((row) => !includesAny(pick(row, ['stage', 'process_stage', 'sample_type', 'sampleType', 'test_type'], ''), ['finish', 'fp', 'release']));
   const finished = cqa.filter((row) => !inProcess.includes(row) || includesAny(pick(row, ['stage', 'process_stage', 'sample_type', 'sampleType'], ''), ['finish', 'fp']));
@@ -400,8 +400,8 @@ export function PqrPdfDocument({
   const fpSource = finished.length ? finished : [];
 
   function pivot(records: Row[], tests: string[]) {
-    const batchesFound = [...groupBy(records, (row) => pick(row, ['batchNumber', 'batch_number', 'batchNo', 'sfBatchNo'], '')).entries()];
-    const extraTests = [...new Set(records.map((row) => pick(row, ['parameterName', 'parameter_name', 'testName', 'test_name', 'check_name'], '')).filter((name) => name !== '—' && !tests.some((test) => norm(test) === norm(name) || norm(name).includes(norm(test)) || norm(test).includes(norm(name)))))];
+    const batchesFound = Array.from(groupBy(records, (row) => pick(row, ['batchNumber', 'batch_number', 'batchNo', 'sfBatchNo'], '')).entries());
+    const extraTests = Array.from(new Set(records.map((row) => pick(row, ['parameterName', 'parameter_name', 'testName', 'test_name', 'check_name'], '')).filter((name) => name !== '—' && !tests.some((test) => norm(test) === norm(name) || norm(name).includes(norm(test)) || norm(test).includes(norm(name))))));
     const columns = [...tests, ...extraTests];
     const body = batchesFound.map(([batch, rows], index) => {
       const cells = columns.map((test) => {
@@ -608,7 +608,7 @@ export function PqrPdfDocument({
           <P>Details of Raw material Manufacturer are as:</P>
           <Grid
             headers={['Name of API', 'Manufacturer Name', 'Supplier Name', 'Consignment / Batches Received', 'Listed in AVL', 'Consignments Approved', 'Consignments Rejected (if any)', 'Cause of Rejection']}
-            rows={[...groupBy(apiRows, (row) => `${pick(row, ['materialName'])}|${pick(row, ['manufacturerName'])}|${pick(row, ['supplierName'])}`).entries()].map(([, rows]) => {
+            rows={Array.from(groupBy(apiRows, (row) => `${pick(row, ['materialName'])}|${pick(row, ['manufacturerName'])}|${pick(row, ['supplierName'])}`).entries()).map(([, rows]) => {
               const row = rows[0];
               const rejectedLots = rows.filter((item) => /reject/i.test(pick(item, ['qcStatus', 'complianceStatus'], ''))).length;
               return [
@@ -681,7 +681,7 @@ export function PqrPdfDocument({
           <P>Details of primary packing manufacturer review are as:</P>
           <Grid
             headers={['Name of Primary Packaging Material', 'Manufacturer (Name & Address)', 'Supplier (Name & Address)', 'Listed in AVL', 'Consignment / Batches Received', 'Consignments Approved', 'Consignments Rejected (if any)', 'Cause of Rejection']}
-            rows={[...groupBy(primaryRows, (row) => `${pick(row, ['materialName'])}|${pick(row, ['manufacturerName'])}`).entries()].map(([, rows]) => {
+            rows={Array.from(groupBy(primaryRows, (row) => `${pick(row, ['materialName'])}|${pick(row, ['manufacturerName'])}`).entries()).map(([, rows]) => {
               const row = rows[0];
               const rejectedLots = rows.filter((item) => /reject/i.test(pick(item, ['qcStatus', 'complianceStatus'], ''))).length;
               return [
@@ -702,8 +702,8 @@ export function PqrPdfDocument({
     {
       id: 'packing',
       node: (page, total) => {
-        const names = [...groupBy(secondaryRows, (row) => pick(row, ['materialName', 'packagingMaterialCategory', 'packagingMaterialType'], 'Packing material')).keys()];
-        const byBatch = [...groupBy(secondaryRows, (row) => pick(row, ['batchNumber', 'batchNo', 'batch_number'])).entries()];
+        const names = Array.from(groupBy(secondaryRows, (row) => pick(row, ['materialName', 'packagingMaterialCategory', 'packagingMaterialType'], 'Packing material')).keys());
+        const byBatch = Array.from(groupBy(secondaryRows, (row) => pick(row, ['batchNumber', 'batchNo', 'batch_number'])).entries());
         return (
           <Sheet doc={doc} page={page} total={total}>
             <H>5.9 Packaging Material Data:</H>
@@ -756,7 +756,7 @@ export function PqrPdfDocument({
           <P>All the Critical process parameter of the dispensing stage of {product} manufactured in the review period are included.</P>
           <Grid
             headers={['S. No.', 'Batch No.', 'Temperature (NMT 25°C)', 'RH% (NMT 55%)', 'Balance Verification']}
-            rows={[...groupBy(dispensing, (row) => pick(row, ['batchNumber', 'batch_number', 'batchNo'])).entries()].map(([batch, rows], index) => {
+            rows={Array.from(groupBy(dispensing, (row) => pick(row, ['batchNumber', 'batch_number', 'batchNo'])).entries()).map(([batch, rows], index) => {
               const valueOf = (words: string[]) => {
                 const hit = rows.find((row) => includesAny(pick(row, ['parameter_name', 'parameterName', 'parameter'], ''), words));
                 return hit ? pick(hit, ['observed_value', 'observedValue', 'result', 'value'], '') : '';
@@ -767,9 +767,9 @@ export function PqrPdfDocument({
           <H>5.10.2 Manufacturing parameter:</H>
           <P>All the Critical process parameter of the manufacturing stage of {product} manufactured in the review period are included.</P>
           {(mfgStages.length ? mfgStages : [['Manufacturing', []] as [string, Row[]]]).map(([stage, rows]) => {
-            const parameters = [...new Set(rows.map((row) => pick(row, ['parameter_name', 'parameterName', 'parameter'], '')).filter((name) => name !== '—'))];
+            const parameters = Array.from(new Set(rows.map((row) => pick(row, ['parameter_name', 'parameterName', 'parameter'], '')).filter((name) => name !== '—')));
             const headers = ['S. No.', 'Batch No.', ...(parameters.length ? parameters : ['Observed value'])];
-            const body = [...groupBy(rows, (row) => pick(row, ['batchNumber', 'batch_number', 'batchNo'])).entries()].map(([batch, batchRowsForStage], index) => [
+            const body = Array.from(groupBy(rows, (row) => pick(row, ['batchNumber', 'batch_number', 'batchNo'])).entries()).map(([batch, batchRowsForStage], index) => [
               String(index + 1),
               batch,
               ...(parameters.length ? parameters : ['Observed value']).map((parameter) => {
